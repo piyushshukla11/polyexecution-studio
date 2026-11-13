@@ -169,3 +169,21 @@
 - Linked: LOG-0011
 - Piyush prediction (optional): scripts/check_repo_hygiene.sh will effectively block any forced additions under LEARNING_NOTES/ regardless of extension.
 - Tutor review: pending
+
+## [LOG-0013] 2026-11-13 22:31 IST | PLAN | actor: agent
+- Reason: Execute Tutor Instruction Follow-Up Round 3 covering hygiene script error message refinement, deletion check verification, Phase 2 host environment checks, and study notes updates.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1.
+  2. Item 1: Display git show 9204813 -- scripts/check_repo_hygiene.sh and cat -n scripts/check_repo_hygiene.sh.
+  3. Item 2: Fix hygiene script error output: eliminate duplicate LEARNING_NOTES message and prevent .gitignore unstage suggestion when LEARNING_NOTES rule triggers. Show before and after output.
+  4. Item 3: Prove rule via real hook using _hook_test.c (confirm blocked, log unchanged, clean status).
+  5. Item 4: Verify staged file deletion is not broken by removing --diff-filter.
+  6. Item 5: Run report-only environment checks for Phase 2 (cgroup delegation, nobody group, umask origins) and provide 3-5 sentence analysis.
+  7. Item 6: Add Phase 2 notes section to LEARNING_NOTES/phase-overview.md (umask 0000 implications, RLIMIT_CORE = 0, cgroup delegation result).
+  8. Item 7: Add note in LEARNING_NOTES documenting that core.hooksPath and .git/info/exclude are per-clone settings needing a future setup script.
+  Note: Do not touch sandbox-daemon/sandbox.c or sandbox.h.
+  9. Append DONE entry (LOG-0014), commit script changes, push branch, and submit Change Report.
+- Files: PROGRESS.md, scripts/check_repo_hygiene.sh, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/00_tutor_notes.md
+- Linked: LOG-0012
+- Piyush prediction (optional): Scripts will cleanly report LEARNING_NOTES rejections without conflicting advice, and staged deletions of allowed files will succeed.
+- Tutor review: pending
