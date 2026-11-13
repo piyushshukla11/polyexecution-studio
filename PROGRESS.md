@@ -187,3 +187,19 @@
 - Linked: LOG-0012
 - Piyush prediction (optional): Scripts will cleanly report LEARNING_NOTES rejections without conflicting advice, and staged deletions of allowed files will succeed.
 - Tutor review: pending
+
+## [LOG-0014] 2026-11-13 22:37 IST | DONE | actor: agent
+- Reason: Complete Follow-Up Round 3 covering hygiene error output refinement, deletion verification, Phase 2 host environment checks, and study notes updates.
+- Details / Change:
+  1. Item 1: Displayed git show 9204813 -- scripts/check_repo_hygiene.sh and cat -n scripts/check_repo_hygiene.sh.
+  2. Item 2: Fixed hygiene script error output to eliminate duplicate LEARNING_NOTES message and prevent .gitignore suggestion when LEARNING_NOTES rule triggers. Demonstrated BEFORE and AFTER outputs for staged _hook_test.c. Committed fix alone.
+  3. Item 3: Proved rule through real pre-commit hook with _hook_test.c (blocked with single message, commit prevented, HEAD unchanged, clean tree).
+  4. Item 4: Verified staged deletions of allowed files are not blocked by the absence of --diff-filter on the LEARNING_NOTES check (tested deleting docs/01_PROJECT_OVERVIEW.md with exit 0, restored cleanly).
+  5. Item 5: Ran Phase 2 environment checks: confirmed cgroup v2 delegation to user 1000 with cpu, memory, and pids controllers; determined umask 0000 source from container session manager; identified group nobody (65534) membership.
+  6. Item 6: Added Phase 2 notes section to LEARNING_NOTES/phase-overview.md covering runner umask requirement, RLIMIT_CORE = 0, and cgroup delegation.
+  7. Item 7: Added clone setup note in LEARNING_NOTES/00_tutor_notes.md regarding core.hooksPath and .git/info/exclude persistence.
+  Note: Confirmed Tier A files sandbox-daemon/sandbox.c and sandbox.h remain untouched.
+- Files: PROGRESS.md, scripts/check_repo_hygiene.sh, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/00_tutor_notes.md
+- Linked: LOG-0013
+- Piyush prediction (optional): Scripts will cleanly report LEARNING_NOTES rejections without conflicting advice, and staged deletions of allowed files will succeed.
+- Tutor review: pending
