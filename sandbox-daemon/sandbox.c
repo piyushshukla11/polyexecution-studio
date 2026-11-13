@@ -635,8 +635,12 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
 
         if (res->status == 0) {
             if (WIFEXITED(child_status)) {
-                res->status = STATUS_OK;
                 res->exit_code = WEXITSTATUS(child_status);
+                if (res->exit_code == 0) {
+                    res->status = STATUS_OK;
+                } else {
+                    res->status = STATUS_RUNTIME_ERROR;
+                }
             } else if (WIFSIGNALED(child_status)) {
                 res->status = STATUS_RUNTIME_ERROR;
                 res->signal = WTERMSIG(child_status);
