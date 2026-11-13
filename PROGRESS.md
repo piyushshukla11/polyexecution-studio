@@ -61,3 +61,17 @@
 - Linked: LOG-0004
 - Piyush prediction (optional): Pre-commit hook will exit with non-zero status and abort commit on all three violations.
 - Tutor review: pending
+
+## [LOG-0006] 2026-11-13 19:50 IST | PLAN | actor: agent
+- Reason: Set up Phase 1 Step 1 scaffolding, provide Tier A conceptual instruction, provide skeleton files with TODO(piyush) markers, and add evil test fixtures.
+- Details / Change:
+  1. Commit this PLAN entry alone to demonstrate intent before code changes.
+  2. Provide teaching guide for fork, execve (vs execvp), wait4 (and zombies), and status decoding macros.
+  3. Create sandbox-daemon/Makefile (-Wall -Wextra -Werror -O2, clean target).
+  4. Create sandbox-daemon/sandbox.h and sandbox-daemon/sandbox.c skeleton with clear TODO(piyush) markers for child process creation, execution, waiting, and exit status decoding (no implementation).
+  5. Create sandbox-daemon/tests/evil/loop.c and sandbox-daemon/tests/evil/sleeper.c test programs.
+  6. Commit changes in small steps referencing LOG id and issue #3, push branch, and submit Change Report without opening PR or advancing to Tier A implementation.
+- Files: PROGRESS.md, sandbox-daemon/Makefile, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, sandbox-daemon/tests/evil/loop.c, sandbox-daemon/tests/evil/sleeper.c
+- Linked: LOG-0005
+- Piyush prediction (optional): Skeleton and test fixtures will compile cleanly and wait for Piyush to implement core Tier A process logic.
+- Tutor review: pending
