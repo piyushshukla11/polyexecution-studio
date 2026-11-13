@@ -302,6 +302,18 @@
 - Piyush prediction (optional): Step 3 will emit strictly valid JSON across all evil fixtures, parsing correctly with JSON tools and accurately capturing stdout, stderr, resource timings, and peak memory.
 - Tutor review: pending
 
+## [LOG-0021] 2026-11-14 01:51 IST | CORRECTION | actor: agent
+- Reason: Record corrections to LOG-0018 and LOG-0020 regarding status mapping, timeout distinctions, and allocation robustness identified in tutor code review.
+- Details / Change:
+  1. In LOG-0020, ordinary SIGSEGV in tests/evil/segv.c was incorrectly mapped to MEMORY_LIMIT due to checking peak_memory_kb > 0; ordinary segv must be reported as RUNTIME_ERROR, with MEMORY_LIMIT reserved for explicit memory-limit events where peak memory reaches the RLIMIT_AS boundary.
+  2. In LOG-0018 and LOG-0020, CPU time limit termination via SIGXCPU (signal 24) before the wall deadline must be clearly distinguished from monotonic wall-clock timeout; both are timeouts, but signal 24 and CPU timing metrics must be preserved so CPU limits are not described as wall timeouts.
+  3. In LOG-0018, realloc calls in stream capture paths did not preserve live pointers on allocation failure; poll/wait4 fatal error branches lacked full cleanup; and JSON escaping required full RFC 8259 byte validation for arbitrary child outputs.
+- Files: PROGRESS.md
+- Linked: LOG-0020
+- Piyush prediction (optional): Correcting these classifications will make runner status reporting strictly truthful to systems behavior.
+- Tutor review: pending
+
+
 
 
 
