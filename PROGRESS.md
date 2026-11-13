@@ -273,6 +273,22 @@
 - Piyush prediction (optional): Step 2 will cleanly distinguish execve failure from exit code 127, capture I/O without deadlocks, terminate long sleeps and output floods without hanging, and enforce POSIX limits on child processes.
 - Tutor review: pending
 
+## [LOG-0019] 2026-11-14 01:11 IST | PLAN | actor: agent
+- Reason: Implement Phase 1 Step 3 JSON execution result contract conforming to docs/02_ARCHITECTURE.md (ExecuteResponse schema: job_id, status, stdout, stderr, exit_code, signal, wall_ms, cpu_ms, peak_memory_kb) and docs/04_BUILD_PLAN.md Definition of Done.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1.
+  2. Implement RFC 8259 compliant JSON string escaping in sandbox-daemon/sandbox.c for stdout, stderr, and error strings (handling control characters, quotes, backslashes, and byte values).
+  3. Map internal execution results into the ExecuteResponse status enum: OK, RUNTIME_ERROR, TIMEOUT, OUTPUT_LIMIT, MEMORY_LIMIT, SANDBOX_ERROR.
+  4. Implement CLI argument parsing for runner flags (--job-id, --timeout-ms, --cpu-soft, --cpu-hard, --as-mb, --fsize-mb, --max-output-kb).
+  5. Format and emit single structured JSON object on stdout upon completion; ensure clean separation between child output streams and runner telemetry.
+  6. Verify JSON validity and schema across all test fixtures using python3 -m json.tool.
+  7. Append DONE entry (LOG-0020), update LEARNING_NOTES/phase-1.md, and push branch.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0018
+- Piyush prediction (optional): Step 3 will emit strictly valid JSON across all evil fixtures, parsing correctly with JSON tools and accurately capturing stdout, stderr, resource timings, and peak memory.
+- Tutor review: pending
+
+
 
 
 
