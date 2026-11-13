@@ -14,7 +14,12 @@
 
 /*
  * Run the target binary at binary_path.
- * Returns 0 on success, or non-zero on failure.
+ *
+ * Spawns a child process, executes the target program,
+ * waits for process termination, and decodes the exit status.
+ *
+ * Returns 0 on success (runner successfully spawned and reaped child),
+ * or non-zero on runner failure.
  */
 int run_sandbox(const char *binary_path);
 
