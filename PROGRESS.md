@@ -380,3 +380,18 @@
 - Linked: LOG-0024
 - Piyush prediction (optional): The follow-up pass will completely harden the UTF-8 escaper, eliminate direct-child leak risks on fatal wait4 errors, and transparently document the memory limit heuristic and byte reconstruction protocol.
 - Tutor review: pending
+
+## [LOG-0026] 2026-11-14 02:13 IST | DONE | actor: agent
+- Reason: Complete Phase 1 focused follow-up hardening pass addressing tutor review items 1 through 5.
+- Details / Change:
+  1. Relabeled the memory limit classification rule in sandbox-daemon/sandbox.c, sandbox.h, and docs/02_ARCHITECTURE.md as an explicit resident-memory heuristic (peak RSS >= 80% of RLIMIT_AS). Documented that POSIX setrlimit(RLIMIT_AS) lacks an explicit kernel OOM signal, and kept empirical test observations (tests/evil/bin/memory_bomb vs segv) strictly separate from general causal claims.
+  2. Hardened the fatal wait4(WNOHANG) error branch in sandbox.c: after signaling the process group with SIGKILL, the runner executes a blocking wait4 loop on the direct child (retrying on EINTR) to guarantee no live or zombie direct child lingers before setting STATUS_RUNNER_INTERNAL_ERROR.
+  3. Corrected UTF-8 validation in print_json_escaped_string() to strictly enforce RFC 3629: explicitly reject lead bytes > 0xF4 (0xF5..0xFF), overlong encodings (0xC0, 0xC1, 0xE0 with b1 < 0xA0, 0xF0 with b1 < 0x90), UTF-16 surrogates (0xED with b1 > 0x9F), out-of-range 4-bytes (0xF4 with b1 > 0x8F), isolated continuation bytes (0x80..0xBF), and boundary-truncated multibyte sequences.
+  4. Expanded tests/evil/json_escaping_test.c to test all invalid byte edge cases (lead bytes F5/F7, overlongs, surrogates, out-of-range, isolated continuations, boundary-truncated sequences); verified 100% clean parsing and formatting via python3 -m json.tool.
+  5. Documented the byte semantics of invalid bytes mapped to \u00XX in docs/02_ARCHITECTURE.md and sandbox.h: explained that raw bytes map to Latin-1 code points U+0000..U+00FF, allowing clients to losslessly reconstruct the raw byte stream by checking code point <= 255.
+  6. Clarified in docs/02_ARCHITECTURE.md that ExecuteResponse status TIMEOUT covers both CPU limit exhaustion (RLIMIT_CPU / signal 24 SIGXCPU) and wall-clock timeout (deadline reached), with signal and timing telemetry distinguishing them without altering schema.
+  7. Confirmed zero zombie or lingering runner/evil processes on the host.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/tests/evil/json_escaping_test.c, docs/02_ARCHITECTURE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0025
+- Piyush prediction (optional): The follow-up pass will completely harden the UTF-8 escaper, eliminate direct-child leak risks on fatal wait4 errors, and transparently document the memory limit heuristic and byte reconstruction protocol.
+- Tutor review: pending
