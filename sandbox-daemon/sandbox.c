@@ -583,8 +583,15 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                 res->status = STATUS_RUNNER_CHILD_LOST;
                 break;
             } else {
-                /* Fatal wait4 error */
+                /* Fatal wait4 error: signal process group, reap direct child, close fds */
                 kill(-pid, SIGKILL);
+                if (!child_reaped) {
+                    pid_t reap_p;
+                    do {
+                        reap_p = wait4(pid, &child_status, 0, &child_usage);
+                    } while (reap_p == -1 && errno == EINTR);
+                    child_reaped = (reap_p == pid);
+                }
                 if (stdout_open) { close(stdout_pipe[0]); stdout_open = false; }
                 if (stderr_open) { close(stderr_pipe[0]); stderr_open = false; }
                 res->status = STATUS_RUNNER_INTERNAL_ERROR;
@@ -655,9 +662,18 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
 }
 
 /*
- * JSON Escaping helper according to RFC 8259.
- * Validates multi-byte UTF-8 sequences and preserves them directly.
- * Escapes quotes, backslashes, standard control characters, and invalid raw bytes as \u00XX.
+ * JSON Escaping helper according to RFC 8259 and RFC 3629.
+ * Validates multi-byte UTF-8 sequences (2-byte, 3-byte, 4-byte up to U+10FFFF)
+ * and emits valid sequences directly.
+ * Escapes quotes, backslashes, standard control characters, and invalid raw bytes
+ * (including overlong encodings, surrogates, isolated continuation bytes, and lead bytes > 0xF4)
+ * as \u00XX (Unicode Latin-1 Supplement code points U+0000..U+00FF).
+ *
+ * Client byte reconstruction protocol:
+ * Any client can reconstruct the original raw byte stream losslessly:
+ *   for char in string:
+ *     if ord(char) <= 255: byte = ord(char)
+ *     else: bytes += char.encode('utf-8')
  */
 static void print_json_escaped_string(FILE *out, const char *data, size_t len) {
     if (!data) return;
@@ -694,27 +710,54 @@ static void print_json_escaped_string(FILE *out, const char *data, size_t len) {
             fputc(c, out);
             i++;
         } else {
-            /* Check for valid UTF-8 sequence */
+            /*
+             * Multi-byte UTF-8 validation according to RFC 3629:
+             * - 2-byte: 0xC2..0xDF with trailing 0x80..0xBF (rejects overlong 0xC0..0xC1)
+             * - 3-byte: 0xE0 with 0xA0..0xBF (rejects overlong 0x80..0x9F),
+             *           0xE1..0xEC with 0x80..0xBF,
+             *           0xED with 0x80..0x9F (rejects UTF-16 surrogates 0xA0..0xBF),
+             *           0xEE..0xEF with 0x80..0xBF
+             * - 4-byte: 0xF0 with 0x90..0xBF (rejects overlong 0x80..0x8F),
+             *           0xF1..0xF3 with 0x80..0xBF,
+             *           0xF4 with 0x80..0x8F (rejects > U+10FFFF)
+             * - Lead bytes 0xF5..0xFF, isolated continuation bytes, and truncated sequences are invalid.
+             */
             bool valid = false;
             size_t seq_len = 0;
 
-            if ((c & 0xE0) == 0xC0 && c >= 0xC2 && i + 1 < len) {
-                if ((p[i + 1] & 0xC0) == 0x80) {
+            if (c >= 0xC2 && c <= 0xDF && i + 1 < len) {
+                unsigned char b1 = p[i + 1];
+                if ((b1 & 0xC0) == 0x80) {
                     valid = true;
                     seq_len = 2;
                 }
-            } else if ((c & 0xF0) == 0xE0 && i + 2 < len) {
+            } else if (c >= 0xE0 && c <= 0xEF && i + 2 < len) {
                 unsigned char b1 = p[i + 1], b2 = p[i + 2];
                 if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
-                    if (!(c == 0xE0 && b1 < 0xA0) && !(c == 0xED && b1 > 0x9F)) {
+                    if (c == 0xE0 && b1 >= 0xA0 && b1 <= 0xBF) {
+                        valid = true;
+                        seq_len = 3;
+                    } else if (c >= 0xE1 && c <= 0xEC) {
+                        valid = true;
+                        seq_len = 3;
+                    } else if (c == 0xED && b1 >= 0x80 && b1 <= 0x9F) {
+                        valid = true;
+                        seq_len = 3;
+                    } else if (c >= 0xEE && c <= 0xEF) {
                         valid = true;
                         seq_len = 3;
                     }
                 }
-            } else if ((c & 0xF8) == 0xF0 && i + 3 < len) {
+            } else if (c >= 0xF0 && c <= 0xF4 && i + 3 < len) {
                 unsigned char b1 = p[i + 1], b2 = p[i + 2], b3 = p[i + 3];
                 if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80) {
-                    if (!(c == 0xF0 && b1 < 0x90) && !(c == 0xF4 && b1 > 0x8F)) {
+                    if (c == 0xF0 && b1 >= 0x90 && b1 <= 0xBF) {
+                        valid = true;
+                        seq_len = 4;
+                    } else if (c >= 0xF1 && c <= 0xF3) {
+                        valid = true;
+                        seq_len = 4;
+                    } else if (c == 0xF4 && b1 >= 0x80 && b1 <= 0x8F) {
                         valid = true;
                         seq_len = 4;
                     }
@@ -727,7 +770,10 @@ static void print_json_escaped_string(FILE *out, const char *data, size_t len) {
                 }
                 i += seq_len;
             } else {
-                /* Invalid byte: escape as \u00XX */
+                /*
+                 * Raw byte semantics: escape invalid byte as \u00XX.
+                 * Preserves raw byte value in Latin-1 code point U+0000..U+00FF.
+                 */
                 fprintf(out, "\\u%04x", c);
                 i++;
             }
@@ -751,7 +797,14 @@ static const char *sandbox_status_to_string(const sandbox_result_t *res, const s
                 return "OUTPUT_LIMIT";
             }
             if (res->signal == 11 /* SIGSEGV */) {
-                /* Truthful memory limit check: only map to MEMORY_LIMIT if peak memory reached >= 80% of RLIMIT_AS */
+                /*
+                 * Heuristic: In POSIX, setrlimit(RLIMIT_AS) lacks an explicit kernel OOM signal.
+                 * When heap allocation (malloc/mmap) fails, programs typically dereference NULL,
+                 * triggering SIGSEGV. We evaluate a resident-memory heuristic: if peak RSS reached
+                 * >= 80% of rlimit_as_bytes, the runner classifies this as MEMORY_LIMIT.
+                 * Note that this is a heuristic rather than causal proof; ordinary SIGSEGV without
+                 * reaching the memory ceiling remains classified as RUNTIME_ERROR.
+                 */
                 if (cfg && cfg->rlimit_as_bytes > 0 &&
                     (res->peak_memory_kb * 1024ULL >= (cfg->rlimit_as_bytes * 8ULL / 10ULL))) {
                     return "MEMORY_LIMIT";

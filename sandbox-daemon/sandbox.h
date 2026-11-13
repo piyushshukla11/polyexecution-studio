@@ -39,7 +39,17 @@ typedef struct {
     int32_t errnum; /* errno */
 } setup_error_t;
 
-/* Execution status classifications */
+/*
+ * Execution status classifications.
+ * Note on MEMORY_LIMIT vs RUNTIME_ERROR:
+ * In POSIX, setrlimit(RLIMIT_AS) causes allocation failure rather than an explicit kernel
+ * OOM signal. When a process terminates with SIGSEGV, the runner uses an explicit resident
+ * memory heuristic (peak RSS >= 80% of rlimit_as_bytes) to classify as MEMORY_LIMIT;
+ * otherwise it remains RUNTIME_ERROR.
+ *
+ * Note on TIMEOUT:
+ * Covers both wall-clock deadline expiration and RLIMIT_CPU exhaustion (signal 24 SIGXCPU).
+ */
 typedef enum {
     STATUS_OK = 0,
     STATUS_RUNTIME_ERROR,
