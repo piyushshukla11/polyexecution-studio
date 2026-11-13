@@ -117,3 +117,19 @@
 - Linked: LOG-0008
 - Piyush prediction (optional): Fixtures will build cleanly into tests/evil/bin/ and demonstrate expected shell status codes (7 and 139) prior to sandbox-runner integration.
 - Tutor review: pending
+
+## [LOG-0010] 2026-11-13 20:45 IST | DONE | actor: agent
+- Reason: Complete tutor task covering Part A (governance follow-ups), Part B (test fixtures and testing guide), and Part C (phase overview).
+- Details / Change:
+  1. Part A: Verified LEARNING_NOTES study directory integrity (4 files, 650 lines initially). Proved second line of defence by force-staging LEARNING_NOTES/00_tutor_notes.md and verifying both check_repo_hygiene.sh and pre-commit hook blocked commit. Labeled all Phase 0 evidence blocks in phase-0.md with source tags (4 recovered, 3 reconstructed) and added recovery limitations. Verified AI_RULES.md Section 13 and confirmed Issue #4 via gh CLI.
+  2. Part B: Created sandbox-daemon/tests/evil/exit7.c and sandbox-daemon/tests/evil/segv.c. Updated sandbox-daemon/Makefile with evil target (O0 flags, tests/evil/bin/) and clean target. Updated .gitignore to exclude sandbox-daemon/*.o and sandbox-daemon/tests/evil/bin/. Verified compilation and shell exit codes: exit7 yielded 7, and segv yielded 139 (128 + signal 11). Expanded LEARNING_NOTES/phase-1.md with Step 1 Definition of Done, 3 operational tasks, and 5 blank experiment slots for Piyush. Added envp definition to glossary.md.
+  3. Part C: Created LEARNING_NOTES/phase-overview.md mapping Phases 0 through 7 with verbatim Definitions of Done, ownership tiers, dependencies, and sizing rationale from docs/04_BUILD_PLAN.md. Noted architectural consistency items.
+  4. Step 1 Definition of Done recorded for Piyush's upcoming Tier A implementation:
+     - ./sandbox-runner ./tests/evil/bin/exit7 prints exit code 7
+     - ./sandbox-runner ./tests/evil/bin/segv prints signal 11
+     - Killing a running child with kill -9 from another terminal prints signal 9
+     - No zombie processes left behind
+- Files: PROGRESS.md, sandbox-daemon/tests/evil/exit7.c, sandbox-daemon/tests/evil/segv.c, sandbox-daemon/Makefile, .gitignore, LEARNING_NOTES/phase-0.md, LEARNING_NOTES/phase-1.md, LEARNING_NOTES/glossary.md, LEARNING_NOTES/phase-overview.md
+- Linked: LOG-0009
+- Piyush prediction (optional): Fixtures will build cleanly into tests/evil/bin/ and demonstrate expected shell status codes (7 and 139) prior to sandbox-runner integration.
+- Tutor review: pending
