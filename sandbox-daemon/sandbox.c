@@ -4,15 +4,16 @@
 
 /*
  * run_sandbox:
- * Executes a target binary in a child process and waits for it to finish.
+ * Executes a target binary in a child process, waits for process termination,
+ * and decodes the resulting exit code or termination signal.
  *
  * Process lifecycle:
  * 1. Validates input binary path.
- * 2. Forks child process (fork(2)).
+ * 2. Spawns child process via fork(2).
  * 3. Child executes target binary using execve(2) with explicit path and minimal envp.
  *    On execve failure, writes error message to stderr via write(2) and calls _exit(127).
  * 4. Parent reaps child with wait4(2), handling EINTR signal interruption.
- * 5. Decodes and prints child termination status.
+ * 5. Decodes and prints child termination status using POSIX macros without printing raw status.
  */
 int run_sandbox(const char *binary_path) {
     if (binary_path == NULL) {
@@ -22,19 +23,21 @@ int run_sandbox(const char *binary_path) {
 
     /*
      * fork(2) creates a new process by duplicating the calling process.
-     * The child process and parent process run in separate memory spaces.
+     * The new process (child) is an exact copy of the calling process (parent),
+     * except for distinct process IDs (PIDs) and memory isolation (copy-on-write).
      *
      * Return value:
-     * - In parent: returns the process ID (PID > 0) of the newly created child.
+     * - In parent: returns the child's PID (PID > 0).
      * - In child:  returns 0.
-     * - On failure: returns -1 in parent; no child process is created, errno set.
+     * - On failure: returns -1; no child process is created, errno is set.
      */
     pid_t pid = fork();
 
     if (pid < 0) {
         /*
-         * fork() failed (e.g. system PID limit or resource exhaustion).
-         * We must NOT call wait4() because no child process was created.
+         * fork() failed (e.g. EAGAIN process limit reached, ENOMEM out of memory).
+         * Critical: We must NEVER call wait4() when fork() fails, because
+         * no child process exists to wait for.
          */
         perror("fork failed");
         return -1;
@@ -53,7 +56,7 @@ int run_sandbox(const char *binary_path) {
          * 3. envp: NULL-terminated array of environment variables ("NAME=VALUE").
          *
          * Why execve instead of execvp / execlp?
-         * - execvp searches the PATH environment variable and inherits all environment variables.
+         * - execvp searches the PATH environment variable and inherits all parent environment variables.
          * - execve requires an explicit pathname and caller-specified environment.
          * - In a sandbox, inheriting arbitrary environment variables (e.g. LD_PRELOAD, PATH)
          *   is a security risk. Passing a minimal fixed envp ({ NULL }) ensures determinism.
@@ -77,8 +80,8 @@ int run_sandbox(const char *binary_path) {
 
         /*
          * Standard convention for command not found or exec failure: exit 127.
-         * We call _exit(2) to terminate immediately without invoking parent handlers
-         * or flushing parent stdio buffers.
+         * We call _exit(2) instead of exit(3) because _exit terminates immediately
+         * via the kernel without invoking parent atexit handlers or flushing parent stdio buffers.
          */
         _exit(127);
     }
@@ -124,6 +127,13 @@ int run_sandbox(const char *binary_path) {
         /* Child terminated abnormally due to an unhandled signal */
         int sig = WTERMSIG(status);
         printf("signal %d\n", sig);
+    } else {
+        /*
+         * Safety fallback: if the process terminated in an unexpected state,
+         * do not print raw status bits.
+         */
+        fprintf(stderr, "unknown process termination state\n");
+        return -1;
     }
 
     return 0;
