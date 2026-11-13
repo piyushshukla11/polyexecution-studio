@@ -133,3 +133,22 @@
 - Linked: LOG-0009
 - Piyush prediction (optional): Fixtures will build cleanly into tests/evil/bin/ and demonstrate expected shell status codes (7 and 139) prior to sandbox-runner integration.
 - Tutor review: pending
+
+## [LOG-0011] 2026-11-13 20:57 IST | PLAN | actor: agent
+- Reason: Execute Tutor Instruction Follow-Up Round 2 covering governance hardening, evil binary ignore validation, Phase 0 evidence re-run, core dump check, environment assessment, issue timing, study notes audit, and Tier A integrity.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1.
+  2. Item 1: Harden scripts/check_repo_hygiene.sh. Inspect script and hook wiring (1a), prove the hole with LEARNING_NOTES/_hook_test.c allowed (1b), fix script to block any staged path starting with LEARNING_NOTES/ regardless of extension using diff without --diff-filter with dedicated error message (1c), prove fix with T1, T2, T3, T4 (1d), and commit script fix alone (1e).
+  3. Item 2: Build evil binaries and prove they are ignored via git status, git check-ignore, and git ls-files.
+  4. Item 3: Re-run the 3 historical Phase 0 negative tests for real (R1: edit old PROGRESS.md log line, R2: staged .env secret, R3: stray NOTES.md), paste real outputs, clean up, and update phase-0.md labeling them recovered on 2026-11-13.
+  5. Item 4: Check for stray core dump files; report kernel core_pattern and coredumpctl.
+  6. Item 5: Produce Linux host environment report (kernel, user, umask, filesystem, namespaces, cgroups, permissions analysis).
+  7. Item 6: Verify Issue #4 creation timing relative to commits referencing it.
+  8. Item 7: Audit LEARNING_NOTES/phase-1.md structure, clarify experiment count, verify stdio demo location, and report final line counts.
+  9. Item 8: Verify Tier A integrity in sandbox-daemon/sandbox.c and sandbox.h remains completely untouched.
+  Note: CI is a known gap, deliberately deferred by the tutor until Piyush passes the Step 1 Definition of Done. Do not add CI this round.
+  10. Append DONE entry (LOG-0012), commit, push branch, and submit Change Report.
+- Files: PROGRESS.md, scripts/check_repo_hygiene.sh, LEARNING_NOTES/phase-0.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0010
+- Piyush prediction (optional): scripts/check_repo_hygiene.sh will effectively block any forced additions under LEARNING_NOTES/ regardless of extension.
+- Tutor review: pending
