@@ -221,3 +221,26 @@
 - Piyush prediction (optional): Step 1 execution will correctly report exit codes and signals for test binaries, handle failed execve with code 127 without crashing, and leave no zombie processes.
 - Tutor review: pending
 
+## [LOG-0016] 2026-11-14 00:07 IST | DONE | actor: agent
+- Reason: Complete Phase 1 Step 1 sandbox process lifecycle implementation (fork, child execve, parent wait4, status decoding) under AGENT-WROTE-TIER-A per Piyush's decision.
+- Details / Change:
+  1. Implemented Phase 1 Step 1 in sandbox-daemon/sandbox.c across three small commits:
+     - (a) fork + child _exit(3) baseline + parent wait4 with EINTR retry and fork == -1 guard (commit 716826d).
+     - (b) child execve with explicit path, argv, minimal envp = { NULL }, and write(2, ...) + _exit(127) error reporting (commit 4a1ae01).
+     - (c) full status decoding using WIFEXITED/WEXITSTATUS and WIFSIGNALED/WTERMSIG, never printing raw status (commit 33ab46c).
+  2. Updated sandbox-daemon/sandbox.h with clear documentation.
+  3. Added extensive beginner-friendly comments explaining every system call (fork, _exit vs exit, execve vs execvp, write vs printf, wait4 and EINTR loop, bitfield status decoding).
+  4. Executed verification tests and observed real outputs:
+     - ./sandbox-runner ./tests/evil/bin/exit7 produced 'exit code 7' (Observed).
+     - ./sandbox-runner ./tests/evil/bin/segv produced 'signal 11' (Observed).
+     - ./sandbox-runner ./tests/evil/bin/does-not-exist produced 'execve failed' and 'exit code 127' (Observed).
+     - Background runner with sleeper killed by kill -9 to child PID produced 'signal 9' (Observed).
+     - ps confirmed zero zombie processes (Observed).
+  5. Appended detailed line-by-line beginner-friendly walkthrough of sandbox.c and complete Change Report to LEARNING_NOTES/phase-1.md. Explicitly noted that Step 1 has no isolation.
+  6. Confirmed all factual statements are labeled Observed, Inferred, or Unknown.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0015
+- Piyush prediction (optional): Step 1 execution will correctly report exit codes and signals for test binaries, handle failed execve with code 127 without crashing, and leave no zombie processes.
+- Tutor review: pending
+
+
