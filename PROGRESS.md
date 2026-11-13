@@ -61,3 +61,111 @@
 - Linked: LOG-0004
 - Piyush prediction (optional): Pre-commit hook will exit with non-zero status and abort commit on all three violations.
 - Tutor review: pending
+
+## [LOG-0006] 2026-11-13 19:50 IST | PLAN | actor: agent
+- Reason: Set up Phase 1 Step 1 scaffolding, provide Tier A conceptual instruction, provide skeleton files with TODO(piyush) markers, and add evil test fixtures.
+- Details / Change:
+  1. Commit this PLAN entry alone to demonstrate intent before code changes.
+  2. Provide teaching guide for fork, execve (vs execvp), wait4 (and zombies), and status decoding macros.
+  3. Create sandbox-daemon/Makefile (-Wall -Wextra -Werror -O2, clean target).
+  4. Create sandbox-daemon/sandbox.h and sandbox-daemon/sandbox.c skeleton with clear TODO(piyush) markers for child process creation, execution, waiting, and exit status decoding (no implementation).
+  5. Create sandbox-daemon/tests/evil/loop.c and sandbox-daemon/tests/evil/sleeper.c test programs.
+  6. Commit changes in small steps referencing LOG id and issue #3, push branch, and submit Change Report without opening PR or advancing to Tier A implementation.
+- Files: PROGRESS.md, sandbox-daemon/Makefile, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, sandbox-daemon/tests/evil/loop.c, sandbox-daemon/tests/evil/sleeper.c
+- Linked: LOG-0005
+- Piyush prediction (optional): Skeleton and test fixtures will compile cleanly and wait for Piyush to implement core Tier A process logic.
+- Tutor review: pending
+
+## [LOG-0007] 2026-11-13 20:18 IST | PLAN | actor: agent
+- Reason: Establish local-only LEARNING_NOTES study directory and add Section 13 to AI_RULES.md.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before making changes.
+  2. Add Section 13 to AI_RULES.md defining the local study folder workflow: excluded via .git/info/exclude, uncommitted, unstaged, and updated each turn.
+  3. Create local LEARNING_NOTES/ directory with 00_tutor_notes.md, glossary.md, phase-0.md, and phase-1.md containing full teaching material, Change Reports with evidence, and questions with unfilled answer blocks.
+  4. Append a DONE entry linking this PLAN (LOG-0007), commit AI_RULES.md and PROGRESS.md, and push branch.
+- Files: PROGRESS.md, AI_RULES.md
+- Linked: LOG-0006
+- Piyush prediction (optional): LEARNING_NOTES will be ignored by git via .git/info/exclude and remain purely local.
+- Tutor review: pending
+
+## [LOG-0008] 2026-11-13 20:19 IST | DONE | actor: agent
+- Reason: Record completion of AI_RULES.md Section 13 update and local LEARNING_NOTES study directory setup.
+- Details / Change:
+  1. Added Section 13 to AI_RULES.md formalizing the local-only study folder workflow, .git/info/exclude rule, and continuous maintenance duties.
+  2. Created LEARNING_NOTES/ directory at repo root excluded by .git/info/exclude.
+  3. Created 00_tutor_notes.md, glossary.md, phase-0.md, and phase-1.md populated with unabridged teaching guides, Change Reports with full evidence, empty question/answer blocks, and systems definitions.
+  4. Verified git check-ignore and git status to confirm zero tracking or leakage into version control.
+- Files: AI_RULES.md, PROGRESS.md
+- Linked: LOG-0007
+- Piyush prediction (optional): LEARNING_NOTES will be ignored by git via .git/info/exclude and remain purely local.
+- Tutor review: pending
+
+## [LOG-0009] 2026-11-13 20:39 IST | PLAN | actor: agent
+- Reason: Execute combined tutor task covering Part A (governance follow-ups from LOG-0008), Part B (Step 1 test fixtures, Makefile evil target, .gitignore update, and testing guide), and Part C (phase overview).
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1.
+  2. Part A: Verify LEARNING_NOTES study directory state, prove second-line defence against forced staging (-f) with check_repo_hygiene.sh, label all Phase 0 evidence blocks in phase-0.md with source tags, verify AI_RULES.md Section 13, and inspect Issue #4.
+  3. Part B: Create sandbox-daemon/tests/evil/exit7.c and sandbox-daemon/tests/evil/segv.c. Update sandbox-daemon/Makefile with evil target (compiling to tests/evil/bin/ with -O0) and clean target. Update .gitignore with sandbox-daemon/sandbox-runner, sandbox-daemon/*.o, and sandbox-daemon/tests/evil/bin/. Verify build and execution behavior of exit7 (7) and segv (139). Expand LEARNING_NOTES/phase-1.md with Step 1 testing guide and 8 experiments. Add envp to glossary.md.
+  4. Part C: Create LEARNING_NOTES/phase-overview.md mapping Phases 0 through 7 with definitions of done, tiers, dependencies, and rationale from docs/04_BUILD_PLAN.md. Note any architecture inconsistencies.
+  5. Step 1 Definition of Done:
+     - ./sandbox-runner ./tests/evil/bin/exit7 prints exit code 7
+     - ./sandbox-runner ./tests/evil/bin/segv prints signal 11
+     - Killing a running child with kill -9 from another terminal prints signal 9
+     - No zombie processes left behind
+  6. Append DONE entry (LOG-0010), commit in small steps (fixtures, Makefile/.gitignore, DONE), push branch, and submit full Change Report.
+- Files: PROGRESS.md, sandbox-daemon/tests/evil/exit7.c, sandbox-daemon/tests/evil/segv.c, sandbox-daemon/Makefile, .gitignore, LEARNING_NOTES/phase-0.md, LEARNING_NOTES/phase-1.md, LEARNING_NOTES/glossary.md, LEARNING_NOTES/phase-overview.md
+- Linked: LOG-0008
+- Piyush prediction (optional): Fixtures will build cleanly into tests/evil/bin/ and demonstrate expected shell status codes (7 and 139) prior to sandbox-runner integration.
+- Tutor review: pending
+
+## [LOG-0010] 2026-11-13 20:45 IST | DONE | actor: agent
+- Reason: Complete tutor task covering Part A (governance follow-ups), Part B (test fixtures and testing guide), and Part C (phase overview).
+- Details / Change:
+  1. Part A: Verified LEARNING_NOTES study directory integrity (4 files, 650 lines initially). Proved second line of defence by force-staging LEARNING_NOTES/00_tutor_notes.md and verifying both check_repo_hygiene.sh and pre-commit hook blocked commit. Labeled all Phase 0 evidence blocks in phase-0.md with source tags (4 recovered, 3 reconstructed) and added recovery limitations. Verified AI_RULES.md Section 13 and confirmed Issue #4 via gh CLI.
+  2. Part B: Created sandbox-daemon/tests/evil/exit7.c and sandbox-daemon/tests/evil/segv.c. Updated sandbox-daemon/Makefile with evil target (O0 flags, tests/evil/bin/) and clean target. Updated .gitignore to exclude sandbox-daemon/*.o and sandbox-daemon/tests/evil/bin/. Verified compilation and shell exit codes: exit7 yielded 7, and segv yielded 139 (128 + signal 11). Expanded LEARNING_NOTES/phase-1.md with Step 1 Definition of Done, 3 operational tasks, and 5 blank experiment slots for Piyush. Added envp definition to glossary.md.
+  3. Part C: Created LEARNING_NOTES/phase-overview.md mapping Phases 0 through 7 with verbatim Definitions of Done, ownership tiers, dependencies, and sizing rationale from docs/04_BUILD_PLAN.md. Noted architectural consistency items.
+  4. Step 1 Definition of Done recorded for Piyush's upcoming Tier A implementation:
+     - ./sandbox-runner ./tests/evil/bin/exit7 prints exit code 7
+     - ./sandbox-runner ./tests/evil/bin/segv prints signal 11
+     - Killing a running child with kill -9 from another terminal prints signal 9
+     - No zombie processes left behind
+- Files: PROGRESS.md, sandbox-daemon/tests/evil/exit7.c, sandbox-daemon/tests/evil/segv.c, sandbox-daemon/Makefile, .gitignore, LEARNING_NOTES/phase-0.md, LEARNING_NOTES/phase-1.md, LEARNING_NOTES/glossary.md, LEARNING_NOTES/phase-overview.md
+- Linked: LOG-0009
+- Piyush prediction (optional): Fixtures will build cleanly into tests/evil/bin/ and demonstrate expected shell status codes (7 and 139) prior to sandbox-runner integration.
+- Tutor review: pending
+
+## [LOG-0011] 2026-11-13 20:57 IST | PLAN | actor: agent
+- Reason: Execute Tutor Instruction Follow-Up Round 2 covering governance hardening, evil binary ignore validation, Phase 0 evidence re-run, core dump check, environment assessment, issue timing, study notes audit, and Tier A integrity.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1.
+  2. Item 1: Harden scripts/check_repo_hygiene.sh. Inspect script and hook wiring (1a), prove the hole with LEARNING_NOTES/_hook_test.c allowed (1b), fix script to block any staged path starting with LEARNING_NOTES/ regardless of extension using diff without --diff-filter with dedicated error message (1c), prove fix with T1, T2, T3, T4 (1d), and commit script fix alone (1e).
+  3. Item 2: Build evil binaries and prove they are ignored via git status, git check-ignore, and git ls-files.
+  4. Item 3: Re-run the 3 historical Phase 0 negative tests for real (R1: edit old PROGRESS.md log line, R2: staged .env secret, R3: stray NOTES.md), paste real outputs, clean up, and update phase-0.md labeling them recovered on 2026-11-13.
+  5. Item 4: Check for stray core dump files; report kernel core_pattern and coredumpctl.
+  6. Item 5: Produce Linux host environment report (kernel, user, umask, filesystem, namespaces, cgroups, permissions analysis).
+  7. Item 6: Verify Issue #4 creation timing relative to commits referencing it.
+  8. Item 7: Audit LEARNING_NOTES/phase-1.md structure, clarify experiment count, verify stdio demo location, and report final line counts.
+  9. Item 8: Verify Tier A integrity in sandbox-daemon/sandbox.c and sandbox.h remains completely untouched.
+  Note: CI is a known gap, deliberately deferred by the tutor until Piyush passes the Step 1 Definition of Done. Do not add CI this round.
+  10. Append DONE entry (LOG-0012), commit, push branch, and submit Change Report.
+- Files: PROGRESS.md, scripts/check_repo_hygiene.sh, LEARNING_NOTES/phase-0.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0010
+- Piyush prediction (optional): scripts/check_repo_hygiene.sh will effectively block any forced additions under LEARNING_NOTES/ regardless of extension.
+- Tutor review: pending
+
+## [LOG-0012] 2026-11-13 21:02 IST | DONE | actor: agent
+- Reason: Complete Follow-Up Round 2 covering hook hardening, evil binary ignore validation, Phase 0 evidence re-run, core dump audit, environment report, issue timing check, study notes audit, and Tier A integrity proof.
+- Details / Change:
+  1. Item 1: Hardened scripts/check_repo_hygiene.sh. Proved old script allowed non-markdown files under LEARNING_NOTES/ (exit 0). Updated script to block any staged path starting with LEARNING_NOTES/ without --diff-filter with dedicated instruction message. Proved fix with T1 (blocked), T2 (blocked), T3 (allowed), T4 (commit passed). Committed fix alone.
+  2. Item 2: Verified evil binaries in tests/evil/bin/ are ignored by .gitignore (git status clean, git check-ignore confirmed, git ls-files clean).
+  3. Item 3: Re-ran 3 historical Phase 0 negative tests for real (R1: old PROGRESS.md line edit, R2: staged .env secret, R3: stray NOTES.md). Replaced reconstructed evidence in LEARNING_NOTES/phase-0.md with real outputs labeled recovered on 2026-11-13 (new counts: 7 recovered, 0 reconstructed).
+  4. Item 4: Verified zero stray core dumps in repository. Confirmed kernel core_pattern pipes to systemd-coredump and .gitignore contains core rules.
+  5. Item 5: Generated Linux environment report (kernel 7.2.8, btrfs, umask 0000, unprivileged userns enabled, cgroup2fs active).
+  6. Item 6: Verified Issue #4 was created at 20:17:49 IST, preceding commits 8ee9ffc (20:18:53 IST) and f8d13f7 (20:21:30 IST).
+  7. Item 7: Audited LEARNING_NOTES/phase-1.md structure, clarified 4 experiments and 1 envp note, confirmed throwaway stdio test location, reported 1045 total lines.
+  8. Item 8: Confirmed Tier A files sandbox-daemon/sandbox.c and sandbox.h remain completely untouched (single skeleton commit 210cc62).
+  Note: CI is a known gap, deliberately deferred by the tutor until Piyush passes the Step 1 Definition of Done. Do not add CI this round.
+- Files: PROGRESS.md, scripts/check_repo_hygiene.sh, LEARNING_NOTES/phase-0.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0011
+- Piyush prediction (optional): scripts/check_repo_hygiene.sh will effectively block any forced additions under LEARNING_NOTES/ regardless of extension.
+- Tutor review: pending
