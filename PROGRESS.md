@@ -364,3 +364,19 @@
 - Linked: LOG-0023
 - Piyush prediction (optional): Correcting these statements will maintain strict intellectual honesty in systems explanations.
 - Tutor review: pending
+
+## [LOG-0025] 2026-11-14 02:11 IST | PLAN | actor: agent
+- Reason: Implement focused follow-up hardening on phase/1-sandbox-v1 addressing tutor review items 1 through 5.
+- Details / Change:
+  1. Commit CORRECTION (LOG-0024) and this PLAN entry (LOG-0025) to PROGRESS.md before making code changes.
+  2. Item 1: Label the memory limit classification rule in sandbox-daemon/sandbox.c, sandbox.h, and docs as an explicit heuristic. Document that POSIX setrlimit(RLIMIT_AS) lacks an explicit kernel OOM signal and keep empirical test observations separate from general classification.
+  3. Item 2: In the fatal wait4(WNOHANG) error branch, after signaling the process group, execute a blocking wait4 loop on the direct child (retrying on EINTR) to guarantee no live or zombie direct child lingers, close all open descriptors, and preserve STATUS_RUNNER_INTERNAL_ERROR.
+  4. Item 3: Correct UTF-8 validation in print_json_escaped_string() to strictly enforce RFC 3629: reject lead bytes 0xF5..0xFF, reject 2-byte overlongs (0xC0, 0xC1), reject 3-byte overlongs (0xE0 with b1 < 0xA0), reject UTF-16 surrogates (0xED with b1 > 0x9F), reject 4-byte overlongs (0xF0 with b1 < 0x90), reject out-of-range 4-bytes (0xF4 with b1 > 0x8F), reject isolated continuation bytes (0x80..0xBF), and reject truncated multibyte sequences at buffer boundaries.
+  5. Item 4: Document the byte semantics of invalid bytes escaped as \u00XX in docs/02_ARCHITECTURE.md and sandbox.h: explain that raw bytes map to Latin-1 code points U+0000..U+00FF, allowing clients to reconstruct the exact raw byte stream by checking code point <= 255.
+  6. Item 5: Clarify in docs/02_ARCHITECTURE.md that ExecuteResponse status TIMEOUT covers both CPU limit exhaustion (RLIMIT_CPU / signal 24 SIGXCPU) and wall-clock timeout (deadline reached), with signal and timing telemetry distinguishing them without altering schema.
+  7. Item 6: Expand tests/evil/json_escaping_test.c with dedicated test cases for 0xF5/0xF7, overlong encodings, isolated continuation bytes, surrogate encodings, and boundary-truncated multibyte sequences; verify clean parsing via python3 -m json.tool.
+  8. Build, run all evil fixtures, check process table for zero lingering/zombie processes, append DONE entry (LOG-0026), update LEARNING_NOTES/phase-1.md, and fast-forward push to origin/phase/1-sandbox-v1.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/tests/evil/json_escaping_test.c, docs/02_ARCHITECTURE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0024
+- Piyush prediction (optional): The follow-up pass will completely harden the UTF-8 escaper, eliminate direct-child leak risks on fatal wait4 errors, and transparently document the memory limit heuristic and byte reconstruction protocol.
+- Tutor review: pending
