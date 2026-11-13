@@ -1,0 +1,40 @@
+# --- secrets & env ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- build outputs / compiled artifacts ---
+build/
+dist/
+out/
+target/
+.gradle/
+node_modules/
+*.o
+*.so
+*.class
+*.jar
+*.exe
+sandbox-daemon/sandbox-runner
+__pycache__/
+*.pyc
+
+# --- runtime junk ---
+*.log
+core
+core.*
+tmp/
+workspaces/
+.sandbox-work/
+
+# --- IDE / OS ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- chat-only files (not part of the repo) ---
+HANDOFF_PROMPT.md
