@@ -288,6 +288,21 @@
 - Piyush prediction (optional): Step 3 will emit strictly valid JSON across all evil fixtures, parsing correctly with JSON tools and accurately capturing stdout, stderr, resource timings, and peak memory.
 - Tutor review: pending
 
+## [LOG-0020] 2026-11-14 01:13 IST | DONE | actor: agent
+- Reason: Complete Phase 1 Step 3 JSON execution result contract conforming to docs/02_ARCHITECTURE.md (ExecuteResponse schema) and docs/04_BUILD_PLAN.md Definition of Done.
+- Details / Change:
+  1. Implemented RFC 8259 compliant JSON string escaping for stdout, stderr, and error strings in sandbox-daemon/sandbox.c (commit 4e2fd7d).
+  2. Implemented sandbox_result_print_json() emitting the complete ExecuteResponse JSON schema: job_id, status (OK, TIMEOUT, OUTPUT_LIMIT, MEMORY_LIMIT, RUNTIME_ERROR, SANDBOX_ERROR), exit_code, signal, wall_ms, cpu_ms, peak_memory_kb, stdout, stderr.
+  3. Implemented CLI argument parsing in main(): --job-id, --timeout-ms, --cpu-soft, --cpu-hard, --as-mb, --fsize-mb, --max-output-kb.
+  4. Verified strictly valid JSON output across all 12 evil test fixtures using python3 -m json.tool. Confirmed clean separation of captured child streams and runner telemetry.
+  5. Confirmed zero lingering or zombie processes on the host system.
+  Note: This completes the Phase 1 Definition of Done ("Runs a C program; correct statuses for loop, sleep, memory bomb, output flood; no zombies") while keeping learning status honest: Piyush's Step 1 explain-back and reruns remain outstanding before merging to main.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0019
+- Piyush prediction (optional): Step 3 will emit strictly valid JSON across all evil fixtures, parsing correctly with JSON tools and accurately capturing stdout, stderr, resource timings, and peak memory.
+- Tutor review: pending
+
+
 
 
 
