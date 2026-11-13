@@ -662,121 +662,56 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
 }
 
 /*
- * JSON Escaping helper according to RFC 8259 and RFC 3629.
- * Validates multi-byte UTF-8 sequences (2-byte, 3-byte, 4-byte up to U+10FFFF)
- * and emits valid sequences directly.
- * Escapes quotes, backslashes, standard control characters, and invalid raw bytes
- * (including overlong encodings, surrogates, isolated continuation bytes, and lead bytes > 0xF4)
- * as \u00XX (Unicode Latin-1 Supplement code points U+0000..U+00FF).
+ * JSON Escaping helper according to RFC 8259 (byte-oriented Latin-1 representation).
  *
- * Client byte reconstruction protocol:
- * Any client can reconstruct the original raw byte stream losslessly:
- *   for char in string:
- *     if ord(char) <= 255: byte = ord(char)
- *     else: bytes += char.encode('utf-8')
+ * Each byte 'c' of the raw binary stream is encoded as follows:
+ * - Special JSON escapes:
+ *     '"'  -> \"
+ *     '\\' -> \\
+ *     '\b' -> \b
+ *     '\f' -> \f
+ *     '\n' -> \n
+ *     '\r' -> \r
+ *     '\t' -> \t
+ * - Control characters (< 0x20 or 0x7F) and all bytes >= 0x80:
+ *     -> \u00XX (where XX is two-digit lowercase hex)
+ * - Printable ASCII (0x20 <= c <= 0x7E, except '"' and '\\'):
+ *     -> literal ASCII character 'c'
+ *
+ * This encoding is 100% pure ASCII, universally valid JSON across all decoders,
+ * and maps every single byte 'c' directly to Unicode code point U+0000..U+00FF.
+ *
+ * Lossless Byte Reconstruction:
+ * Any client decodes the JSON string into Unicode characters, then recovers the
+ * exact original byte sequence via standard Latin-1 decoding:
+ *   reconstructed = text.encode('latin1')
+ * or equivalently:
+ *   reconstructed = bytes(ord(c) for c in text)
  */
 static void print_json_escaped_string(FILE *out, const char *data, size_t len) {
     if (!data) return;
     const unsigned char *p = (const unsigned char *)data;
-    size_t i = 0;
 
-    while (i < len) {
+    for (size_t i = 0; i < len; i++) {
         unsigned char c = p[i];
         if (c == '"') {
             fputs("\\\"", out);
-            i++;
         } else if (c == '\\') {
             fputs("\\\\", out);
-            i++;
         } else if (c == '\b') {
             fputs("\\b", out);
-            i++;
         } else if (c == '\f') {
             fputs("\\f", out);
-            i++;
         } else if (c == '\n') {
             fputs("\\n", out);
-            i++;
         } else if (c == '\r') {
             fputs("\\r", out);
-            i++;
         } else if (c == '\t') {
             fputs("\\t", out);
-            i++;
-        } else if (c < 0x20 || c == 0x7F) {
-            fprintf(out, "\\u%04x", c);
-            i++;
-        } else if (c < 0x80) {
-            fputc(c, out);
-            i++;
+        } else if (c < 0x20 || c >= 0x7F) {
+            fprintf(out, "\\u%04x", (unsigned int)c);
         } else {
-            /*
-             * Multi-byte UTF-8 validation according to RFC 3629:
-             * - 2-byte: 0xC2..0xDF with trailing 0x80..0xBF (rejects overlong 0xC0..0xC1)
-             * - 3-byte: 0xE0 with 0xA0..0xBF (rejects overlong 0x80..0x9F),
-             *           0xE1..0xEC with 0x80..0xBF,
-             *           0xED with 0x80..0x9F (rejects UTF-16 surrogates 0xA0..0xBF),
-             *           0xEE..0xEF with 0x80..0xBF
-             * - 4-byte: 0xF0 with 0x90..0xBF (rejects overlong 0x80..0x8F),
-             *           0xF1..0xF3 with 0x80..0xBF,
-             *           0xF4 with 0x80..0x8F (rejects > U+10FFFF)
-             * - Lead bytes 0xF5..0xFF, isolated continuation bytes, and truncated sequences are invalid.
-             */
-            bool valid = false;
-            size_t seq_len = 0;
-
-            if (c >= 0xC2 && c <= 0xDF && i + 1 < len) {
-                unsigned char b1 = p[i + 1];
-                if ((b1 & 0xC0) == 0x80) {
-                    valid = true;
-                    seq_len = 2;
-                }
-            } else if (c >= 0xE0 && c <= 0xEF && i + 2 < len) {
-                unsigned char b1 = p[i + 1], b2 = p[i + 2];
-                if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
-                    if (c == 0xE0 && b1 >= 0xA0 && b1 <= 0xBF) {
-                        valid = true;
-                        seq_len = 3;
-                    } else if (c >= 0xE1 && c <= 0xEC) {
-                        valid = true;
-                        seq_len = 3;
-                    } else if (c == 0xED && b1 >= 0x80 && b1 <= 0x9F) {
-                        valid = true;
-                        seq_len = 3;
-                    } else if (c >= 0xEE && c <= 0xEF) {
-                        valid = true;
-                        seq_len = 3;
-                    }
-                }
-            } else if (c >= 0xF0 && c <= 0xF4 && i + 3 < len) {
-                unsigned char b1 = p[i + 1], b2 = p[i + 2], b3 = p[i + 3];
-                if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80) {
-                    if (c == 0xF0 && b1 >= 0x90 && b1 <= 0xBF) {
-                        valid = true;
-                        seq_len = 4;
-                    } else if (c >= 0xF1 && c <= 0xF3) {
-                        valid = true;
-                        seq_len = 4;
-                    } else if (c == 0xF4 && b1 >= 0x80 && b1 <= 0x8F) {
-                        valid = true;
-                        seq_len = 4;
-                    }
-                }
-            }
-
-            if (valid) {
-                for (size_t s = 0; s < seq_len; s++) {
-                    fputc(p[i + s], out);
-                }
-                i += seq_len;
-            } else {
-                /*
-                 * Raw byte semantics: escape invalid byte as \u00XX.
-                 * Preserves raw byte value in Latin-1 code point U+0000..U+00FF.
-                 */
-                fprintf(out, "\\u%04x", c);
-                i++;
-            }
+            fputc(c, out);
         }
     }
 }

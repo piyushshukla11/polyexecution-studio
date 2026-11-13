@@ -61,13 +61,32 @@ int main(void) {
         'T', 'r', 'u', 'n', 'c', ':', ' ',
         0xC2, ' ',             /* Truncated 2-byte */
         0xE4, 0xB8, ' ',       /* Truncated 3-byte */
-        0xF0, 0x90, 0x80       /* Truncated 4-byte without newline */
+        0xF0, 0x90, 0x80, '\n' /* Truncated 4-byte */
     };
     write(STDOUT_FILENO, s8, sizeof(s8));
 
-    /* 9. Stderr output with quotes, backslashes, control characters, and invalid bytes */
-    const char err[] = "Stderr test: \"quoted\" and \\slash with ctrl: \x02\x03 and invalid: \xFF\xFE\n";
-    write(STDERR_FILENO, err, sizeof(err) - 1);
+    /* 9. Collision test cases: valid UTF-8 (C3 A9, C2 80, C3 BF) vs invalid bytes (E9, FF) */
+    const unsigned char s9[] = {
+        'C', 'o', 'l', 'l', 'i', 's', 'i', 'o', 'n', ':', ' ',
+        0xC3, 0xA9, ' ', /* Valid UTF-8 C3 A9 (U+00E9) */
+        0xC2, 0x80, ' ', /* Valid UTF-8 C2 80 (U+0080) */
+        0xC3, 0xBF, ' ', /* Valid UTF-8 C3 BF (U+00BF) */
+        0xE9, ' ',       /* Raw invalid byte E9 */
+        0xFF, '\n'       /* Raw invalid byte FF */
+    };
+    write(STDOUT_FILENO, s9, sizeof(s9));
+
+    /* 10. Stderr output with quotes, backslashes, control characters, valid UTF-8, and invalid bytes */
+    const unsigned char err[] = {
+        'S', 't', 'd', 'e', 'r', 'r', ':', ' ',
+        '"', 'q', 'u', 'o', 't', 'e', 'd', '"', ' ',
+        '\\', 's', 'l', 'a', 's', 'h', '\\', ' ',
+        0x02, 0x03, ' ',
+        0xC3, 0xA9, ' ',
+        0xE9, ' ',
+        0xFF, '\n'
+    };
+    write(STDERR_FILENO, err, sizeof(err));
 
     return 0;
 }

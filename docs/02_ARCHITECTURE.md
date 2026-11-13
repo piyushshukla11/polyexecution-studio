@@ -47,20 +47,17 @@ User program (untrusted)
 5. **SANDBOX_ERROR**: Runner initialization error, setup error (e.g. binary not found, execve error), setup pipe protocol error, or lost child process.
 
 ### Stream Encoding & Byte Reconstruction Protocol
-Strings in `ExecuteResponse` (`stdout`, `stderr`) follow RFC 8259 JSON encoding:
-- Valid multi-byte UTF-8 sequences (2-byte, 3-byte, and 4-byte up to U+10FFFF per RFC 3629) pass through directly.
-- ASCII control characters (`< 0x20` and `0x7F`) and raw non-UTF-8 bytes (`0x80..0xFF`, including overlong encodings, surrogates, isolated continuation bytes, and lead bytes above `0xF4`) are escaped as `\u00XX` (Unicode Latin-1 Supplement code points `U+0000`..`U+00FF`).
-- **Lossless Byte Reconstruction:** Any client can reconstruct the exact raw byte stream:
+Strings in `ExecuteResponse` (`stdout`, `stderr`) follow RFC 8259 JSON encoding using a byte-oriented Latin-1 representation:
+- Printable ASCII characters (`0x20 <= byte <= 0x7E`, except `"` and `\`) pass through as literal ASCII characters.
+- Standard JSON escape sequences are used for quotes (`\"`), backslashes (`\\`), and control escapes (`\b`, `\f`, `\n`, `\r`, `\t`).
+- All control characters (`< 0x20` and `0x7F`) and all bytes `>= 0x80` are escaped as `\u00XX` (Unicode Latin-1 Supplement code points `U+0000`..`U+00FF`).
+- **Why this design?** Emitting all bytes `>= 0x80` as `\u00XX` guarantees that valid UTF-8 sequences (e.g. `0xC3 0xA9` for `é`) never collide with raw isolated bytes (e.g. `0xE9`). `0xC3 0xA9` emits `\u00c3\u00a9` (two characters: `U+00C3` and `U+00A9`), whereas raw byte `0xE9` emits `\u00e9` (one character: `U+00E9`).
+- **100% Pure ASCII JSON:** The JSON output contains only 7-bit ASCII characters, making it universally valid JSON that parses cleanly across every language and runtime without UTF-8 decode errors.
+- **Lossless Byte Reconstruction:** Any client reconstructs the original raw binary stream losslessly:
   ```python
   def reconstruct_bytes(text: str) -> bytes:
-      out = bytearray()
-      for char in text:
-          cp = ord(char)
-          if cp <= 255:
-              out.append(cp)
-          else:
-              out.extend(char.encode("utf-8"))
-      return bytes(out)
+      return text.encode("latin1")
+      # or equivalently: bytes(ord(c) for c in text)
   ```
 
 
