@@ -203,3 +203,21 @@
 - Linked: LOG-0013
 - Piyush prediction (optional): Scripts will cleanly report LEARNING_NOTES rejections without conflicting advice, and staged deletions of allowed files will succeed.
 - Tutor review: pending
+
+## [LOG-0015] 2026-11-14 00:00 IST | PLAN | actor: agent
+- Reason: Record Piyush's decision to change working mode for Phase 1 Step 1 (agent writes Tier A core code, tutor teaches theory, Piyush explains code back; tagged AGENT-WROTE-TIER-A) and plan the implementation of process lifecycle, execution, and status decoding in sandbox-daemon/sandbox.c.
+- Details / Change:
+  1. Record CORRECTION to LOG-0014: in Item 5 of LOG-0014, attributing ambient umask 0000 to the container session manager and the explanation of group nobody (65534) membership were Inferred rather than directly Observed; from now on all claims are explicitly labeled Observed, Inferred, or Unknown.
+  2. Record working mode shift per Piyush's wish: Tier A sandbox core implementation moves from "Piyush writes" to "agent writes, tutor teaches, Piyush must explain it back", tagged with AGENT-WROTE-TIER-A per AI_RULES.md Section 2.
+  3. Implement Step 1 process lifecycle across small commits:
+     (a) Implement fork() + child _exit(3) + parent wait4() loop handling EINTR, error handling if fork() returns -1, and basic status collection.
+     (b) Implement child execve() with explicit binary path, argv = { binary_path, NULL }, and minimal fixed envp = { NULL }; handle execve() failure via write(2, ...) error message and _exit(127).
+     (c) Implement full status decoding: check WIFEXITED(status) and print WEXITSTATUS(status); check WIFSIGNALED(status) and print WTERMSIG(status); never print raw status integer.
+  4. Build and verify with test binaries (exit7, segv, sleeper with kill -9, non-existent binary) and verify absence of zombie processes with ps.
+  5. Add beginner-friendly line-by-line walkthrough of sandbox.c and system calls to LEARNING_NOTES/phase-1.md, emphasizing that Step 1 provides no isolation or resource limits.
+  6. Commit each change incrementally, stage files by name only, append DONE entry (LOG-0016), and submit Change Report.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0014
+- Piyush prediction (optional): Step 1 execution will correctly report exit codes and signals for test binaries, handle failed execve with code 127 without crashing, and leave no zombie processes.
+- Tutor review: pending
+
