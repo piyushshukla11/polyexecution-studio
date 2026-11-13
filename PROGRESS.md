@@ -243,4 +243,20 @@
 - Piyush prediction (optional): Step 1 execution will correctly report exit codes and signals for test binaries, handle failed execve with code 127 without crashing, and leave no zombie processes.
 - Tutor review: pending
 
+## [LOG-0017] 2026-11-14 01:05 IST | PLAN | actor: agent
+- Reason: Implement Phase 1 Step 2 sandbox core hardening (CLOEXEC error pipe with setup_error_t record, setsid process group cleanup, non-blocking pipe I/O capture, poll event loop with monotonic wall timeout and continuous child liveness probing, kill-on-cap output flood policy, and child rlimits) authorized by Piyush under AGENT-WROTE-TIER-A.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1.
+  2. Implement Step 2 in small, reviewable commits:
+     (a) Normalize initially closed standard descriptors (0, 1, 2) to /dev/null; implement pipe2(O_CLOEXEC) error pipe with setup_error_t struct (stage + errno) and full-read/write loops; add exit127 fixture.
+     (b) Implement child setsid() session/process-group leader and parent kill(-child_pid, SIGKILL) best-effort cleanup helper; create non-blocking stdout/stderr pipes, dup2 in child, and close unused descriptors.
+     (c) Implement poll-based event loop using CLOCK_MONOTONIC with continuous wait4(..., WNOHANG) child liveness probing; handle EINTR and ECHILD; enforce 2000 ms wall timeout; implement 64 KB kill-on-cap output flood policy with bounded non-blocking drain; add fixtures for stream separation, output flood, early stream close, and descendant pipe holding.
+     (d) Configure in-child resource limits via setrlimit: RLIMIT_CPU (soft 1s, hard 2s), RLIMIT_AS (128 MiB), RLIMIT_FSIZE (1 MiB), RLIMIT_NOFILE (64), RLIMIT_CORE (0); add fixtures for memory bomb and file size limit.
+  3. Execute focused acceptance tests, verify absence of zombie processes and orphan test descendants, and append DONE entry (LOG-0018).
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/*, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0016
+- Piyush prediction (optional): Step 2 will cleanly distinguish execve failure from exit code 127, capture I/O without deadlocks, terminate long sleeps and output floods without hanging, and enforce POSIX limits on child processes.
+- Tutor review: pending
+
+
 
