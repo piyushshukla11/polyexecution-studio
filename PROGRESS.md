@@ -313,6 +313,25 @@
 - Piyush prediction (optional): Correcting these classifications will make runner status reporting strictly truthful to systems behavior.
 - Tutor review: pending
 
+## [LOG-0022] 2026-11-14 01:52 IST | PLAN | actor: agent
+- Reason: Implement corrective hardening pass on phase/1-sandbox-v1 addressing tutor code review items 1 through 8.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1.
+  2. Item 1: Refine status mapping so ordinary SIGSEGV produces RUNTIME_ERROR, while MEMORY_LIMIT requires peak RSS reaching >= 80% of RLIMIT_AS.
+  3. Item 2: Implement safe_buffer_append() ensuring realloc never overwrites live pointers; on allocation failure, signal group, reap child, close descriptors, and return STATUS_RUNNER_INTERNAL_ERROR without crashing.
+  4. Item 3: On fatal poll or wait4(WNOHANG) errors, perform complete cleanup (signal process group, reap direct child, close all descriptors, preserve internal error). Handle EINTR and ECHILD deliberately.
+  5. Item 4: In setup-error and protocol-error paths, retry blocking wait4 on EINTR until child is reaped and verify return code.
+  6. Item 5: Classify EOF plus abnormal or unconfirmed status as INDETERMINATE_SETUP_STATUS rather than claiming confirmed execution.
+  7. Item 6: Implement deterministic timeout observation rule sampling monotonic clock at poll and upon observing child termination.
+  8. Item 7: Implement robust RFC 8259 JSON byte validator and escaper supporting arbitrary binary bytes, control characters, and valid UTF-8; add json_escaping_test fixture and verify with python3 -m json.tool.
+  9. Item 8: Clarify TIMEOUT vs CPU limit: preserve signal 24 (SIGXCPU) and distinguish from wall timeout.
+  10. Run strict build and all focused acceptance checks, append DONE entry (LOG-0023), and push to origin/phase/1-sandbox-v1.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/json_escaping_test.c, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0021
+- Piyush prediction (optional): Corrective pass will ensure robust allocation handling, truthful status mapping between segv and memory_bomb, and valid JSON output for arbitrary binary bytes.
+- Tutor review: pending
+
+
 
 
 
