@@ -113,3 +113,10 @@ Stop and ask Piyush (and tell him to consult the tutor) when: you want to change
 - Open one Pull Request per phase branch using `.github/pull_request_template.md`. Merge with a normal merge commit (`--no-ff`), NOT squash, so the real commit history is kept.
 - Commits only count on the contribution graph once they are on the default branch, and only if the git author email matches a verified email on Piyush's GitHub account. Check `git config user.email` before the first commit.
 - Never create empty, fake, backdated, or padding commits. Contributions must reflect real work. Many small meaningful commits are good; noise is not.
+
+## 13. LEARNING_NOTES workflow (local-only study folder)
+- Piyush maintains a local study folder `LEARNING_NOTES/` at the repository root containing detailed concept guides, Change Reports, questions with answer blocks, and a systems glossary.
+- **Local-only exclusion:** `LEARNING_NOTES/` is excluded via `.git/info/exclude` (not `.gitignore`, since `.gitignore` is committed). It must never be tracked or pushed to remote repositories.
+- **Staging prohibition:** Never run `git add -f`, `git add .`, or `git add -A` on `LEARNING_NOTES/`. Never stage files from this directory. Do not reference private study contents in public commit messages.
+- **Re-clone notice:** Because `.git/info/exclude` is not cloned, re-adding `LEARNING_NOTES/` to `.git/info/exclude` is required if the repository is cloned afresh.
+- **Continuous maintenance:** In the same turn as each new Change Report, the coding agent must append teaching guides, complete Change Reports with unabridged evidence blocks, new interview questions with empty answer blocks, and new glossary terms to the corresponding files in `LEARNING_NOTES/`.

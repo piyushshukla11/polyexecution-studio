@@ -87,3 +87,15 @@
 - Linked: LOG-0006
 - Piyush prediction (optional): LEARNING_NOTES will be ignored by git via .git/info/exclude and remain purely local.
 - Tutor review: pending
+
+## [LOG-0008] 2026-11-13 20:19 IST | DONE | actor: agent
+- Reason: Record completion of AI_RULES.md Section 13 update and local LEARNING_NOTES study directory setup.
+- Details / Change:
+  1. Added Section 13 to AI_RULES.md formalizing the local-only study folder workflow, .git/info/exclude rule, and continuous maintenance duties.
+  2. Created LEARNING_NOTES/ directory at repo root excluded by .git/info/exclude.
+  3. Created 00_tutor_notes.md, glossary.md, phase-0.md, and phase-1.md populated with unabridged teaching guides, Change Reports with full evidence, empty question/answer blocks, and systems definitions.
+  4. Verified git check-ignore and git status to confirm zero tracking or leakage into version control.
+- Files: AI_RULES.md, PROGRESS.md
+- Linked: LOG-0007
+- Piyush prediction (optional): LEARNING_NOTES will be ignored by git via .git/info/exclude and remain purely local.
+- Tutor review: pending
