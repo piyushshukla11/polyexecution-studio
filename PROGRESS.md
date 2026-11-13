@@ -41,3 +41,23 @@
 - Files: AI_RULES.md, scripts/check_repo_hygiene.sh, .github/pull_request_template.md
 - Linked: LOG-0002
 - Tutor review: n/a
+
+## [LOG-0004] 2026-11-13 18:50 IST | PLAN | actor: agent
+- Reason: Verify git hooks enforcement (append-only PROGRESS.md check and repo hygiene check) for Phase 0 Definition of Done.
+- Details / Change: Test pre-commit hook behavior against invalid operations without polluting git history: (a) reject modification/deletion of old lines in PROGRESS.md, (b) reject staging .env, (c) reject staging stray markdown NOTES.md. After verifying negative cases, append a DONE log entry and prepare PR for phase/0-setup.
+- Files: PROGRESS.md
+- Linked: LOG-0001, LOG-0002, LOG-0003
+- Piyush prediction (optional): Pre-commit hook will exit with non-zero status and abort commit on all three violations.
+- Tutor review: pending
+
+## [LOG-0005] 2026-11-13 18:51 IST | DONE | actor: agent
+- Reason: Record verified git hooks enforcement and completion of Phase 0 setup.
+- Details / Change: Verified all git hook constraints on phase/0-setup branch:
+  1. Modifying an existing line of PROGRESS.md was blocked with 'BLOCKED: PROGRESS.md is append-only. 1 line(s) removed or changed.'.
+  2. Staging a .env secret file was blocked with 'BLOCKED: junk/secret/build files staged: .env'.
+  3. Staging a stray NOTES.md markdown file was blocked with 'BLOCKED: stray markdown files (allowed: README.md, AI_RULES.md, PROGRESS.md, docs/*, .github/*): NOTES.md'.
+  All throwaway changes were unstaged and removed cleanly. Ready for Phase 0 PR submission.
+- Files: PROGRESS.md
+- Linked: LOG-0004
+- Piyush prediction (optional): Pre-commit hook will exit with non-zero status and abort commit on all three violations.
+- Tutor review: pending
