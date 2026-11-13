@@ -6,10 +6,11 @@
  * run_sandbox:
  * Executes a target binary in a child process and waits for it to finish.
  *
- * Step 1 (a) milestone:
+ * Process lifecycle:
  * 1. Validates input binary path.
  * 2. Forks child process (fork(2)).
- * 3. Child exits with _exit(3) as a baseline lifecycle test.
+ * 3. Child executes target binary using execve(2) with explicit path and minimal envp.
+ *    On execve failure, writes error message to stderr via write(2) and calls _exit(127).
  * 4. Parent reaps child with wait4(2), handling EINTR signal interruption.
  * 5. Decodes and prints child termination status.
  */
@@ -42,14 +43,44 @@ int run_sandbox(const char *binary_path) {
     if (pid == 0) {
         /*
          * --- CHILD PROCESS (pid == 0) ---
-         * For Step 1(a) milestone test: immediately exit with code 3.
+         * The child process executes the target binary.
          *
-         * We use _exit(2) instead of exit(3) because:
-         * 1. _exit terminates the process immediately via the kernel.
-         * 2. It avoids flushing or corrupting stdio buffers inherited from parent.
-         * 3. It skips running atexit(3) cleanup handlers registered in parent.
+         * execve(2) replaces the current process image with a new process image.
+         * It takes three arguments:
+         * 1. filename: pathname of the binary to execute.
+         * 2. argv: NULL-terminated array of argument strings passed to the new program.
+         *    By convention, argv[0] contains the filename being executed.
+         * 3. envp: NULL-terminated array of environment variables ("NAME=VALUE").
+         *
+         * Why execve instead of execvp / execlp?
+         * - execvp searches the PATH environment variable and inherits all environment variables.
+         * - execve requires an explicit pathname and caller-specified environment.
+         * - In a sandbox, inheriting arbitrary environment variables (e.g. LD_PRELOAD, PATH)
+         *   is a security risk. Passing a minimal fixed envp ({ NULL }) ensures determinism.
          */
-        _exit(3);
+        char *const child_argv[] = { (char *)binary_path, NULL };
+        char *const child_envp[] = { NULL };
+
+        execve(binary_path, child_argv, child_envp);
+
+        /*
+         * If execve() succeeds, it NEVER returns because the process image is replaced.
+         * If execution reaches here, execve() failed (e.g. ENOENT file not found, EACCES permission denied).
+         *
+         * Error reporting in child:
+         * We use write(2) directly to STDERR_FILENO rather than printf/perror because
+         * write(2) is an async-signal-safe system call that does not allocate memory
+         * or touch stdio locks/buffers.
+         */
+        const char err_msg[] = "execve failed\n";
+        (void)write(STDERR_FILENO, err_msg, sizeof(err_msg) - 1);
+
+        /*
+         * Standard convention for command not found or exec failure: exit 127.
+         * We call _exit(2) to terminate immediately without invoking parent handlers
+         * or flushing parent stdio buffers.
+         */
+        _exit(127);
     }
 
     /*
