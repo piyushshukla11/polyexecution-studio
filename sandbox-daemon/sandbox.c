@@ -4,6 +4,7 @@
 
 void sandbox_config_init_default(sandbox_config_t *cfg) {
     if (!cfg) return;
+    cfg->job_id = "";
     cfg->timeout_ms = 2000;
     cfg->rlimit_cpu_soft = 1;
     cfg->rlimit_cpu_hard = 2;
@@ -328,8 +329,6 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
     bool child_reaped = false;
     int child_status = 0;
     struct rusage child_usage;
-    pid_t wait_pid = 0;
-    (void)wait_pid;
     memset(&child_usage, 0, sizeof(child_usage));
 
     bool timed_out = false;
@@ -481,6 +480,9 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
      * Loop termination and tie-breaking:
      * Priority: OUTPUT_LIMIT_EXCEEDED > TIMEOUT > NORMAL_EXIT / SIGNAL_TERMINATION
      */
+    pid_t wait_pid = 0;
+    (void)wait_pid;
+
     if (output_cap_breached) {
         kill(-pid, SIGKILL);
         if (!child_reaped) {
@@ -535,44 +537,164 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
     return 0;
 }
 
+/*
+ * JSON Escaping helper according to RFC 8259.
+ */
+static void print_json_escaped_string(FILE *out, const char *data, size_t len) {
+    if (!data) return;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)data[i];
+        switch (c) {
+            case '"':  fputs("\\\"", out); break;
+            case '\\': fputs("\\\\", out); break;
+            case '\b': fputs("\\b", out); break;
+            case '\f': fputs("\\f", out); break;
+            case '\n': fputs("\\n", out); break;
+            case '\r': fputs("\\r", out); break;
+            case '\t': fputs("\\t", out); break;
+            default:
+                if (c < 0x20 || c == 0x7F) {
+                    fprintf(out, "\\u%04x", c);
+                } else {
+                    fputc(c, out);
+                }
+                break;
+        }
+    }
+}
+
+static const char *sandbox_status_to_string(const sandbox_result_t *res) {
+    switch (res->status) {
+        case STATUS_OK:
+            return "OK";
+        case STATUS_TIMEOUT:
+            return "TIMEOUT";
+        case STATUS_OUTPUT_LIMIT_EXCEEDED:
+            return "OUTPUT_LIMIT";
+        case STATUS_RUNTIME_ERROR:
+            if (res->signal == 24 /* SIGXCPU */) {
+                return "TIMEOUT";
+            }
+            if (res->signal == 25 /* SIGXFSZ */) {
+                return "OUTPUT_LIMIT";
+            }
+            if (res->signal == 11 /* SIGSEGV */ && res->peak_memory_kb > 0) {
+                return "MEMORY_LIMIT";
+            }
+            return "RUNTIME_ERROR";
+        case STATUS_SETUP_ERROR:
+        case STATUS_SETUP_PROTOCOL_ERROR:
+        case STATUS_INDETERMINATE_SETUP_STATUS:
+        case STATUS_RUNNER_CHILD_LOST:
+        case STATUS_RUNNER_INTERNAL_ERROR:
+        default:
+            return "SANDBOX_ERROR";
+    }
+}
+
+void sandbox_result_print_json(FILE *out, const sandbox_result_t *res, const char *job_id) {
+    if (!out || !res) return;
+
+    const char *status_str = sandbox_status_to_string(res);
+    const char *jid = job_id ? job_id : "";
+
+    fprintf(out, "{\"job_id\":\"");
+    print_json_escaped_string(out, jid, strlen(jid));
+    fprintf(out, "\",\"status\":\"%s\"", status_str);
+    fprintf(out, ",\"exit_code\":%d", res->exit_code);
+    fprintf(out, ",\"signal\":%d", res->signal);
+    fprintf(out, ",\"wall_ms\":%u", res->wall_ms);
+    fprintf(out, ",\"cpu_ms\":%u", res->cpu_ms);
+    fprintf(out, ",\"peak_memory_kb\":%llu", (unsigned long long)res->peak_memory_kb);
+
+    fprintf(out, ",\"stdout\":\"");
+    if (res->stdout_buf && res->stdout_len > 0) {
+        print_json_escaped_string(out, res->stdout_buf, res->stdout_len);
+    }
+    fprintf(out, "\"");
+
+    fprintf(out, ",\"stderr\":\"");
+    if (res->status == STATUS_SETUP_ERROR) {
+        char err_msg[256];
+        snprintf(err_msg, sizeof(err_msg), "setup error: stage=%d errno=%d (%s)",
+                 res->setup_err.stage, res->setup_err.errnum, strerror(res->setup_err.errnum));
+        print_json_escaped_string(out, err_msg, strlen(err_msg));
+    } else if (res->status == STATUS_SETUP_PROTOCOL_ERROR) {
+        const char *err_msg = "setup protocol error";
+        print_json_escaped_string(out, err_msg, strlen(err_msg));
+    } else if (res->stderr_buf && res->stderr_len > 0) {
+        print_json_escaped_string(out, res->stderr_buf, res->stderr_len);
+    }
+    fprintf(out, "\"");
+
+    fprintf(out, "}\n");
+}
+
 int run_sandbox(const char *binary_path) {
     sandbox_config_t cfg;
     sandbox_config_init_default(&cfg);
 
     sandbox_result_t res;
     int ret = run_sandbox_with_config(binary_path, &cfg, &res);
-    if (ret != 0) {
-        fprintf(stderr, "runner internal error\n");
-        return ret;
-    }
-
-    if (res.status == STATUS_SETUP_ERROR) {
-        fprintf(stderr, "setup error: stage=%d errno=%d (%s)\n",
-                res.setup_err.stage, res.setup_err.errnum, strerror(res.setup_err.errnum));
-    } else if (res.status == STATUS_SETUP_PROTOCOL_ERROR) {
-        fprintf(stderr, "setup protocol error\n");
-    } else if (res.status == STATUS_TIMEOUT) {
-        printf("status: TIMEOUT\n");
-    } else if (res.status == STATUS_OUTPUT_LIMIT_EXCEEDED) {
-        printf("status: OUTPUT_LIMIT_EXCEEDED\n");
-    } else if (res.status == STATUS_OK) {
-        printf("exit code %d\n", res.exit_code);
-    } else if (res.status == STATUS_RUNTIME_ERROR) {
-        printf("signal %d\n", res.signal);
-    } else {
-        printf("status: %d\n", res.status);
-    }
-
+    sandbox_result_print_json(stdout, &res, cfg.job_id);
     sandbox_result_cleanup(&res);
-    return 0;
+    return ret;
 }
 
 int main(int argc, char *argv[]) {
     if (argc < 2) {
-        fprintf(stderr, "Usage: %s <path-to-binary>\n", argv[0]);
+        fprintf(stderr, "Usage: %s [options] <path-to-binary>\n", argv[0]);
+        fprintf(stderr, "Options:\n");
+        fprintf(stderr, "  --job-id <id>          Job identifier string\n");
+        fprintf(stderr, "  --timeout-ms <ms>      Wall-clock timeout in milliseconds (default: 2000)\n");
+        fprintf(stderr, "  --cpu-soft <s>         RLIMIT_CPU soft limit in seconds (default: 1)\n");
+        fprintf(stderr, "  --cpu-hard <s>         RLIMIT_CPU hard limit in seconds (default: 2)\n");
+        fprintf(stderr, "  --as-mb <mb>           RLIMIT_AS limit in MiB (default: 128)\n");
+        fprintf(stderr, "  --fsize-mb <mb>        RLIMIT_FSIZE limit in MiB (default: 1)\n");
+        fprintf(stderr, "  --max-output-kb <kb>   Output stream cap in KiB (default: 64)\n");
         return 1;
     }
 
-    const char *binary_path = argv[1];
-    return run_sandbox(binary_path);
+    sandbox_config_t cfg;
+    sandbox_config_init_default(&cfg);
+
+    const char *binary_path = NULL;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--job-id") == 0 && i + 1 < argc) {
+            cfg.job_id = argv[++i];
+        } else if (strcmp(argv[i], "--timeout-ms") == 0 && i + 1 < argc) {
+            cfg.timeout_ms = (uint32_t)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--cpu-soft") == 0 && i + 1 < argc) {
+            cfg.rlimit_cpu_soft = (uint32_t)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--cpu-hard") == 0 && i + 1 < argc) {
+            cfg.rlimit_cpu_hard = (uint32_t)strtoul(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--as-mb") == 0 && i + 1 < argc) {
+            cfg.rlimit_as_bytes = (uint64_t)strtoull(argv[++i], NULL, 10) * 1024ULL * 1024ULL;
+        } else if (strcmp(argv[i], "--fsize-mb") == 0 && i + 1 < argc) {
+            cfg.rlimit_fsize = (uint64_t)strtoull(argv[++i], NULL, 10) * 1024ULL * 1024ULL;
+        } else if (strcmp(argv[i], "--max-output-kb") == 0 && i + 1 < argc) {
+            cfg.max_output_bytes = (size_t)strtoull(argv[++i], NULL, 10) * 1024ULL;
+        } else if (argv[i][0] != '-') {
+            binary_path = argv[i];
+        } else {
+            fprintf(stderr, "Unknown option: %s\n", argv[i]);
+            return 1;
+        }
+    }
+
+    if (!binary_path) {
+        fprintf(stderr, "Error: no target binary specified\n");
+        return 1;
+    }
+
+    sandbox_result_t res;
+    int ret = run_sandbox_with_config(binary_path, &cfg, &res);
+    if (ret != 0) {
+        res.status = STATUS_RUNNER_INTERNAL_ERROR;
+    }
+
+    sandbox_result_print_json(stdout, &res, cfg.job_id);
+    sandbox_result_cleanup(&res);
+    return (ret == 0) ? 0 : 1;
 }

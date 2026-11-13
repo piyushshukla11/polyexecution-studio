@@ -54,6 +54,7 @@ typedef enum {
 
 /* Configuration parameters */
 typedef struct {
+    const char *job_id;        /* optional job identifier */
     uint32_t timeout_ms;       /* e.g. 2000 ms wall timeout */
     uint32_t rlimit_cpu_soft;  /* e.g. 1 s */
     uint32_t rlimit_cpu_hard;  /* e.g. 2 s */
@@ -88,6 +89,9 @@ void sandbox_result_cleanup(sandbox_result_t *res);
 
 /* Run target binary with given configuration */
 int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg, sandbox_result_t *res);
+
+/* Emit JSON result matching ExecuteResponse schema in docs/02_ARCHITECTURE.md */
+void sandbox_result_print_json(FILE *out, const sandbox_result_t *res, const char *job_id);
 
 /* Backward-compatible runner */
 int run_sandbox(const char *binary_path);
