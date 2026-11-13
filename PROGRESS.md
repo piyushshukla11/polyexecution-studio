@@ -258,5 +258,21 @@
 - Piyush prediction (optional): Step 2 will cleanly distinguish execve failure from exit code 127, capture I/O without deadlocks, terminate long sleeps and output floods without hanging, and enforce POSIX limits on child processes.
 - Tutor review: pending
 
+## [LOG-0018] 2026-11-14 01:10 IST | DONE | actor: agent
+- Reason: Complete Phase 1 Step 2 sandbox hardening (error pipe with setup_error_t, setsid process group cleanup, non-blocking pipe capture, poll event loop with monotonic timeout and continuous child liveness checking, kill-on-cap output flood policy, and child rlimits) under AGENT-WROTE-TIER-A.
+- Details / Change:
+  1. Implemented setup error pipe (pipe2 with O_CLOEXEC) and setup_error_t (stage + errno) in sandbox-daemon/sandbox.c (commit 06c4c63). Verified missing binary returns stage=10 errno=2, and exit127 fixture returns exit code 127.
+  2. Implemented setsid() process-group leader setup and kill(-pgid, SIGKILL) best-effort group cleanup (commit 2ca0e4e).
+  3. Implemented non-blocking stdout/stderr pipe capture with descriptor normalization (ensuring fds 0, 1, 2 valid) and clean dup2 redirection.
+  4. Implemented poll-based event loop using CLOCK_MONOTONIC with continuous wait4(..., WNOHANG) direct-child liveness probing. Verified that early-closed streams still respect wall timeout (close_stream_sleep -> TIMEOUT), and that direct-child exit reaps cleanly without hanging when a descendant keeps a pipe open (descendant_pipe -> exit code 42).
+  5. Implemented 64 KiB kill-on-cap output flood policy with bounded non-blocking pipe draining (output_flood -> OUTPUT_LIMIT_EXCEEDED).
+  6. Configured child rlimits before execve: RLIMIT_CPU (soft 1s, hard 2s -> loop produces signal 24 SIGXCPU), RLIMIT_AS (128 MiB -> memory_bomb produces signal 11 SIGSEGV), RLIMIT_FSIZE (1 MiB -> file_size_limit produces signal 25 SIGXFSZ), RLIMIT_CORE (0), RLIMIT_NOFILE (64).
+  7. Confirmed zero zombie processes and zero orphan test processes remaining on the host.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/*
+- Linked: LOG-0017
+- Piyush prediction (optional): Step 2 will cleanly distinguish execve failure from exit code 127, capture I/O without deadlocks, terminate long sleeps and output floods without hanging, and enforce POSIX limits on child processes.
+- Tutor review: pending
+
+
 
 
