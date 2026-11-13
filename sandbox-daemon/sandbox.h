@@ -74,9 +74,11 @@ typedef struct {
     uint64_t peak_memory_kb;
     char *stdout_buf;
     size_t stdout_len;
+    size_t stdout_cap;
     bool stdout_truncated;
     char *stderr_buf;
     size_t stderr_len;
+    size_t stderr_cap;
     bool stderr_truncated;
     setup_error_t setup_err;
 } sandbox_result_t;
@@ -91,7 +93,7 @@ void sandbox_result_cleanup(sandbox_result_t *res);
 int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg, sandbox_result_t *res);
 
 /* Emit JSON result matching ExecuteResponse schema in docs/02_ARCHITECTURE.md */
-void sandbox_result_print_json(FILE *out, const sandbox_result_t *res, const char *job_id);
+void sandbox_result_print_json(FILE *out, const sandbox_result_t *res, const char *job_id, const sandbox_config_t *cfg);
 
 /* Backward-compatible runner */
 int run_sandbox(const char *binary_path);

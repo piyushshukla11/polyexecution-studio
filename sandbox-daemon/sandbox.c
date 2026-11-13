@@ -103,6 +103,42 @@ static int parent_read_setup_error(int err_pipe_read_fd, setup_error_t *out_err)
 }
 
 /*
+ * Safe buffer append helper.
+ * Appends up to n bytes from data into *buf without exceeding max_bytes.
+ * Uses a temporary pointer for realloc to ensure that *buf is never overwritten
+ * or lost if allocation fails.
+ * Returns the number of bytes appended (>= 0), or -1 on allocation failure.
+ */
+static int safe_buffer_append(char **buf, size_t *len, size_t *cap, const char *data, size_t n, size_t max_bytes) {
+    if (n == 0) return 0;
+    size_t space = (max_bytes > *len) ? (max_bytes - *len) : 0;
+    if (space == 0) return 0;
+    size_t to_copy = (n < space) ? n : space;
+
+    size_t needed = *len + to_copy;
+    if (needed > *cap) {
+        size_t new_cap = (*cap == 0) ? 4096 : (*cap * 2);
+        while (new_cap < needed) {
+            new_cap *= 2;
+        }
+        if (new_cap > max_bytes) {
+            new_cap = max_bytes;
+        }
+        char *new_buf = realloc(*buf, new_cap);
+        if (!new_buf) {
+            /* Allocation failure: *buf is preserved */
+            return -1;
+        }
+        *buf = new_buf;
+        *cap = new_cap;
+    }
+
+    memcpy(*buf + *len, data, to_copy);
+    *len += to_copy;
+    return (int)to_copy;
+}
+
+/*
  * Bounded non-blocking pipe drain helper.
  * Reads available bytes from pipe_fd into *buf up to max_bytes.
  * Once kernel pipe buffer is empty (EAGAIN/EWOULDBLOCK) or EOF is reached, closes pipe_fd.
@@ -110,24 +146,25 @@ static int parent_read_setup_error(int err_pipe_read_fd, setup_error_t *out_err)
  */
 static void drain_and_close_pipe(int pipe_fd, char **buf, size_t *len, size_t *cap, size_t max_bytes, bool *truncated) {
     if (pipe_fd < 0) return;
-    char sink[4096];
+    char chunk[4096];
 
     while (true) {
         size_t space = (max_bytes > *len) ? (max_bytes - *len) : 0;
         if (space > 0) {
-            if (*len + 4096 > *cap) {
-                size_t new_cap = (*cap == 0) ? 4096 : (*cap * 2);
-                if (new_cap > max_bytes) new_cap = max_bytes;
-                char *new_buf = realloc(*buf, new_cap);
-                if (!new_buf) break;
-                *buf = new_buf;
-                *cap = new_cap;
-            }
-            size_t to_read = *cap - *len;
-            if (to_read > 4096) to_read = 4096;
-            ssize_t n = read(pipe_fd, *buf + *len, to_read);
+            size_t to_read = sizeof(chunk);
+            if (to_read > space) to_read = space;
+            ssize_t n = read(pipe_fd, chunk, to_read);
             if (n > 0) {
-                *len += (size_t)n;
+                int written = safe_buffer_append(buf, len, cap, chunk, (size_t)n, max_bytes);
+                if (written < 0) {
+                    /* On allocation failure during drain, stop appending and drain remainder into sink */
+                    *truncated = true;
+                    break;
+                }
+                if ((size_t)written < (size_t)n) {
+                    *truncated = true;
+                    break;
+                }
             } else if (n == 0) {
                 break; /* EOF */
             } else {
@@ -136,9 +173,8 @@ static void drain_and_close_pipe(int pipe_fd, char **buf, size_t *len, size_t *c
                 break; /* Read error */
             }
         } else {
-            /* Cap reached: read non-blocking into sink to drain kernel buffer without growing memory */
             *truncated = true;
-            ssize_t n = read(pipe_fd, sink, sizeof(sink));
+            ssize_t n = read(pipe_fd, chunk, sizeof(chunk));
             if (n <= 0) {
                 if (n < 0 && errno == EINTR) continue;
                 break;
@@ -300,9 +336,18 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         /* Child explicitly reported setup/exec failure */
         int child_status = 0;
         struct rusage child_usage;
-        (void)wait4(pid, &child_status, 0, &child_usage);
+        pid_t reap_pid;
+        do {
+            reap_pid = wait4(pid, &child_status, 0, &child_usage);
+        } while (reap_pid == -1 && errno == EINTR);
+
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
+
+        if (reap_pid != pid) {
+            res->status = STATUS_RUNNER_CHILD_LOST;
+            return -1;
+        }
 
         res->status = STATUS_SETUP_ERROR;
         res->setup_err = s_err;
@@ -312,9 +357,18 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         /* Protocol error: child closed pipe mid-record or write failed */
         int child_status = 0;
         struct rusage child_usage;
-        (void)wait4(pid, &child_status, 0, &child_usage);
+        pid_t reap_pid;
+        do {
+            reap_pid = wait4(pid, &child_status, 0, &child_usage);
+        } while (reap_pid == -1 && errno == EINTR);
+
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
+
+        if (reap_pid != pid) {
+            res->status = STATUS_RUNNER_CHILD_LOST;
+            return -1;
+        }
 
         res->status = STATUS_SETUP_PROTOCOL_ERROR;
         res->exit_code = 127;
@@ -325,7 +379,6 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
      * err_res == 0 (EOF): No setup error record arrived.
      * Enter poll-based event loop with continuous direct-child liveness checking.
      */
-    size_t stdout_cap = 0, stderr_cap = 0;
     bool child_reaped = false;
     int child_status = 0;
     struct rusage child_usage;
@@ -333,20 +386,22 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
 
     bool timed_out = false;
     bool output_cap_breached = false;
+    bool alloc_failed = false;
     bool stdout_open = true;
     bool stderr_open = true;
 
     while (!child_reaped) {
-        struct timespec now_tp;
-        clock_gettime(CLOCK_MONOTONIC, &now_tp);
-        uint64_t now_ms = (uint64_t)now_tp.tv_sec * 1000ULL + (uint64_t)now_tp.tv_nsec / 1000000ULL;
+        /* Check monotonic wall clock before poll */
+        struct timespec pre_poll_tp;
+        clock_gettime(CLOCK_MONOTONIC, &pre_poll_tp);
+        uint64_t pre_poll_ms = (uint64_t)pre_poll_tp.tv_sec * 1000ULL + (uint64_t)pre_poll_tp.tv_nsec / 1000000ULL;
 
-        if (now_ms >= deadline_ms) {
+        if (pre_poll_ms >= deadline_ms) {
             timed_out = true;
             break;
         }
 
-        uint64_t remaining_ms = deadline_ms - now_ms;
+        uint64_t remaining_ms = deadline_ms - pre_poll_ms;
         int poll_timeout = (remaining_ms > 50ULL) ? 50 : (int)remaining_ms;
 
         if (stdout_open || stderr_open) {
@@ -370,7 +425,17 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             int poll_ret = poll(pfds, (nfds_t)nfds, poll_timeout);
             if (poll_ret < 0) {
                 if (errno == EINTR) continue;
-                /* Fatal poll error */
+                /* Fatal poll error: perform complete cleanup */
+                kill(-pid, SIGKILL);
+                if (!child_reaped) {
+                    pid_t reap_p;
+                    do {
+                        reap_p = wait4(pid, &child_status, 0, &child_usage);
+                    } while (reap_p == -1 && errno == EINTR);
+                    child_reaped = (reap_p == pid);
+                }
+                if (stdout_open) { close(stdout_pipe[0]); stdout_open = false; }
+                if (stderr_open) { close(stderr_pipe[0]); stderr_open = false; }
                 res->status = STATUS_RUNNER_INTERNAL_ERROR;
                 break;
             }
@@ -384,18 +449,21 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                         if (res->stdout_len + (size_t)n > cfg->max_output_bytes) {
                             size_t keep = cfg->max_output_bytes - res->stdout_len;
                             if (keep > 0) {
-                                res->stdout_buf = realloc(res->stdout_buf, res->stdout_len + keep);
-                                memcpy(res->stdout_buf + res->stdout_len, chunk, keep);
-                                res->stdout_len += keep;
+                                int appended = safe_buffer_append(&res->stdout_buf, &res->stdout_len, &res->stdout_cap, chunk, keep, cfg->max_output_bytes);
+                                if (appended < 0) {
+                                    alloc_failed = true;
+                                    break;
+                                }
                             }
                             res->stdout_truncated = true;
                             output_cap_breached = true;
                             break;
                         } else {
-                            res->stdout_buf = realloc(res->stdout_buf, res->stdout_len + (size_t)n);
-                            memcpy(res->stdout_buf + res->stdout_len, chunk, (size_t)n);
-                            res->stdout_len += (size_t)n;
-                            stdout_cap = res->stdout_len;
+                            int appended = safe_buffer_append(&res->stdout_buf, &res->stdout_len, &res->stdout_cap, chunk, (size_t)n, cfg->max_output_bytes);
+                            if (appended < 0) {
+                                alloc_failed = true;
+                                break;
+                            }
                         }
                     } else if (n == 0) {
                         close(stdout_pipe[0]);
@@ -409,7 +477,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                         break;
                     }
                 }
-                if (output_cap_breached) break;
+                if (alloc_failed || output_cap_breached) break;
             }
 
             /* Drain stderr if ready */
@@ -421,18 +489,21 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                         if (res->stderr_len + (size_t)n > cfg->max_output_bytes) {
                             size_t keep = cfg->max_output_bytes - res->stderr_len;
                             if (keep > 0) {
-                                res->stderr_buf = realloc(res->stderr_buf, res->stderr_len + keep);
-                                memcpy(res->stderr_buf + res->stderr_len, chunk, keep);
-                                res->stderr_len += keep;
+                                int appended = safe_buffer_append(&res->stderr_buf, &res->stderr_len, &res->stderr_cap, chunk, keep, cfg->max_output_bytes);
+                                if (appended < 0) {
+                                    alloc_failed = true;
+                                    break;
+                                }
                             }
                             res->stderr_truncated = true;
                             output_cap_breached = true;
                             break;
                         } else {
-                            res->stderr_buf = realloc(res->stderr_buf, res->stderr_len + (size_t)n);
-                            memcpy(res->stderr_buf + res->stderr_len, chunk, (size_t)n);
-                            res->stderr_len += (size_t)n;
-                            stderr_cap = res->stderr_len;
+                            int appended = safe_buffer_append(&res->stderr_buf, &res->stderr_len, &res->stderr_cap, chunk, (size_t)n, cfg->max_output_bytes);
+                            if (appended < 0) {
+                                alloc_failed = true;
+                                break;
+                            }
                         }
                     } else if (n == 0) {
                         close(stderr_pipe[0]);
@@ -446,17 +517,57 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                         break;
                     }
                 }
-                if (output_cap_breached) break;
+                if (alloc_failed || output_cap_breached) break;
             }
         } else {
             /* Both pipes closed: sleep briefly while respecting deadline */
             (void)poll(NULL, 0, poll_timeout);
         }
 
+        if (alloc_failed) {
+            kill(-pid, SIGKILL);
+            if (!child_reaped) {
+                pid_t reap_p;
+                do {
+                    reap_p = wait4(pid, &child_status, 0, &child_usage);
+                } while (reap_p == -1 && errno == EINTR);
+                child_reaped = (reap_p == pid);
+            }
+            if (stdout_open) { close(stdout_pipe[0]); stdout_open = false; }
+            if (stderr_open) { close(stderr_pipe[0]); stderr_open = false; }
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
+            return -1;
+        }
+
+        if (output_cap_breached) {
+            break;
+        }
+
+        /* Check monotonic wall clock post-poll */
+        struct timespec post_poll_tp;
+        clock_gettime(CLOCK_MONOTONIC, &post_poll_tp);
+        uint64_t post_poll_ms = (uint64_t)post_poll_tp.tv_sec * 1000ULL + (uint64_t)post_poll_tp.tv_nsec / 1000000ULL;
+        if (post_poll_ms >= deadline_ms) {
+            timed_out = true;
+            break;
+        }
+
         /* Check direct-child status via non-blocking wait4 */
         pid_t reap_pid = wait4(pid, &child_status, WNOHANG, &child_usage);
         if (reap_pid == pid) {
+            /*
+             * Child exit observed.
+             * Tie-breaker rule: sample monotonic clock at exact observation moment.
+             * If observed at or after deadline, timeout deterministically wins because
+             * POSIX wait4 reports reap time, not precise kernel exit time.
+             */
+            struct timespec obs_tp;
+            clock_gettime(CLOCK_MONOTONIC, &obs_tp);
+            uint64_t obs_ms = (uint64_t)obs_tp.tv_sec * 1000ULL + (uint64_t)obs_tp.tv_nsec / 1000000ULL;
             child_reaped = true;
+            if (obs_ms >= deadline_ms) {
+                timed_out = true;
+            }
             break;
         } else if (reap_pid == 0) {
             /* Child still running, continue loop */
@@ -466,10 +577,16 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             } else if (errno == ECHILD) {
                 /* Child already reaped or not waitable */
                 child_reaped = true;
+                kill(-pid, SIGKILL);
+                if (stdout_open) { close(stdout_pipe[0]); stdout_open = false; }
+                if (stderr_open) { close(stderr_pipe[0]); stderr_open = false; }
                 res->status = STATUS_RUNNER_CHILD_LOST;
                 break;
             } else {
                 /* Fatal wait4 error */
+                kill(-pid, SIGKILL);
+                if (stdout_open) { close(stdout_pipe[0]); stdout_open = false; }
+                if (stderr_open) { close(stderr_pipe[0]); stderr_open = false; }
                 res->status = STATUS_RUNNER_INTERNAL_ERROR;
                 break;
             }
@@ -490,8 +607,8 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                 wait_pid = wait4(pid, &child_status, 0, &child_usage);
             } while (wait_pid == -1 && errno == EINTR);
         }
-        if (stdout_open) drain_and_close_pipe(stdout_pipe[0], &res->stdout_buf, &res->stdout_len, &stdout_cap, cfg->max_output_bytes, &res->stdout_truncated);
-        if (stderr_open) drain_and_close_pipe(stderr_pipe[0], &res->stderr_buf, &res->stderr_len, &stderr_cap, cfg->max_output_bytes, &res->stderr_truncated);
+        if (stdout_open) drain_and_close_pipe(stdout_pipe[0], &res->stdout_buf, &res->stdout_len, &res->stdout_cap, cfg->max_output_bytes, &res->stdout_truncated);
+        if (stderr_open) drain_and_close_pipe(stderr_pipe[0], &res->stderr_buf, &res->stderr_len, &res->stderr_cap, cfg->max_output_bytes, &res->stderr_truncated);
         res->status = STATUS_OUTPUT_LIMIT_EXCEEDED;
     } else if (timed_out) {
         kill(-pid, SIGKILL);
@@ -500,14 +617,14 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                 wait_pid = wait4(pid, &child_status, 0, &child_usage);
             } while (wait_pid == -1 && errno == EINTR);
         }
-        if (stdout_open) drain_and_close_pipe(stdout_pipe[0], &res->stdout_buf, &res->stdout_len, &stdout_cap, cfg->max_output_bytes, &res->stdout_truncated);
-        if (stderr_open) drain_and_close_pipe(stderr_pipe[0], &res->stderr_buf, &res->stderr_len, &stderr_cap, cfg->max_output_bytes, &res->stderr_truncated);
+        if (stdout_open) drain_and_close_pipe(stdout_pipe[0], &res->stdout_buf, &res->stdout_len, &res->stdout_cap, cfg->max_output_bytes, &res->stdout_truncated);
+        if (stderr_open) drain_and_close_pipe(stderr_pipe[0], &res->stderr_buf, &res->stderr_len, &res->stderr_cap, cfg->max_output_bytes, &res->stderr_truncated);
         res->status = STATUS_TIMEOUT;
     } else if (child_reaped) {
         /* Best-effort cleanup of any surviving descendants holding pipes open */
         kill(-pid, SIGKILL);
-        if (stdout_open) drain_and_close_pipe(stdout_pipe[0], &res->stdout_buf, &res->stdout_len, &stdout_cap, cfg->max_output_bytes, &res->stdout_truncated);
-        if (stderr_open) drain_and_close_pipe(stderr_pipe[0], &res->stderr_buf, &res->stderr_len, &stderr_cap, cfg->max_output_bytes, &res->stderr_truncated);
+        if (stdout_open) drain_and_close_pipe(stdout_pipe[0], &res->stdout_buf, &res->stdout_len, &res->stdout_cap, cfg->max_output_bytes, &res->stdout_truncated);
+        if (stderr_open) drain_and_close_pipe(stderr_pipe[0], &res->stderr_buf, &res->stderr_len, &res->stderr_cap, cfg->max_output_bytes, &res->stderr_truncated);
 
         if (res->status == 0) {
             if (WIFEXITED(child_status)) {
@@ -539,31 +656,86 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
 
 /*
  * JSON Escaping helper according to RFC 8259.
+ * Validates multi-byte UTF-8 sequences and preserves them directly.
+ * Escapes quotes, backslashes, standard control characters, and invalid raw bytes as \u00XX.
  */
 static void print_json_escaped_string(FILE *out, const char *data, size_t len) {
     if (!data) return;
-    for (size_t i = 0; i < len; i++) {
-        unsigned char c = (unsigned char)data[i];
-        switch (c) {
-            case '"':  fputs("\\\"", out); break;
-            case '\\': fputs("\\\\", out); break;
-            case '\b': fputs("\\b", out); break;
-            case '\f': fputs("\\f", out); break;
-            case '\n': fputs("\\n", out); break;
-            case '\r': fputs("\\r", out); break;
-            case '\t': fputs("\\t", out); break;
-            default:
-                if (c < 0x20 || c == 0x7F) {
-                    fprintf(out, "\\u%04x", c);
-                } else {
-                    fputc(c, out);
+    const unsigned char *p = (const unsigned char *)data;
+    size_t i = 0;
+
+    while (i < len) {
+        unsigned char c = p[i];
+        if (c == '"') {
+            fputs("\\\"", out);
+            i++;
+        } else if (c == '\\') {
+            fputs("\\\\", out);
+            i++;
+        } else if (c == '\b') {
+            fputs("\\b", out);
+            i++;
+        } else if (c == '\f') {
+            fputs("\\f", out);
+            i++;
+        } else if (c == '\n') {
+            fputs("\\n", out);
+            i++;
+        } else if (c == '\r') {
+            fputs("\\r", out);
+            i++;
+        } else if (c == '\t') {
+            fputs("\\t", out);
+            i++;
+        } else if (c < 0x20 || c == 0x7F) {
+            fprintf(out, "\\u%04x", c);
+            i++;
+        } else if (c < 0x80) {
+            fputc(c, out);
+            i++;
+        } else {
+            /* Check for valid UTF-8 sequence */
+            bool valid = false;
+            size_t seq_len = 0;
+
+            if ((c & 0xE0) == 0xC0 && c >= 0xC2 && i + 1 < len) {
+                if ((p[i + 1] & 0xC0) == 0x80) {
+                    valid = true;
+                    seq_len = 2;
                 }
-                break;
+            } else if ((c & 0xF0) == 0xE0 && i + 2 < len) {
+                unsigned char b1 = p[i + 1], b2 = p[i + 2];
+                if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80) {
+                    if (!(c == 0xE0 && b1 < 0xA0) && !(c == 0xED && b1 > 0x9F)) {
+                        valid = true;
+                        seq_len = 3;
+                    }
+                }
+            } else if ((c & 0xF8) == 0xF0 && i + 3 < len) {
+                unsigned char b1 = p[i + 1], b2 = p[i + 2], b3 = p[i + 3];
+                if ((b1 & 0xC0) == 0x80 && (b2 & 0xC0) == 0x80 && (b3 & 0xC0) == 0x80) {
+                    if (!(c == 0xF0 && b1 < 0x90) && !(c == 0xF4 && b1 > 0x8F)) {
+                        valid = true;
+                        seq_len = 4;
+                    }
+                }
+            }
+
+            if (valid) {
+                for (size_t s = 0; s < seq_len; s++) {
+                    fputc(p[i + s], out);
+                }
+                i += seq_len;
+            } else {
+                /* Invalid byte: escape as \u00XX */
+                fprintf(out, "\\u%04x", c);
+                i++;
+            }
         }
     }
 }
 
-static const char *sandbox_status_to_string(const sandbox_result_t *res) {
+static const char *sandbox_status_to_string(const sandbox_result_t *res, const sandbox_config_t *cfg) {
     switch (res->status) {
         case STATUS_OK:
             return "OK";
@@ -578,8 +750,13 @@ static const char *sandbox_status_to_string(const sandbox_result_t *res) {
             if (res->signal == 25 /* SIGXFSZ */) {
                 return "OUTPUT_LIMIT";
             }
-            if (res->signal == 11 /* SIGSEGV */ && res->peak_memory_kb > 0) {
-                return "MEMORY_LIMIT";
+            if (res->signal == 11 /* SIGSEGV */) {
+                /* Truthful memory limit check: only map to MEMORY_LIMIT if peak memory reached >= 80% of RLIMIT_AS */
+                if (cfg && cfg->rlimit_as_bytes > 0 &&
+                    (res->peak_memory_kb * 1024ULL >= (cfg->rlimit_as_bytes * 8ULL / 10ULL))) {
+                    return "MEMORY_LIMIT";
+                }
+                return "RUNTIME_ERROR";
             }
             return "RUNTIME_ERROR";
         case STATUS_SETUP_ERROR:
@@ -592,10 +769,10 @@ static const char *sandbox_status_to_string(const sandbox_result_t *res) {
     }
 }
 
-void sandbox_result_print_json(FILE *out, const sandbox_result_t *res, const char *job_id) {
+void sandbox_result_print_json(FILE *out, const sandbox_result_t *res, const char *job_id, const sandbox_config_t *cfg) {
     if (!out || !res) return;
 
-    const char *status_str = sandbox_status_to_string(res);
+    const char *status_str = sandbox_status_to_string(res, cfg);
     const char *jid = job_id ? job_id : "";
 
     fprintf(out, "{\"job_id\":\"");
@@ -636,7 +813,7 @@ int run_sandbox(const char *binary_path) {
 
     sandbox_result_t res;
     int ret = run_sandbox_with_config(binary_path, &cfg, &res);
-    sandbox_result_print_json(stdout, &res, cfg.job_id);
+    sandbox_result_print_json(stdout, &res, cfg.job_id, &cfg);
     sandbox_result_cleanup(&res);
     return ret;
 }
@@ -694,7 +871,7 @@ int main(int argc, char *argv[]) {
         res.status = STATUS_RUNNER_INTERNAL_ERROR;
     }
 
-    sandbox_result_print_json(stdout, &res, cfg.job_id);
+    sandbox_result_print_json(stdout, &res, cfg.job_id, &cfg);
     sandbox_result_cleanup(&res);
     return (ret == 0) ? 0 : 1;
 }
