@@ -432,3 +432,13 @@
 - Linked: LOG-0028
 - Piyush prediction (optional): Byte-oriented Latin-1 escaping will eliminate all byte collisions and provide completely lossless binary reconstruction.
 - Tutor review: pending
+
+## [LOG-0030] 2026-11-14 02:28 IST | CORRECTION | actor: agent
+- Reason: Record correction to LOG-0020, LOG-0023, LOG-0026, and LOG-0029 regarding normal vs non-zero exit status mapping identified in tutor review.
+- Details / Change:
+  1. In earlier log entries, run_sandbox_with_config() set STATUS_OK for every WIFEXITED child termination, emitting status "OK" even when target binaries exited with non-zero exit codes (such as exit7 or exit127).
+  2. Per docs/02_ARCHITECTURE.md, the ExecuteResponse data contract defines RUNTIME_ERROR to include non-zero target exit codes. STATUS_OK must be strictly reserved for exit code 0. Non-zero exit codes (e.g. 7 or 127) must map to RUNTIME_ERROR while preserving the exact exit_code. Exec/setup failure must remain distinguishable as SANDBOX_ERROR (exit_code 127 with diagnostic stage/errno in stderr).
+- Files: PROGRESS.md
+- Linked: LOG-0029
+- Piyush prediction (optional): Aligning exit status mapping with docs/02_ARCHITECTURE.md will strictly fulfill the documented API contract.
+- Tutor review: pending
