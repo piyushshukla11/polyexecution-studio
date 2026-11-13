@@ -395,3 +395,13 @@
 - Linked: LOG-0025
 - Piyush prediction (optional): The follow-up pass will completely harden the UTF-8 escaper, eliminate direct-child leak risks on fatal wait4 errors, and transparently document the memory limit heuristic and byte reconstruction protocol.
 - Tutor review: pending
+
+## [LOG-0027] 2026-11-14 02:20 IST | CORRECTION | actor: agent
+- Reason: Record factual correction to LOG-0025 and LOG-0026 regarding byte round-trip losslessness identified in tutor review.
+- Details / Change:
+  1. In LOG-0025 and LOG-0026, the byte round-trip was claimed to be lossless, but a collision existed between valid 2-byte UTF-8 sequences in range U+0080..U+00FF and escaped raw bytes. For example, valid UTF-8 bytes C3 A9 passed through as character U+00E9, while invalid raw byte E9 was escaped as \u00e9 (which also decodes to character U+00E9). The client decoder mapped both to byte E9, failing to recover the original C3 A9 bytes.
+  2. To achieve true 1-to-1 lossless reversibility without schema changes, the runner must escape every raw byte >= 0x80 as its own \u00XX Latin-1 code point (even if bytes could form valid UTF-8). Printable ASCII characters and standard JSON escapes (\", \\, \b, \f, \n, \r, \t) remain intact, producing 100% pure ASCII JSON output that decodes losslessly via standard Latin-1 byte mapping (or ord(c)).
+- Files: PROGRESS.md
+- Linked: LOG-0026
+- Piyush prediction (optional): Correcting the encoding will eliminate all byte collisions and achieve exact byte-for-byte round-trip reversibility.
+- Tutor review: pending
