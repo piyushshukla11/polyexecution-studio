@@ -6,7 +6,7 @@ SRCS = sandbox.c
 OBJS = $(SRCS:.c=.o)
 TARGET = sandbox-runner
 
-EVIL_NAMES = loop sleeper exit7 segv
+EVIL_NAMES = loop sleeper exit7 segv exit127 stdout_stderr stderr_only output_flood close_stream_sleep descendant_pipe memory_bomb file_size_limit json_escaping_test
 EVIL_BIN_DIR = tests/evil/bin
 EVIL_BINS = $(addprefix $(EVIL_BIN_DIR)/, $(EVIL_NAMES))
 

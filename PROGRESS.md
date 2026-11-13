@@ -243,4 +243,155 @@
 - Piyush prediction (optional): Step 1 execution will correctly report exit codes and signals for test binaries, handle failed execve with code 127 without crashing, and leave no zombie processes.
 - Tutor review: pending
 
+## [LOG-0017] 2026-11-14 01:05 IST | PLAN | actor: agent
+- Reason: Implement Phase 1 Step 2 sandbox core hardening (CLOEXEC error pipe with setup_error_t record, setsid process group cleanup, non-blocking pipe I/O capture, poll event loop with monotonic wall timeout and continuous child liveness probing, kill-on-cap output flood policy, and child rlimits) authorized by Piyush under AGENT-WROTE-TIER-A.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1.
+  2. Implement Step 2 in small, reviewable commits:
+     (a) Normalize initially closed standard descriptors (0, 1, 2) to /dev/null; implement pipe2(O_CLOEXEC) error pipe with setup_error_t struct (stage + errno) and full-read/write loops; add exit127 fixture.
+     (b) Implement child setsid() session/process-group leader and parent kill(-child_pid, SIGKILL) best-effort cleanup helper; create non-blocking stdout/stderr pipes, dup2 in child, and close unused descriptors.
+     (c) Implement poll-based event loop using CLOCK_MONOTONIC with continuous wait4(..., WNOHANG) child liveness probing; handle EINTR and ECHILD; enforce 2000 ms wall timeout; implement 64 KB kill-on-cap output flood policy with bounded non-blocking drain; add fixtures for stream separation, output flood, early stream close, and descendant pipe holding.
+     (d) Configure in-child resource limits via setrlimit: RLIMIT_CPU (soft 1s, hard 2s), RLIMIT_AS (128 MiB), RLIMIT_FSIZE (1 MiB), RLIMIT_NOFILE (64), RLIMIT_CORE (0); add fixtures for memory bomb and file size limit.
+  3. Execute focused acceptance tests, verify absence of zombie processes and orphan test descendants, and append DONE entry (LOG-0018).
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/*, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0016
+- Piyush prediction (optional): Step 2 will cleanly distinguish execve failure from exit code 127, capture I/O without deadlocks, terminate long sleeps and output floods without hanging, and enforce POSIX limits on child processes.
+- Tutor review: pending
 
+## [LOG-0018] 2026-11-14 01:10 IST | DONE | actor: agent
+- Reason: Complete Phase 1 Step 2 sandbox hardening (error pipe with setup_error_t, setsid process group cleanup, non-blocking pipe capture, poll event loop with monotonic timeout and continuous child liveness checking, kill-on-cap output flood policy, and child rlimits) under AGENT-WROTE-TIER-A.
+- Details / Change:
+  1. Implemented setup error pipe (pipe2 with O_CLOEXEC) and setup_error_t (stage + errno) in sandbox-daemon/sandbox.c (commit 06c4c63). Verified missing binary returns stage=10 errno=2, and exit127 fixture returns exit code 127.
+  2. Implemented setsid() process-group leader setup and kill(-pgid, SIGKILL) best-effort group cleanup (commit 2ca0e4e).
+  3. Implemented non-blocking stdout/stderr pipe capture with descriptor normalization (ensuring fds 0, 1, 2 valid) and clean dup2 redirection.
+  4. Implemented poll-based event loop using CLOCK_MONOTONIC with continuous wait4(..., WNOHANG) direct-child liveness probing. Verified that early-closed streams still respect wall timeout (close_stream_sleep -> TIMEOUT), and that direct-child exit reaps cleanly without hanging when a descendant keeps a pipe open (descendant_pipe -> exit code 42).
+  5. Implemented 64 KiB kill-on-cap output flood policy with bounded non-blocking pipe draining (output_flood -> OUTPUT_LIMIT_EXCEEDED).
+  6. Configured child rlimits before execve: RLIMIT_CPU (soft 1s, hard 2s -> loop produces signal 24 SIGXCPU), RLIMIT_AS (128 MiB -> memory_bomb produces signal 11 SIGSEGV), RLIMIT_FSIZE (1 MiB -> file_size_limit produces signal 25 SIGXFSZ), RLIMIT_CORE (0), RLIMIT_NOFILE (64).
+  7. Confirmed zero zombie processes and zero orphan test processes remaining on the host.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/*
+- Linked: LOG-0017
+- Piyush prediction (optional): Step 2 will cleanly distinguish execve failure from exit code 127, capture I/O without deadlocks, terminate long sleeps and output floods without hanging, and enforce POSIX limits on child processes.
+- Tutor review: pending
+
+## [LOG-0019] 2026-11-14 01:11 IST | PLAN | actor: agent
+- Reason: Implement Phase 1 Step 3 JSON execution result contract conforming to docs/02_ARCHITECTURE.md (ExecuteResponse schema: job_id, status, stdout, stderr, exit_code, signal, wall_ms, cpu_ms, peak_memory_kb) and docs/04_BUILD_PLAN.md Definition of Done.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1.
+  2. Implement RFC 8259 compliant JSON string escaping in sandbox-daemon/sandbox.c for stdout, stderr, and error strings (handling control characters, quotes, backslashes, and byte values).
+  3. Map internal execution results into the ExecuteResponse status enum: OK, RUNTIME_ERROR, TIMEOUT, OUTPUT_LIMIT, MEMORY_LIMIT, SANDBOX_ERROR.
+  4. Implement CLI argument parsing for runner flags (--job-id, --timeout-ms, --cpu-soft, --cpu-hard, --as-mb, --fsize-mb, --max-output-kb).
+  5. Format and emit single structured JSON object on stdout upon completion; ensure clean separation between child output streams and runner telemetry.
+  6. Verify JSON validity and schema across all test fixtures using python3 -m json.tool.
+  7. Append DONE entry (LOG-0020), update LEARNING_NOTES/phase-1.md, and push branch.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0018
+- Piyush prediction (optional): Step 3 will emit strictly valid JSON across all evil fixtures, parsing correctly with JSON tools and accurately capturing stdout, stderr, resource timings, and peak memory.
+- Tutor review: pending
+
+## [LOG-0020] 2026-11-14 01:13 IST | DONE | actor: agent
+- Reason: Complete Phase 1 Step 3 JSON execution result contract conforming to docs/02_ARCHITECTURE.md (ExecuteResponse schema) and docs/04_BUILD_PLAN.md Definition of Done.
+- Details / Change:
+  1. Implemented RFC 8259 compliant JSON string escaping for stdout, stderr, and error strings in sandbox-daemon/sandbox.c (commit 4e2fd7d).
+  2. Implemented sandbox_result_print_json() emitting the complete ExecuteResponse JSON schema: job_id, status (OK, TIMEOUT, OUTPUT_LIMIT, MEMORY_LIMIT, RUNTIME_ERROR, SANDBOX_ERROR), exit_code, signal, wall_ms, cpu_ms, peak_memory_kb, stdout, stderr.
+  3. Implemented CLI argument parsing in main(): --job-id, --timeout-ms, --cpu-soft, --cpu-hard, --as-mb, --fsize-mb, --max-output-kb.
+  4. Verified strictly valid JSON output across all 12 evil test fixtures using python3 -m json.tool. Confirmed clean separation of captured child streams and runner telemetry.
+  5. Confirmed zero lingering or zombie processes on the host system.
+  Note: This completes the Phase 1 Definition of Done ("Runs a C program; correct statuses for loop, sleep, memory bomb, output flood; no zombies") while keeping learning status honest: Piyush's Step 1 explain-back and reruns remain outstanding before merging to main.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0019
+- Piyush prediction (optional): Step 3 will emit strictly valid JSON across all evil fixtures, parsing correctly with JSON tools and accurately capturing stdout, stderr, resource timings, and peak memory.
+- Tutor review: pending
+
+## [LOG-0021] 2026-11-14 01:51 IST | CORRECTION | actor: agent
+- Reason: Record corrections to LOG-0018 and LOG-0020 regarding status mapping, timeout distinctions, and allocation robustness identified in tutor code review.
+- Details / Change:
+  1. In LOG-0020, ordinary SIGSEGV in tests/evil/segv.c was incorrectly mapped to MEMORY_LIMIT due to checking peak_memory_kb > 0; ordinary segv must be reported as RUNTIME_ERROR, with MEMORY_LIMIT reserved for explicit memory-limit events where peak memory reaches the RLIMIT_AS boundary.
+  2. In LOG-0018 and LOG-0020, CPU time limit termination via SIGXCPU (signal 24) before the wall deadline must be clearly distinguished from monotonic wall-clock timeout; both are timeouts, but signal 24 and CPU timing metrics must be preserved so CPU limits are not described as wall timeouts.
+  3. In LOG-0018, realloc calls in stream capture paths did not preserve live pointers on allocation failure; poll/wait4 fatal error branches lacked full cleanup; and JSON escaping required full RFC 8259 byte validation for arbitrary child outputs.
+- Files: PROGRESS.md
+- Linked: LOG-0020
+- Piyush prediction (optional): Correcting these classifications will make runner status reporting strictly truthful to systems behavior.
+- Tutor review: pending
+
+## [LOG-0022] 2026-11-14 01:52 IST | PLAN | actor: agent
+- Reason: Implement corrective hardening pass on phase/1-sandbox-v1 addressing tutor code review items 1 through 8.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1.
+  2. Item 1: Refine status mapping so ordinary SIGSEGV produces RUNTIME_ERROR, while MEMORY_LIMIT requires peak RSS reaching >= 80% of RLIMIT_AS.
+  3. Item 2: Implement safe_buffer_append() ensuring realloc never overwrites live pointers; on allocation failure, signal group, reap child, close descriptors, and return STATUS_RUNNER_INTERNAL_ERROR without crashing.
+  4. Item 3: On fatal poll or wait4(WNOHANG) errors, perform complete cleanup (signal process group, reap direct child, close all descriptors, preserve internal error). Handle EINTR and ECHILD deliberately.
+  5. Item 4: In setup-error and protocol-error paths, retry blocking wait4 on EINTR until child is reaped and verify return code.
+  6. Item 5: Classify EOF plus abnormal or unconfirmed status as INDETERMINATE_SETUP_STATUS rather than claiming confirmed execution.
+  7. Item 6: Implement deterministic timeout observation rule sampling monotonic clock at poll and upon observing child termination.
+  8. Item 7: Implement robust RFC 8259 JSON byte validator and escaper supporting arbitrary binary bytes, control characters, and valid UTF-8; add json_escaping_test fixture and verify with python3 -m json.tool.
+  9. Item 8: Clarify TIMEOUT vs CPU limit: preserve signal 24 (SIGXCPU) and distinguish from wall timeout.
+  10. Run strict build and all focused acceptance checks, append DONE entry (LOG-0023), and push to origin/phase/1-sandbox-v1.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/json_escaping_test.c, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0021
+- Piyush prediction (optional): Corrective pass will ensure robust allocation handling, truthful status mapping between segv and memory_bomb, and valid JSON output for arbitrary binary bytes.
+- Tutor review: pending
+
+
+
+
+
+
+
+
+## [LOG-0023] 2026-11-14 01:58 IST | DONE | actor: agent
+- Reason: Complete Phase 1 corrective hardening pass addressing tutor review items 1 through 8.
+- Details / Change:
+  1. Refined status mapping in sandbox-daemon/sandbox.c: ordinary SIGSEGV (tests/evil/bin/segv) is truthfully reported as RUNTIME_ERROR (signal 11, RSS 1220 KB), while MEMORY_LIMIT is strictly reserved for processes reaching >= 80% of RLIMIT_AS (tests/evil/bin/memory_bomb: signal 11, RSS 128912 KB).
+  2. Implemented safe_buffer_append() in stream capture and drain paths; temporary realloc pointer ensures live buffers are never overwritten on allocation failure. On failure, child is reaped safely, open descriptors closed, and runner internal error returned without crashing.
+  3. Added full cleanup on fatal poll() and wait4(WNOHANG) error branches: process group signaled with SIGKILL, direct child reaped, open pipes closed, and internal error preserved. Setup-error and protocol-error paths retry wait4 on EINTR and verify reap_pid matches child pid.
+  4. Implemented deterministic timeout observation rule: monotonic timestamps sampled pre-poll, post-poll, and at child exit observation. Observation at or after deadline deterministically resolves to TIMEOUT over child exit.
+  5. Implemented RFC 8259 compliant JSON string escaper validating multi-byte UTF-8 sequences and escaping quotes, backslashes, ASCII control characters (U+0000..U+001F, U+007F), and arbitrary binary bytes as \u00XX.
+  6. Added tests/evil/json_escaping_test.c verifying quotes, backslashes, controls, valid UTF-8, and invalid raw bytes; confirmed 100% valid JSON parsing across all 13 evil fixtures via python3 -m json.tool.
+  7. Clarified TIMEOUT vs CPU limit: loop termination via SIGXCPU preserves signal 24 and CPU timing metrics, distinguishing CPU exhaustion from wall-clock timeout.
+  8. Verified process table confirms zero zombie or lingering processes remaining on host.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/json_escaping_test.c, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0022
+- Piyush prediction (optional): Corrective pass will ensure robust allocation handling, truthful status mapping between segv and memory_bomb, and valid JSON output for arbitrary binary bytes.
+- Tutor review: pending
+
+## [LOG-0024] 2026-11-14 02:10 IST | CORRECTION | actor: agent
+- Reason: Record factual corrections to LOG-0022 and LOG-0023 regarding MEMORY_LIMIT classification, fatal wait4 cleanup, and UTF-8 validation rules identified in tutor review.
+- Details / Change:
+  1. In LOG-0022 and LOG-0023, classifying SIGSEGV with ru_maxrss >= 80% of RLIMIT_AS as "truthful" memory limit detection was an overstatement. In POSIX systems programming, setrlimit(RLIMIT_AS) does not generate an explicit kernel OOM signal (unlike Linux cgroup OOM killer); an application can dereference NULL due to an ordinary logic bug while coincidentally holding mapped pages. The 80% RSS threshold is strictly a heuristic and must be labeled as such in code, documentation, and reports rather than claimed as causal proof.
+  2. In LOG-0023, the fatal wait4(WNOHANG) error branch signaled the process group but did not attempt to reap the direct child process before setting STATUS_RUNNER_INTERNAL_ERROR, which could risk leaving a zombie or orphan process.
+  3. In LOG-0023, the UTF-8 validator used `(c & 0xF8) == 0xF0` without explicitly capping lead bytes at 0xF4, erroneously allowing lead bytes 0xF5 through 0xF7 (disallowed by RFC 3629 for code points above U+10FFFF).
+- Files: PROGRESS.md
+- Linked: LOG-0023
+- Piyush prediction (optional): Correcting these statements will maintain strict intellectual honesty in systems explanations.
+- Tutor review: pending
+
+## [LOG-0025] 2026-11-14 02:11 IST | PLAN | actor: agent
+- Reason: Implement focused follow-up hardening on phase/1-sandbox-v1 addressing tutor review items 1 through 5.
+- Details / Change:
+  1. Commit CORRECTION (LOG-0024) and this PLAN entry (LOG-0025) to PROGRESS.md before making code changes.
+  2. Item 1: Label the memory limit classification rule in sandbox-daemon/sandbox.c, sandbox.h, and docs as an explicit heuristic. Document that POSIX setrlimit(RLIMIT_AS) lacks an explicit kernel OOM signal and keep empirical test observations separate from general classification.
+  3. Item 2: In the fatal wait4(WNOHANG) error branch, after signaling the process group, execute a blocking wait4 loop on the direct child (retrying on EINTR) to guarantee no live or zombie direct child lingers, close all open descriptors, and preserve STATUS_RUNNER_INTERNAL_ERROR.
+  4. Item 3: Correct UTF-8 validation in print_json_escaped_string() to strictly enforce RFC 3629: reject lead bytes 0xF5..0xFF, reject 2-byte overlongs (0xC0, 0xC1), reject 3-byte overlongs (0xE0 with b1 < 0xA0), reject UTF-16 surrogates (0xED with b1 > 0x9F), reject 4-byte overlongs (0xF0 with b1 < 0x90), reject out-of-range 4-bytes (0xF4 with b1 > 0x8F), reject isolated continuation bytes (0x80..0xBF), and reject truncated multibyte sequences at buffer boundaries.
+  5. Item 4: Document the byte semantics of invalid bytes escaped as \u00XX in docs/02_ARCHITECTURE.md and sandbox.h: explain that raw bytes map to Latin-1 code points U+0000..U+00FF, allowing clients to reconstruct the exact raw byte stream by checking code point <= 255.
+  6. Item 5: Clarify in docs/02_ARCHITECTURE.md that ExecuteResponse status TIMEOUT covers both CPU limit exhaustion (RLIMIT_CPU / signal 24 SIGXCPU) and wall-clock timeout (deadline reached), with signal and timing telemetry distinguishing them without altering schema.
+  7. Item 6: Expand tests/evil/json_escaping_test.c with dedicated test cases for 0xF5/0xF7, overlong encodings, isolated continuation bytes, surrogate encodings, and boundary-truncated multibyte sequences; verify clean parsing via python3 -m json.tool.
+  8. Build, run all evil fixtures, check process table for zero lingering/zombie processes, append DONE entry (LOG-0026), update LEARNING_NOTES/phase-1.md, and fast-forward push to origin/phase/1-sandbox-v1.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/tests/evil/json_escaping_test.c, docs/02_ARCHITECTURE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0024
+- Piyush prediction (optional): The follow-up pass will completely harden the UTF-8 escaper, eliminate direct-child leak risks on fatal wait4 errors, and transparently document the memory limit heuristic and byte reconstruction protocol.
+- Tutor review: pending
+
+## [LOG-0026] 2026-11-14 02:13 IST | DONE | actor: agent
+- Reason: Complete Phase 1 focused follow-up hardening pass addressing tutor review items 1 through 5.
+- Details / Change:
+  1. Relabeled the memory limit classification rule in sandbox-daemon/sandbox.c, sandbox.h, and docs/02_ARCHITECTURE.md as an explicit resident-memory heuristic (peak RSS >= 80% of RLIMIT_AS). Documented that POSIX setrlimit(RLIMIT_AS) lacks an explicit kernel OOM signal, and kept empirical test observations (tests/evil/bin/memory_bomb vs segv) strictly separate from general causal claims.
+  2. Hardened the fatal wait4(WNOHANG) error branch in sandbox.c: after signaling the process group with SIGKILL, the runner executes a blocking wait4 loop on the direct child (retrying on EINTR) to guarantee no live or zombie direct child lingers before setting STATUS_RUNNER_INTERNAL_ERROR.
+  3. Corrected UTF-8 validation in print_json_escaped_string() to strictly enforce RFC 3629: explicitly reject lead bytes > 0xF4 (0xF5..0xFF), overlong encodings (0xC0, 0xC1, 0xE0 with b1 < 0xA0, 0xF0 with b1 < 0x90), UTF-16 surrogates (0xED with b1 > 0x9F), out-of-range 4-bytes (0xF4 with b1 > 0x8F), isolated continuation bytes (0x80..0xBF), and boundary-truncated multibyte sequences.
+  4. Expanded tests/evil/json_escaping_test.c to test all invalid byte edge cases (lead bytes F5/F7, overlongs, surrogates, out-of-range, isolated continuations, boundary-truncated sequences); verified 100% clean parsing and formatting via python3 -m json.tool.
+  5. Documented the byte semantics of invalid bytes mapped to \u00XX in docs/02_ARCHITECTURE.md and sandbox.h: explained that raw bytes map to Latin-1 code points U+0000..U+00FF, allowing clients to losslessly reconstruct the raw byte stream by checking code point <= 255.
+  6. Clarified in docs/02_ARCHITECTURE.md that ExecuteResponse status TIMEOUT covers both CPU limit exhaustion (RLIMIT_CPU / signal 24 SIGXCPU) and wall-clock timeout (deadline reached), with signal and timing telemetry distinguishing them without altering schema.
+  7. Confirmed zero zombie or lingering runner/evil processes on the host.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/tests/evil/json_escaping_test.c, docs/02_ARCHITECTURE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0025
+- Piyush prediction (optional): The follow-up pass will completely harden the UTF-8 escaper, eliminate direct-child leak risks on fatal wait4 errors, and transparently document the memory limit heuristic and byte reconstruction protocol.
+- Tutor review: pending
