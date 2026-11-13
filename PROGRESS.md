@@ -419,3 +419,16 @@
 - Linked: LOG-0027
 - Piyush prediction (optional): The byte-oriented Latin-1 encoding will guarantee exact byte-for-byte reversibility across all ASCII, UTF-8, and binary byte values.
 - Tutor review: pending
+
+## [LOG-0029] 2026-11-14 02:22 IST | DONE | actor: agent
+- Reason: Complete byte-oriented Latin-1 escaping pass ensuring exact, collision-free byte round-trip reversibility.
+- Details / Change:
+  1. Updated print_json_escaped_string() in sandbox-daemon/sandbox.c to escape all bytes >= 0x80 as \u00XX (Latin-1 code point U+0000..U+00FF). Standard JSON escapes (\", \\, \b, \f, \n, \r, \t) and ASCII control escapes (< 0x20 and 0x7F) remain intact. The emitted JSON string is 100% pure 7-bit ASCII and parses cleanly across all environments.
+  2. Updated docs/02_ARCHITECTURE.md to formally specify the byte-oriented Latin-1 representation: every byte maps 1-to-1 to a Latin-1 code point, eliminating collisions between valid 2-byte UTF-8 sequences (e.g. C3 A9) and single raw bytes (e.g. E9). Documented the lossless client decoder: text.encode('latin1') (or bytes(ord(c) for c in text)).
+  3. Added explicit collision test cases in tests/evil/json_escaping_test.c for valid UTF-8 sequences C3 A9, C2 80, C3 BF and raw bytes E9, FF in both stdout and stderr.
+  4. Verified via automated test script that parsing runner JSON with Python's json module and decoding with text.encode('latin1') recovers the exact original binary bytes byte-for-byte (208/208 stdout bytes, 35/35 stderr bytes match with 100% identity).
+  5. Confirmed all 13 evil fixtures pass and verified zero lingering or zombie processes on the host.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/evil/json_escaping_test.c, docs/02_ARCHITECTURE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0028
+- Piyush prediction (optional): Byte-oriented Latin-1 escaping will eliminate all byte collisions and provide completely lossless binary reconstruction.
+- Tutor review: pending
