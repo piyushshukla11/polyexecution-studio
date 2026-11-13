@@ -338,3 +338,18 @@
 
 
 
+## [LOG-0023] 2026-11-14 01:58 IST | DONE | actor: agent
+- Reason: Complete Phase 1 corrective hardening pass addressing tutor review items 1 through 8.
+- Details / Change:
+  1. Refined status mapping in sandbox-daemon/sandbox.c: ordinary SIGSEGV (tests/evil/bin/segv) is truthfully reported as RUNTIME_ERROR (signal 11, RSS 1220 KB), while MEMORY_LIMIT is strictly reserved for processes reaching >= 80% of RLIMIT_AS (tests/evil/bin/memory_bomb: signal 11, RSS 128912 KB).
+  2. Implemented safe_buffer_append() in stream capture and drain paths; temporary realloc pointer ensures live buffers are never overwritten on allocation failure. On failure, child is reaped safely, open descriptors closed, and runner internal error returned without crashing.
+  3. Added full cleanup on fatal poll() and wait4(WNOHANG) error branches: process group signaled with SIGKILL, direct child reaped, open pipes closed, and internal error preserved. Setup-error and protocol-error paths retry wait4 on EINTR and verify reap_pid matches child pid.
+  4. Implemented deterministic timeout observation rule: monotonic timestamps sampled pre-poll, post-poll, and at child exit observation. Observation at or after deadline deterministically resolves to TIMEOUT over child exit.
+  5. Implemented RFC 8259 compliant JSON string escaper validating multi-byte UTF-8 sequences and escaping quotes, backslashes, ASCII control characters (U+0000..U+001F, U+007F), and arbitrary binary bytes as \u00XX.
+  6. Added tests/evil/json_escaping_test.c verifying quotes, backslashes, controls, valid UTF-8, and invalid raw bytes; confirmed 100% valid JSON parsing across all 13 evil fixtures via python3 -m json.tool.
+  7. Clarified TIMEOUT vs CPU limit: loop termination via SIGXCPU preserves signal 24 and CPU timing metrics, distinguishing CPU exhaustion from wall-clock timeout.
+  8. Verified process table confirms zero zombie or lingering processes remaining on host.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.h, sandbox-daemon/sandbox.c, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/json_escaping_test.c, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0022
+- Piyush prediction (optional): Corrective pass will ensure robust allocation handling, truthful status mapping between segv and memory_bomb, and valid JSON output for arbitrary binary bytes.
+- Tutor review: pending
