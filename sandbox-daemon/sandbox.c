@@ -2,140 +2,221 @@
 
 #include "sandbox.h"
 
+void sandbox_config_init_default(sandbox_config_t *cfg) {
+    if (!cfg) return;
+    cfg->timeout_ms = 2000;
+    cfg->rlimit_cpu_soft = 1;
+    cfg->rlimit_cpu_hard = 2;
+    cfg->rlimit_as_bytes = 128ULL * 1024ULL * 1024ULL; /* 128 MiB */
+    cfg->rlimit_fsize = 1024ULL * 1024ULL;              /* 1 MiB */
+    cfg->rlimit_nofile = 64;
+    cfg->max_output_bytes = 64ULL * 1024ULL;            /* 64 KiB */
+}
+
+void sandbox_result_cleanup(sandbox_result_t *res) {
+    if (!res) return;
+    if (res->stdout_buf) {
+        free(res->stdout_buf);
+        res->stdout_buf = NULL;
+    }
+    if (res->stderr_buf) {
+        free(res->stderr_buf);
+        res->stderr_buf = NULL;
+    }
+}
+
 /*
- * run_sandbox:
- * Executes a target binary in a child process, waits for process termination,
- * and decodes the resulting exit code or termination signal.
- *
- * Process lifecycle:
- * 1. Validates input binary path.
- * 2. Spawns child process via fork(2).
- * 3. Child executes target binary using execve(2) with explicit path and minimal envp.
- *    On execve failure, writes error message to stderr via write(2) and calls _exit(127).
- * 4. Parent reaps child with wait4(2), handling EINTR signal interruption.
- * 5. Decodes and prints child termination status using POSIX macros without printing raw status.
+ * Normalize standard file descriptors (0, 1, 2).
+ * If any standard descriptor was closed before the runner was executed,
+ * open /dev/null and map it to that descriptor to prevent subsequent pipe2()
+ * calls from receiving low-numbered descriptors.
  */
-int run_sandbox(const char *binary_path) {
-    if (binary_path == NULL) {
-        fprintf(stderr, "Error: binary_path is NULL\n");
+static int normalize_standard_descriptors(void) {
+    for (int fd = 0; fd <= 2; fd++) {
+        if (fcntl(fd, F_GETFD) == -1 && errno == EBADF) {
+            int null_fd = open("/dev/null", O_RDWR);
+            if (null_fd < 0) {
+                return -1;
+            }
+            if (null_fd != fd) {
+                if (dup2(null_fd, fd) < 0) {
+                    close(null_fd);
+                    return -1;
+                }
+                close(null_fd);
+            }
+        }
+    }
+    return 0;
+}
+
+/*
+ * Child error reporter:
+ * Writes a binary setup_error_t record to err_pipe and exits with 127.
+ */
+static void child_report_error_and_exit(int err_pipe_write_fd, setup_stage_t stage, int errnum) {
+    setup_error_t record;
+    record.stage = (int32_t)stage;
+    record.errnum = (int32_t)errnum;
+
+    ssize_t written = 0;
+    while (written < (ssize_t)sizeof(record)) {
+        ssize_t n = write(err_pipe_write_fd, ((const char *)&record) + written, sizeof(record) - (size_t)written);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        written += n;
+    }
+    _exit(127);
+}
+
+/*
+ * Parent error reader:
+ * Returns:
+ *  1: Complete record read (sizeof(setup_error_t)) -> setup error reported.
+ *  0: Clean EOF encountered with 0 bytes read -> no setup error record arrived.
+ * -1: Partial record read or read error -> protocol error.
+ */
+static int parent_read_setup_error(int err_pipe_read_fd, setup_error_t *out_err) {
+    size_t total = 0;
+    char *buf = (char *)out_err;
+
+    while (total < sizeof(setup_error_t)) {
+        ssize_t n = read(err_pipe_read_fd, buf + total, sizeof(setup_error_t) - total);
+        if (n > 0) {
+            total += (size_t)n;
+        } else if (n == 0) {
+            break; /* EOF */
+        } else {
+            if (errno == EINTR) continue;
+            return -1; /* Read error */
+        }
+    }
+
+    if (total == sizeof(setup_error_t)) {
+        return 1; /* Complete record */
+    } else if (total == 0) {
+        return 0; /* Clean EOF */
+    } else {
+        return -1; /* Partial record / protocol error */
+    }
+}
+
+int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg, sandbox_result_t *res) {
+    if (!binary_path || !cfg || !res) {
+        return -1;
+    }
+    memset(res, 0, sizeof(*res));
+
+    /* Ensure descriptors 0, 1, 2 are valid */
+    if (normalize_standard_descriptors() < 0) {
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
         return -1;
     }
 
-    /*
-     * fork(2) creates a new process by duplicating the calling process.
-     * The new process (child) is an exact copy of the calling process (parent),
-     * except for distinct process IDs (PIDs) and memory isolation (copy-on-write).
-     *
-     * Return value:
-     * - In parent: returns the child's PID (PID > 0).
-     * - In child:  returns 0.
-     * - On failure: returns -1; no child process is created, errno is set.
-     */
-    pid_t pid = fork();
+    /* Create CLOEXEC error pipe */
+    int err_pipe[2];
+    if (pipe2(err_pipe, O_CLOEXEC) < 0) {
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+        return -1;
+    }
 
+    pid_t pid = fork();
     if (pid < 0) {
-        /*
-         * fork() failed (e.g. EAGAIN process limit reached, ENOMEM out of memory).
-         * Critical: We must NEVER call wait4() when fork() fails, because
-         * no child process exists to wait for.
-         */
-        perror("fork failed");
+        close(err_pipe[0]);
+        close(err_pipe[1]);
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
         return -1;
     }
 
     if (pid == 0) {
-        /*
-         * --- CHILD PROCESS (pid == 0) ---
-         * The child process executes the target binary.
-         *
-         * execve(2) replaces the current process image with a new process image.
-         * It takes three arguments:
-         * 1. filename: pathname of the binary to execute.
-         * 2. argv: NULL-terminated array of argument strings passed to the new program.
-         *    By convention, argv[0] contains the filename being executed.
-         * 3. envp: NULL-terminated array of environment variables ("NAME=VALUE").
-         *
-         * Why execve instead of execvp / execlp?
-         * - execvp searches the PATH environment variable and inherits all parent environment variables.
-         * - execve requires an explicit pathname and caller-specified environment.
-         * - In a sandbox, inheriting arbitrary environment variables (e.g. LD_PRELOAD, PATH)
-         *   is a security risk. Passing a minimal fixed envp ({ NULL }) ensures determinism.
-         */
+        /* Child process */
+        close(err_pipe[0]); /* Close read end in child */
+
         char *const child_argv[] = { (char *)binary_path, NULL };
         char *const child_envp[] = { NULL };
 
         execve(binary_path, child_argv, child_envp);
 
-        /*
-         * If execve() succeeds, it NEVER returns because the process image is replaced.
-         * If execution reaches here, execve() failed (e.g. ENOENT file not found, EACCES permission denied).
-         *
-         * Error reporting in child:
-         * We use write(2) directly to STDERR_FILENO rather than printf/perror because
-         * write(2) is an async-signal-safe system call that does not allocate memory
-         * or touch stdio locks/buffers.
-         */
-        const char err_msg[] = "execve failed\n";
-        (void)write(STDERR_FILENO, err_msg, sizeof(err_msg) - 1);
-
-        /*
-         * Standard convention for command not found or exec failure: exit 127.
-         * We call _exit(2) instead of exit(3) because _exit terminates immediately
-         * via the kernel without invoking parent atexit handlers or flushing parent stdio buffers.
-         */
-        _exit(127);
+        /* If execve returns, it failed */
+        child_report_error_and_exit(err_pipe[1], SETUP_STAGE_EXECVE, errno);
     }
 
-    /*
-     * --- PARENT PROCESS (pid > 0) ---
-     * The parent process reaches this point while the child executes.
-     *
-     * wait4(2) suspends execution of the calling process until a child has
-     * changed state (here, terminated). It reaps the terminated process so it
-     * does not linger as a zombie, and collects resource usage statistics.
-     *
-     * EINTR Handling:
-     * If wait4() is interrupted by a caught signal before the child changes
-     * state, wait4() returns -1 with errno set to EINTR. We loop and retry
-     * wait4() until it succeeds or encounters a fatal error.
-     */
+    /* Parent process */
+    close(err_pipe[1]); /* Close write end in parent */
+
+    /* Read error pipe */
+    setup_error_t s_err;
+    memset(&s_err, 0, sizeof(s_err));
+    int err_res = parent_read_setup_error(err_pipe[0], &s_err);
+    close(err_pipe[0]);
+
+    /* Reap child process */
     int status = 0;
     struct rusage usage;
     pid_t wait_pid;
-
     do {
         wait_pid = wait4(pid, &status, 0, &usage);
     } while (wait_pid == -1 && errno == EINTR);
 
     if (wait_pid == -1) {
-        perror("wait4 failed");
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
         return -1;
     }
 
-    /*
-     * Status decoding:
-     * The raw integer returned in 'status' encodes multiple bitfields:
-     * whether the process exited normally, whether it was terminated by a signal,
-     * whether a core dump was produced, etc.
-     * Never print or interpret raw status directly; always use POSIX macros.
-     */
-    if (WIFEXITED(status)) {
-        /* Child terminated normally via exit(), _exit(), or return from main */
-        int exit_code = WEXITSTATUS(status);
-        printf("exit code %d\n", exit_code);
-    } else if (WIFSIGNALED(status)) {
-        /* Child terminated abnormally due to an unhandled signal */
-        int sig = WTERMSIG(status);
-        printf("signal %d\n", sig);
+    /* Classify outcome */
+    if (err_res == 1) {
+        res->status = STATUS_SETUP_ERROR;
+        res->setup_err = s_err;
+        res->exit_code = 127;
+        return 0;
+    } else if (err_res == -1) {
+        res->status = STATUS_SETUP_PROTOCOL_ERROR;
+        res->exit_code = 127;
+        return 0;
     } else {
-        /*
-         * Safety fallback: if the process terminated in an unexpected state,
-         * do not print raw status bits.
-         */
-        fprintf(stderr, "unknown process termination state\n");
-        return -1;
+        /* EOF on error pipe: evaluate wait status */
+        if (WIFEXITED(status)) {
+            res->status = STATUS_OK;
+            res->exit_code = WEXITSTATUS(status);
+        } else if (WIFSIGNALED(status)) {
+            res->status = STATUS_RUNTIME_ERROR;
+            res->signal = WTERMSIG(status);
+        } else {
+            res->status = STATUS_INDETERMINATE_SETUP_STATUS;
+        }
+        return 0;
+    }
+}
+
+int run_sandbox(const char *binary_path) {
+    sandbox_config_t cfg;
+    sandbox_config_init_default(&cfg);
+
+    sandbox_result_t res;
+    int ret = run_sandbox_with_config(binary_path, &cfg, &res);
+    if (ret != 0) {
+        fprintf(stderr, "runner internal error\n");
+        return ret;
     }
 
+    if (res.status == STATUS_SETUP_ERROR) {
+        fprintf(stderr, "setup error: stage=%d errno=%d (%s)\n",
+                res.setup_err.stage, res.setup_err.errnum, strerror(res.setup_err.errnum));
+        sandbox_result_cleanup(&res);
+        return 0;
+    } else if (res.status == STATUS_SETUP_PROTOCOL_ERROR) {
+        fprintf(stderr, "setup protocol error\n");
+        sandbox_result_cleanup(&res);
+        return 0;
+    } else if (res.status == STATUS_OK) {
+        printf("exit code %d\n", res.exit_code);
+    } else if (res.status == STATUS_RUNTIME_ERROR) {
+        printf("signal %d\n", res.signal);
+    } else {
+        fprintf(stderr, "status: %d\n", res.status);
+    }
+
+    sandbox_result_cleanup(&res);
     return 0;
 }
 

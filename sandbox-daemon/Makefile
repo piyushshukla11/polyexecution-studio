@@ -6,7 +6,7 @@ SRCS = sandbox.c
 OBJS = $(SRCS:.c=.o)
 TARGET = sandbox-runner
 
-EVIL_NAMES = loop sleeper exit7 segv
+EVIL_NAMES = loop sleeper exit7 segv exit127
 EVIL_BIN_DIR = tests/evil/bin
 EVIL_BINS = $(addprefix $(EVIL_BIN_DIR)/, $(EVIL_NAMES))
 
