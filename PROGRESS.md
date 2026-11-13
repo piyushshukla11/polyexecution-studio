@@ -169,3 +169,78 @@
 - Linked: LOG-0011
 - Piyush prediction (optional): scripts/check_repo_hygiene.sh will effectively block any forced additions under LEARNING_NOTES/ regardless of extension.
 - Tutor review: pending
+
+## [LOG-0013] 2026-11-13 22:31 IST | PLAN | actor: agent
+- Reason: Execute Tutor Instruction Follow-Up Round 3 covering hygiene script error message refinement, deletion check verification, Phase 2 host environment checks, and study notes updates.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1.
+  2. Item 1: Display git show 9204813 -- scripts/check_repo_hygiene.sh and cat -n scripts/check_repo_hygiene.sh.
+  3. Item 2: Fix hygiene script error output: eliminate duplicate LEARNING_NOTES message and prevent .gitignore unstage suggestion when LEARNING_NOTES rule triggers. Show before and after output.
+  4. Item 3: Prove rule via real hook using _hook_test.c (confirm blocked, log unchanged, clean status).
+  5. Item 4: Verify staged file deletion is not broken by removing --diff-filter.
+  6. Item 5: Run report-only environment checks for Phase 2 (cgroup delegation, nobody group, umask origins) and provide 3-5 sentence analysis.
+  7. Item 6: Add Phase 2 notes section to LEARNING_NOTES/phase-overview.md (umask 0000 implications, RLIMIT_CORE = 0, cgroup delegation result).
+  8. Item 7: Add note in LEARNING_NOTES documenting that core.hooksPath and .git/info/exclude are per-clone settings needing a future setup script.
+  Note: Do not touch sandbox-daemon/sandbox.c or sandbox.h.
+  9. Append DONE entry (LOG-0014), commit script changes, push branch, and submit Change Report.
+- Files: PROGRESS.md, scripts/check_repo_hygiene.sh, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/00_tutor_notes.md
+- Linked: LOG-0012
+- Piyush prediction (optional): Scripts will cleanly report LEARNING_NOTES rejections without conflicting advice, and staged deletions of allowed files will succeed.
+- Tutor review: pending
+
+## [LOG-0014] 2026-11-13 22:37 IST | DONE | actor: agent
+- Reason: Complete Follow-Up Round 3 covering hygiene error output refinement, deletion verification, Phase 2 host environment checks, and study notes updates.
+- Details / Change:
+  1. Item 1: Displayed git show 9204813 -- scripts/check_repo_hygiene.sh and cat -n scripts/check_repo_hygiene.sh.
+  2. Item 2: Fixed hygiene script error output to eliminate duplicate LEARNING_NOTES message and prevent .gitignore suggestion when LEARNING_NOTES rule triggers. Demonstrated BEFORE and AFTER outputs for staged _hook_test.c. Committed fix alone.
+  3. Item 3: Proved rule through real pre-commit hook with _hook_test.c (blocked with single message, commit prevented, HEAD unchanged, clean tree).
+  4. Item 4: Verified staged deletions of allowed files are not blocked by the absence of --diff-filter on the LEARNING_NOTES check (tested deleting docs/01_PROJECT_OVERVIEW.md with exit 0, restored cleanly).
+  5. Item 5: Ran Phase 2 environment checks: confirmed cgroup v2 delegation to user 1000 with cpu, memory, and pids controllers; determined umask 0000 source from container session manager; identified group nobody (65534) membership.
+  6. Item 6: Added Phase 2 notes section to LEARNING_NOTES/phase-overview.md covering runner umask requirement, RLIMIT_CORE = 0, and cgroup delegation.
+  7. Item 7: Added clone setup note in LEARNING_NOTES/00_tutor_notes.md regarding core.hooksPath and .git/info/exclude persistence.
+  Note: Confirmed Tier A files sandbox-daemon/sandbox.c and sandbox.h remain untouched.
+- Files: PROGRESS.md, scripts/check_repo_hygiene.sh, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/00_tutor_notes.md
+- Linked: LOG-0013
+- Piyush prediction (optional): Scripts will cleanly report LEARNING_NOTES rejections without conflicting advice, and staged deletions of allowed files will succeed.
+- Tutor review: pending
+
+## [LOG-0015] 2026-11-14 00:00 IST | PLAN | actor: agent
+- Reason: Record Piyush's decision to change working mode for Phase 1 Step 1 (agent writes Tier A core code, tutor teaches theory, Piyush explains code back; tagged AGENT-WROTE-TIER-A) and plan the implementation of process lifecycle, execution, and status decoding in sandbox-daemon/sandbox.c.
+- Details / Change:
+  1. Record CORRECTION to LOG-0014: in Item 5 of LOG-0014, attributing ambient umask 0000 to the container session manager and the explanation of group nobody (65534) membership were Inferred rather than directly Observed; from now on all claims are explicitly labeled Observed, Inferred, or Unknown.
+  2. Record working mode shift per Piyush's wish: Tier A sandbox core implementation moves from "Piyush writes" to "agent writes, tutor teaches, Piyush must explain it back", tagged with AGENT-WROTE-TIER-A per AI_RULES.md Section 2.
+  3. Implement Step 1 process lifecycle across small commits:
+     (a) Implement fork() + child _exit(3) + parent wait4() loop handling EINTR, error handling if fork() returns -1, and basic status collection.
+     (b) Implement child execve() with explicit binary path, argv = { binary_path, NULL }, and minimal fixed envp = { NULL }; handle execve() failure via write(2, ...) error message and _exit(127).
+     (c) Implement full status decoding: check WIFEXITED(status) and print WEXITSTATUS(status); check WIFSIGNALED(status) and print WTERMSIG(status); never print raw status integer.
+  4. Build and verify with test binaries (exit7, segv, sleeper with kill -9, non-existent binary) and verify absence of zombie processes with ps.
+  5. Add beginner-friendly line-by-line walkthrough of sandbox.c and system calls to LEARNING_NOTES/phase-1.md, emphasizing that Step 1 provides no isolation or resource limits.
+  6. Commit each change incrementally, stage files by name only, append DONE entry (LOG-0016), and submit Change Report.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0014
+- Piyush prediction (optional): Step 1 execution will correctly report exit codes and signals for test binaries, handle failed execve with code 127 without crashing, and leave no zombie processes.
+- Tutor review: pending
+
+## [LOG-0016] 2026-11-14 00:07 IST | DONE | actor: agent
+- Reason: Complete Phase 1 Step 1 sandbox process lifecycle implementation (fork, child execve, parent wait4, status decoding) under AGENT-WROTE-TIER-A per Piyush's decision.
+- Details / Change:
+  1. Implemented Phase 1 Step 1 in sandbox-daemon/sandbox.c across three small commits:
+     - (a) fork + child _exit(3) baseline + parent wait4 with EINTR retry and fork == -1 guard (commit 716826d).
+     - (b) child execve with explicit path, argv, minimal envp = { NULL }, and write(2, ...) + _exit(127) error reporting (commit 4a1ae01).
+     - (c) full status decoding using WIFEXITED/WEXITSTATUS and WIFSIGNALED/WTERMSIG, never printing raw status (commit 33ab46c).
+  2. Updated sandbox-daemon/sandbox.h with clear documentation.
+  3. Added extensive beginner-friendly comments explaining every system call (fork, _exit vs exit, execve vs execvp, write vs printf, wait4 and EINTR loop, bitfield status decoding).
+  4. Executed verification tests and observed real outputs:
+     - ./sandbox-runner ./tests/evil/bin/exit7 produced 'exit code 7' (Observed).
+     - ./sandbox-runner ./tests/evil/bin/segv produced 'signal 11' (Observed).
+     - ./sandbox-runner ./tests/evil/bin/does-not-exist produced 'execve failed' and 'exit code 127' (Observed).
+     - Background runner with sleeper killed by kill -9 to child PID produced 'signal 9' (Observed).
+     - ps confirmed zero zombie processes (Observed).
+  5. Appended detailed line-by-line beginner-friendly walkthrough of sandbox.c and complete Change Report to LEARNING_NOTES/phase-1.md. Explicitly noted that Step 1 has no isolation.
+  6. Confirmed all factual statements are labeled Observed, Inferred, or Unknown.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0015
+- Piyush prediction (optional): Step 1 execution will correctly report exit codes and signals for test binaries, handle failed execve with code 127 without crashing, and leave no zombie processes.
+- Tutor review: pending
+
+
