@@ -152,3 +152,20 @@
 - Linked: LOG-0010
 - Piyush prediction (optional): scripts/check_repo_hygiene.sh will effectively block any forced additions under LEARNING_NOTES/ regardless of extension.
 - Tutor review: pending
+
+## [LOG-0012] 2026-11-13 21:02 IST | DONE | actor: agent
+- Reason: Complete Follow-Up Round 2 covering hook hardening, evil binary ignore validation, Phase 0 evidence re-run, core dump audit, environment report, issue timing check, study notes audit, and Tier A integrity proof.
+- Details / Change:
+  1. Item 1: Hardened scripts/check_repo_hygiene.sh. Proved old script allowed non-markdown files under LEARNING_NOTES/ (exit 0). Updated script to block any staged path starting with LEARNING_NOTES/ without --diff-filter with dedicated instruction message. Proved fix with T1 (blocked), T2 (blocked), T3 (allowed), T4 (commit passed). Committed fix alone.
+  2. Item 2: Verified evil binaries in tests/evil/bin/ are ignored by .gitignore (git status clean, git check-ignore confirmed, git ls-files clean).
+  3. Item 3: Re-ran 3 historical Phase 0 negative tests for real (R1: old PROGRESS.md line edit, R2: staged .env secret, R3: stray NOTES.md). Replaced reconstructed evidence in LEARNING_NOTES/phase-0.md with real outputs labeled recovered on 2026-11-13 (new counts: 7 recovered, 0 reconstructed).
+  4. Item 4: Verified zero stray core dumps in repository. Confirmed kernel core_pattern pipes to systemd-coredump and .gitignore contains core rules.
+  5. Item 5: Generated Linux environment report (kernel 7.2.8, btrfs, umask 0000, unprivileged userns enabled, cgroup2fs active).
+  6. Item 6: Verified Issue #4 was created at 20:17:49 IST, preceding commits 8ee9ffc (20:18:53 IST) and f8d13f7 (20:21:30 IST).
+  7. Item 7: Audited LEARNING_NOTES/phase-1.md structure, clarified 4 experiments and 1 envp note, confirmed throwaway stdio test location, reported 1045 total lines.
+  8. Item 8: Confirmed Tier A files sandbox-daemon/sandbox.c and sandbox.h remain completely untouched (single skeleton commit 210cc62).
+  Note: CI is a known gap, deliberately deferred by the tutor until Piyush passes the Step 1 Definition of Done. Do not add CI this round.
+- Files: PROGRESS.md, scripts/check_repo_hygiene.sh, LEARNING_NOTES/phase-0.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0011
+- Piyush prediction (optional): scripts/check_repo_hygiene.sh will effectively block any forced additions under LEARNING_NOTES/ regardless of extension.
+- Tutor review: pending
