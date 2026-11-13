@@ -457,3 +457,17 @@
 - Linked: LOG-0030
 - Piyush prediction (optional): Target returning exit 0 will emit OK, non-zero exit codes will emit RUNTIME_ERROR, and setup failures will emit SANDBOX_ERROR.
 - Tutor review: pending
+
+## [LOG-0032] 2026-11-14 02:30 IST | DONE | actor: agent
+- Reason: Complete process exit status contract alignment pass adhering to docs/02_ARCHITECTURE.md.
+- Details / Change:
+  1. Updated run_sandbox_with_config() in sandbox-daemon/sandbox.c: WIFEXITED child termination now branches on exit_code. If exit_code == 0, status is STATUS_OK (emitted as "OK"); if exit_code != 0, status is STATUS_RUNTIME_ERROR (emitted as "RUNTIME_ERROR" with exact exit_code preserved).
+  2. Setup and execve failures remain STATUS_SETUP_ERROR (emitted as "SANDBOX_ERROR" with exit_code 127 and diagnostic stage/errno in stderr). A valid target that exits 127 produces status "RUNTIME_ERROR" with exit_code 127 and clean stderr, remaining strictly distinguishable from an execve failure.
+  3. Created sandbox-daemon/tests/evil/exit0.c (returning 0) and added it to EVIL_NAMES in Makefile.
+  4. Verified exact JSON outputs: exit0 (OK, exit_code: 0), exit7 (RUNTIME_ERROR, exit_code: 7), valid exit127 (RUNTIME_ERROR, exit_code: 127), and missing binary (SANDBOX_ERROR, exit_code: 127 with setup error in stderr).
+  5. Re-verified byte round-trip script confirming 100% byte-for-byte exact identity.
+  6. Confirmed zero lingering or zombie processes on the host.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/exit0.c, docs/02_ARCHITECTURE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0031
+- Piyush prediction (optional): Target returning exit 0 will emit OK, non-zero exit codes will emit RUNTIME_ERROR, and setup failures will emit SANDBOX_ERROR.
+- Tutor review: pending
