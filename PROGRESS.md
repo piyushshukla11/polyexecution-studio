@@ -442,3 +442,18 @@
 - Linked: LOG-0029
 - Piyush prediction (optional): Aligning exit status mapping with docs/02_ARCHITECTURE.md will strictly fulfill the documented API contract.
 - Tutor review: pending
+
+## [LOG-0031] 2026-11-14 02:29 IST | PLAN | actor: agent
+- Reason: Align process exit status mapping with docs/02_ARCHITECTURE.md API contract.
+- Details / Change:
+  1. Commit CORRECTION (LOG-0030) and this PLAN entry (LOG-0031) to PROGRESS.md before making code changes.
+  2. In sandbox-daemon/sandbox.c, update loop exit status assignment for WIFEXITED: if exit_code == 0 set STATUS_OK; if exit_code != 0 set STATUS_RUNTIME_ERROR while preserving exit_code. Execve/setup errors remain STATUS_SETUP_ERROR (mapped to SANDBOX_ERROR).
+  3. Update sandbox.h comments to reflect exit 0 => OK vs nonzero => RUNTIME_ERROR.
+  4. Create sandbox-daemon/tests/evil/exit0.c (returning 0) and add to EVIL_NAMES in Makefile.
+  5. Run and capture exact JSON output for exit0 (status: OK, exit_code: 0), exit7 (status: RUNTIME_ERROR, exit_code: 7), valid exit127 (status: RUNTIME_ERROR, exit_code: 127), and missing binary (status: SANDBOX_ERROR, exit_code: 127 with setup error in stderr).
+  6. Re-run byte round-trip assertion script confirming 100% byte-for-byte fidelity is preserved.
+  7. Check process table for zero lingering or zombie processes, append DONE entry (LOG-0032), update LEARNING_NOTES/phase-1.md, and fast-forward push to origin/phase/1-sandbox-v1.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/exit0.c, docs/02_ARCHITECTURE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0030
+- Piyush prediction (optional): Target returning exit 0 will emit OK, non-zero exit codes will emit RUNTIME_ERROR, and setup failures will emit SANDBOX_ERROR.
+- Tutor review: pending
