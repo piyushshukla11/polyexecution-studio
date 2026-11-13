@@ -75,3 +75,15 @@
 - Linked: LOG-0005
 - Piyush prediction (optional): Skeleton and test fixtures will compile cleanly and wait for Piyush to implement core Tier A process logic.
 - Tutor review: pending
+
+## [LOG-0007] 2026-11-13 20:18 IST | PLAN | actor: agent
+- Reason: Establish local-only LEARNING_NOTES study directory and add Section 13 to AI_RULES.md.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before making changes.
+  2. Add Section 13 to AI_RULES.md defining the local study folder workflow: excluded via .git/info/exclude, uncommitted, unstaged, and updated each turn.
+  3. Create local LEARNING_NOTES/ directory with 00_tutor_notes.md, glossary.md, phase-0.md, and phase-1.md containing full teaching material, Change Reports with evidence, and questions with unfilled answer blocks.
+  4. Append a DONE entry linking this PLAN (LOG-0007), commit AI_RULES.md and PROGRESS.md, and push branch.
+- Files: PROGRESS.md, AI_RULES.md
+- Linked: LOG-0006
+- Piyush prediction (optional): LEARNING_NOTES will be ignored by git via .git/info/exclude and remain purely local.
+- Tutor review: pending
