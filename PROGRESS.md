@@ -353,3 +353,14 @@
 - Linked: LOG-0022
 - Piyush prediction (optional): Corrective pass will ensure robust allocation handling, truthful status mapping between segv and memory_bomb, and valid JSON output for arbitrary binary bytes.
 - Tutor review: pending
+
+## [LOG-0024] 2026-11-14 02:10 IST | CORRECTION | actor: agent
+- Reason: Record factual corrections to LOG-0022 and LOG-0023 regarding MEMORY_LIMIT classification, fatal wait4 cleanup, and UTF-8 validation rules identified in tutor review.
+- Details / Change:
+  1. In LOG-0022 and LOG-0023, classifying SIGSEGV with ru_maxrss >= 80% of RLIMIT_AS as "truthful" memory limit detection was an overstatement. In POSIX systems programming, setrlimit(RLIMIT_AS) does not generate an explicit kernel OOM signal (unlike Linux cgroup OOM killer); an application can dereference NULL due to an ordinary logic bug while coincidentally holding mapped pages. The 80% RSS threshold is strictly a heuristic and must be labeled as such in code, documentation, and reports rather than claimed as causal proof.
+  2. In LOG-0023, the fatal wait4(WNOHANG) error branch signaled the process group but did not attempt to reap the direct child process before setting STATUS_RUNNER_INTERNAL_ERROR, which could risk leaving a zombie or orphan process.
+  3. In LOG-0023, the UTF-8 validator used `(c & 0xF8) == 0xF0` without explicitly capping lead bytes at 0xF4, erroneously allowing lead bytes 0xF5 through 0xF7 (disallowed by RFC 3629 for code points above U+10FFFF).
+- Files: PROGRESS.md
+- Linked: LOG-0023
+- Piyush prediction (optional): Correcting these statements will maintain strict intellectual honesty in systems explanations.
+- Tutor review: pending
