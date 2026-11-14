@@ -471,3 +471,22 @@
 - Linked: LOG-0031
 - Piyush prediction (optional): Target returning exit 0 will emit OK, non-zero exit codes will emit RUNTIME_ERROR, and setup failures will emit SANDBOX_ERROR.
 - Tutor review: pending
+
+## [LOG-0033] 2026-11-14 11:21 IST | PLAN | actor: agent
+- Reason: Implement a comprehensive, repeatable Phase 1 regression lab test harness for PES in sandbox-daemon/tests/test_runner.py wired into Makefile (make test) using Python standard library.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before making changes.
+  2. Create sandbox-daemon/tests/test_runner.py:
+     - Automatically builds runner and evil binaries using strict flags (make all evil).
+     - Executes all evil test cases with safe outer time bounds (e.g. 5-10s timeout) to prevent infinite hangs.
+     - Parses JSON output and validates schema completeness and type correctness.
+     - Validates: exit 0 (OK), exit 7 (RUNTIME_ERROR, exit_code 7), valid exit 127 vs missing binary (SANDBOX_ERROR, exit_code 127, diagnostic in stderr), ordinary SIGSEGV (RUNTIME_ERROR, signal 11), loop (TIMEOUT, signal 24 SIGXCPU), sleeper (TIMEOUT, wall_ms >= timeout), stream separation (stdout_stderr, stderr_only), output flood (OUTPUT_LIMIT, strictly capped buffer), file size limit (OUTPUT_LIMIT, signal 25 SIGXFSZ), grandchild pipe holding (descendant_pipe, rapid exit 42 without waiting 60s), early stream closure (close_stream_sleep, TIMEOUT), Latin-1 lossless byte round-trip (json_escaping_test), memory bomb (MEMORY_LIMIT, signal 11, RSS heuristic), and host cleanup verification without killing unrelated processes.
+     - Safely removes temporary files (/tmp/pes_test_fsize.tmp).
+     - Formats readable test output reporting PASSED, FAILED, SKIPPED, and overall summary.
+  3. Wire harness into sandbox-daemon/Makefile with a 'test' target under .PHONY.
+  4. Run regression lab, confirm 100% passing tests, verify zero zombie processes or leaks.
+  5. Append DONE entry (LOG-0034), update LEARNING_NOTES/phase-1.md with regression lab guide and 3 test-writing exercises for Piyush, and push to origin/phase/1-sandbox-v1.
+- Files: PROGRESS.md, sandbox-daemon/tests/test_runner.py, sandbox-daemon/Makefile, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0032
+- Piyush prediction (optional): The regression lab will automate the verification of all 13 Phase 1 behaviors, catch regressions reliably, and ensure clean cleanup of temporary files and processes.
+- Tutor review: pending
