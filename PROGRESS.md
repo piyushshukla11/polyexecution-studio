@@ -759,6 +759,23 @@
 - Piyush prediction (optional): Corrected sequencing will prevent permission denial and seccomp self-block bugs when Phase 2 implementation begins.
 - Tutor review: pending
 
+## [LOG-0045] 2026-11-14 12:58 IST | PLAN | actor: agent
+- Reason: Plan namespace and PID namespace lifecycle architecture correction in docs/03_SANDBOX_DEEP_DIVE.md and LEARNING_NOTES/phase-1.md based on man pages for unshare(2), clone(2), user_namespaces(7), and pid_namespaces(7).
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before updating documentation.
+  2. Correct the process handshake in docs/03_SANDBOX_DEEP_DIVE.md:
+     - Establish that the child creates the user namespace (unshare(CLONE_NEWUSER)) BEFORE the parent can write to /proc/[child_pid]/uid_map and gid_map.
+     - Document synchronization points: Child 1 creates user namespace -> pauses on sync pipe -> Parent attaches Child 1 PID to job cgroup.procs and establishes UID/GID mapping via newuidmap/newgidmap -> Parent releases Child 1.
+     - Document PID namespace semantics (pid_namespaces(7)): unshare(CLONE_NEWPID) does not move the calling process into the new namespace; its FIRST CHILD created afterward becomes PID 1. Explain the intermediate supervisor/fork pattern (Child 1 unshares CLONE_NEWPID, then forks Child 2 which becomes PID 1 of the namespace and execs the target).
+     - Explicitly state assumptions and document that the current environment's unshare ENOSYS probe prevents validating this flow live here.
+  3. Update LEARNING_NOTES/phase-1.md (local-only) with beginner-friendly explanations of the handshake and PID namespace semantics.
+  4. Append LOG-0046 (DONE) and commit Part 1 changes.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0044
+- Piyush prediction (optional): The architecture will accurately reflect Linux kernel requirements, avoiding the invalid attempt to write uid_map before the user namespace exists.
+- Tutor review: pending
+
+
 
 
 
