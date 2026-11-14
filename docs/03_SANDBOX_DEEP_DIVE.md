@@ -162,7 +162,7 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
                                       v
 
 +-----------------------------------------------------------------------------------+
-|                        SANDBOX HELPER CONTINUES (Child 1)                         |
+|                        SANDBOX HELPER SETUP (Child 1, Root in User NS)            |
 +-----------------------------------------------------------------------------------+
 | Step 9: Unshare Remaining Isolation Namespaces                                    |
 |         -> unshare(CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS | CLONE_NEWIPC)     |
@@ -173,20 +173,20 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
 |          -> mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL)                     |
 |          -> Mount private tmpfs workspace and bind-mount read-only libraries      |
 |          -> pivot_root(new_root, put_old); detach old root                        |
+|          -> Child 1 holds CAP_SYS_ADMIN and UID 0 in user namespace               |
 +-----------------------------------------------------------------------------------+
-| Step 11: Drop Auxiliary Groups & Drop Privileges                                  |
-|          -> Route A (newgidmap): setgroups(0, NULL) clears supplementary groups;   |
-|             then setgid(nobody); setuid(nobody)                                    |
-|          -> Route B (direct-write): setgroups denied; cannot clear supplementary   |
-|             groups; setgid/setuid leave groups intact; UNSUPPORTED for containment |
-|          -> Uses mapped IDs established by parent in Step 7                       |
+| Step 11: Fork Target Process (Child 2)                                            |
+|          -> Child 1 invokes fork() while still holding setup privileges           |
+|          -> KEY SEMANTICS: Child 2 is born as PID 1 of the new PID namespace,     |
+|             inheriting UID 0 and CAP_SYS_ADMIN/CAP_SETPCAP in user namespace!     |
 +-----------------------------------------------------------------------------------+
-| Step 12: Fork Target Process (Child 2)                                            |
-|          -> Child 1 invokes fork() to spawn Child 2                               |
-|          -> KEY SEMANTICS: Child 2 is born as PID 1 of the new PID namespace!    |
+| Step 12: Supervisor Privilege Reduction (Child 1)                                 |
+|          -> Child 1 (supervisor) drops supplementary groups via setgroups(0, NULL)|
+|          -> Child 1 sets setgid(nobody); setuid(nobody); PR_SET_NO_NEW_PRIVS      |
+|          -> Child 1 transitions to unprivileged state to wait on Child 2          |
 +-----------------------------------------------------------------------------------+
 
-                                      | (Child 2 runs as PID 1)
+                                      | (Child 2 runs as PID 1 with UID 0)
                                       v
 
 +-----------------------------------------------------------------------------------+
@@ -194,21 +194,34 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
 +-----------------------------------------------------------------------------------+
 | Step 13: Mount Private Procfs (from inside new PID namespace)                     |
 |          -> mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) |
-|          -> CRITICAL: Must be executed by Child 2 inside new PID namespace so      |
-|             /proc displays only container processes, not host process table        |
+|          -> MUST be executed by Child 2 inside new PID namespace while holding     |
+|             CAP_SYS_ADMIN so /proc reflects only container processes               |
 +-----------------------------------------------------------------------------------+
-| Step 14: Enforce No-New-Privileges Boundary                                       |
+| Step 14: Prune Capability Bounding Set (PR_CAPBSET_DROP)                          |
+|          -> Iterates 0..CAP_LAST_CAP: prctl(PR_CAPBSET_DROP, cap)                 |
+|          -> MUST happen while Child 2 still holds CAP_SETPCAP (UID 0 in user ns)  |
++-----------------------------------------------------------------------------------+
+| Step 15: Drop Supplementary Groups (setgroups(0, NULL))                           |
+|          -> Route A: setgroups(0, NULL) clears all inherited supplementary groups |
+|          -> Route B (direct-write): setgroups denied; UNSUPPORTED for containment |
++-----------------------------------------------------------------------------------+
+| Step 16: Drop Process Identity to Unprivileged nobody                             |
+|          -> setgid(nobody_gid); setuid(nobody_uid)                                |
+|          -> Transition from UID 0 automatically clears permitted, effective, and  |
+|             ambient capabilities (pP, pE, pA = 0)                                 |
++-----------------------------------------------------------------------------------+
+| Step 17: Enforce No-New-Privileges Boundary                                       |
 |          -> prctl(PR_SET_NO_NEW_PRIVS, 1) [mandatory before unprivileged seccomp] |
 +-----------------------------------------------------------------------------------+
-| Step 15: Install Seccomp-BPF Syscall Filter                                       |
+| Step 18: Install Seccomp-BPF Syscall Filter                                       |
 |          -> Install allowlist validated against runtime dynamic linker (ld.so)    |
 |          -> Permanent lockdown: blocks socket, mount, pivot_root, ptrace, setuid  |
 +-----------------------------------------------------------------------------------+
-| Step 16: Execute Target Program via execve                                        |
+| Step 19: Execute Target Program via execve                                        |
 |          -> execve(binary, argv, envp) with scrubbed environment                 |
 +-----------------------------------------------------------------------------------+
-| Step 17: Supervise & Reap (Child 1 & Parent)                                      |
-|          -> Child 1 waits on Child 2 (PID 1 of namespace); reaps all exit statuses|
+| Step 20: Supervise & Reap (Child 1 & Parent)                                      |
+|          -> Unprivileged Child 1 waits on Child 2 (PID 1); reaps exit status      |
 |          -> If Child 2 dies, kernel terminates all processes in the namespace     |
 |          -> Parent supervisor enforces wall timeouts and cleans up cgroups        |
 +-----------------------------------------------------------------------------------+
@@ -280,10 +293,18 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
      - Inside the container PID namespace, Child 2 has PID 1 (`getpid() == 1`).
      - In the outer parent PID namespace, Child 2 is assigned a standard host PID (e.g. PID 48215).
      - Child 1 (the helper process) resides in the parent PID namespace, holding Child 2's host PID, and acts as its supervisor, reaping it via `waitpid(child2_pid, &status, 0)`.
-   * *Procfs Mount Ordering: Host Leak vs True Process Table Isolation (`proc(5)`):*
+   * *Procfs Mount Ordering: Host Leak vs True Process Table Isolation (`proc(5)`, `mount(2)`):*
      The `/proc` virtual filesystem is not a global static view; its entries directly reflect the PID namespace of the process that executes the `mount(2)` syscall (`mount -t proc proc /proc`).
      - *The Ordering Trap:* If Child 1 mounts `/proc` *before* forking Child 2 (e.g. during initial rootfs preparation), the mount reflects Child 1's PID namespace (the host parent namespace). As a result, the container inherits a `/proc` filesystem displaying all host processes, completely defeating process table isolation!
-     - *The Correct Contract:* The `/proc` filesystem must be mounted *after* Child 2 is forked, executed from *inside* the new PID namespace by Child 2 (PID 1). Because Child 2 resides in the new PID namespace, mounting `proc` creates a private process table containing only PID 1 and its descendants.
+     - *The Capability Trap:* In Linux, executing `mount(2)` strictly requires `CAP_SYS_ADMIN` in the user namespace that owns the target mount and PID namespaces. If the process drops identity to `nobody` via `setuid()` before mounting `/proc`, all effective capabilities are automatically cleared by the kernel, causing `mount("proc", ...)` to fail immediately with `EPERM`!
+     - *The Correct Contract:* Child 1 must fork Child 2 *while still holding setup privileges* (UID 0 and `CAP_SYS_ADMIN` in the user namespace). Child 2 is born into the new PID namespace with UID 0 and `CAP_SYS_ADMIN`. Child 2 mounts the private `/proc` filesystem *first*. Only after `/proc` is mounted does Child 2 proceed to prune capabilities and drop identity to `nobody`.
+   * *Trusted Supervisor (Child 1) Privilege-Reduction Path:*
+     After forking Child 2 in Step 11, the supervisor helper (Child 1) has no further setup duties requiring elevated capabilities.
+     - Child 1 closes any unused pipe and mount file descriptors.
+     - Child 1 drops supplementary groups via `setgroups(0, NULL)`.
+     - Child 1 transitions to unprivileged user `nobody` via `setgid(nobody_gid)` and `setuid(nobody_uid)`.
+     - Child 1 sets `prctl(PR_SET_NO_NEW_PRIVS, 1)`.
+     - Child 1 enters the supervisory wait loop (`waitpid(child2_pid, &status, 0)`) in a completely unprivileged state with zero capabilities, preventing supervisor privilege exploitation.
    * *PID 1 Exit and Guaranteed Descendant Termination:*
      In Linux (`pid_namespaces(7)`), PID 1 serves as the `init` process of its namespace. If PID 1 terminates for any reason (normal `_exit`, uncaught signal, `SIGKILL` from supervisor, or memory/CPU fault), the Linux kernel immediately sends `SIGKILL` to *all* remaining processes inside that PID namespace.
      - Unlike standard process groups where orphaned grandchildren can survive if they call `setsid()`, no process can survive in a PID namespace once PID 1 exits.

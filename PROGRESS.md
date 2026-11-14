@@ -1143,3 +1143,17 @@
 - Linked: LOG-0062
 - Piyush prediction (optional): Mounting procfs before dropping UID 0 in Child 2 ensures mount() possesses CAP_SYS_ADMIN without failing with EPERM.
 - Tutor review: pending
+
+## [LOG-0064] 2026-11-14 14:03 IST | DONE | actor: agent
+- Reason: Complete privilege ordering correction for procfs mount and identity transition in Phase 2 isolation handshake.
+- Details / Change:
+  1. Updated docs/03_SANDBOX_DEEP_DIVE.md:
+     - Revised the Phase 2 isolation handshake diagram (Steps 9-20) to reflect the correct privilege ordering: Child 1 forks Child 2 while holding UID 0 and CAP_SYS_ADMIN in the user namespace.
+     - Documented in Section 7 that Child 2 is born into the new PID namespace with UID 0 and CAP_SYS_ADMIN, and mounts the private /proc filesystem before dropping privileges.
+     - Documented the mount(2) capability trap: dropping identity to nobody before mount("proc", ...) clears effective capabilities (pE=0) and causes mount(2) to fail with EPERM.
+     - Documented the trusted supervisor (Child 1) privilege-reduction path: dropping supplementary groups via setgroups(0, NULL), transitioning to nobody via setgid/setuid, and setting PR_SET_NO_NEW_PRIVS before waiting on Child 2.
+  2. Verified test_phase2_diagnostics.py (17/17 tests pass).
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0063
+- Piyush prediction (optional): Mounting procfs before dropping UID 0 in Child 2 ensures mount() possesses CAP_SYS_ADMIN without failing with EPERM.
+- Tutor review: pending
