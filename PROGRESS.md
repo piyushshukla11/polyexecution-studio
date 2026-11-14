@@ -810,6 +810,25 @@
 - Piyush prediction (optional): Dynamic canary path injection will make future filesystem containment tests deterministic without relying on hardcoded host paths.
 - Tutor review: pending
 
+## [LOG-0048] 2026-11-14 13:01 IST | DONE | actor: agent
+- Reason: Complete safe filesystem canary test contract and mock verification checks in sandbox-daemon/tests/evil/read_etc_passwd.c and scripts/test_phase2_diagnostics.py.
+- Details / Change:
+  1. Updated sandbox-daemon/tests/evil/read_etc_passwd.c:
+     - Added support for dynamic canary path via argv[1] and PES_CANARY_PATH environment variable (with fallback to /etc/pes_host_canary).
+     - Added support for dynamic canary token verification via argv[2] and PES_CANARY_TOKEN environment variable.
+     - Implemented deterministic outcome classification: token read match -> BREACH (exit 0); canary missing via ENOENT or access blocked via EACCES/EPERM -> BLOCKED_BY_POLICY (exit 1); container-local passwd without host user -> SAFE_LOCAL_RESOURCE (exit 1); host user leaked from passwd -> BREACH (exit 0); unrelated I/O or system errors -> UNEXPECTED_FAILURE (exit 2).
+     - Documented the test contract: canary files must be generated dynamically with unique tokens and cleaned up in fixture teardown, never committed to git or created during readiness passes.
+  2. Updated scripts/test_phase2_diagnostics.py:
+     - Added source-level checks for argv/env canary handling, token matching, and error code contracts.
+     - Added mock classification tests for canary missing (ENOENT), access denied (EACCES), token breach, and unexpected I/O errors (11/11 tests pass in 0.411s).
+     - Verified clean compilation under -Wall -Wextra -Werror without running the attack.
+  3. Verified make clean && make test in sandbox-daemon/ (18 Phase 1 regression tests pass, 3 Phase 2 remain pending).
+- Files: PROGRESS.md, sandbox-daemon/tests/evil/read_etc_passwd.c, scripts/test_phase2_diagnostics.py
+- Linked: LOG-0047
+- Piyush prediction (optional): Dynamic canary path injection will make future filesystem containment tests deterministic without relying on hardcoded host paths.
+- Tutor review: pending
+
+
 
 
 

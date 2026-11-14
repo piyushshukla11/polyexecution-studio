@@ -5,8 +5,8 @@ Tier C Verification Suite
 
 Validates that Phase 2 fixtures provide deterministic diagnostic outputs
 without executing uncontained attacks:
-  1. Source-level checks for structured DIAG output, canary detection, and errno handling
-  2. Mock-based classifier distinguishing policy blocks from ambient errors
+  1. Source-level checks for structured DIAG output, dynamic canary injection, and errno handling
+  2. Mock-based classifier distinguishing policy blocks from ambient errors and canary leaks
   3. Safe compile-only check verifying zero warnings under -Wall -Wextra -Werror
 """
 
@@ -49,12 +49,15 @@ def classify_fixture_outcome(exit_code: int, stdout: str, stderr: str) -> dict:
 
     status = diag_fields.get("STATUS", "")
     op = diag_fields.get("OP", "")
+    target = diag_fields.get("TARGET", "")
     errno_str = diag_fields.get("ERRNO", "")
 
     if exit_code == 0:
         return {
             "verdict": "BREACH",
             "op": op,
+            "target": target,
+            "status": status,
             "detail": f"Target breached containment policy (stdout: {stdout.strip()!r})",
         }
 
@@ -63,18 +66,21 @@ def classify_fixture_outcome(exit_code: int, stdout: str, stderr: str) -> dict:
             return {
                 "verdict": "POLICY_DENIED",
                 "op": op,
+                "target": target,
                 "errno": errno_str,
-                "detail": f"Target was explicitly blocked by sandbox security policy ({op})",
+                "detail": f"Target was explicitly blocked by sandbox security policy ({op} on {target})",
             }
         if status == "CONTAINER_LOCAL_PASSWD_OBSERVED":
             return {
                 "verdict": "SAFE_LOCAL_RESOURCE",
                 "op": op,
+                "target": target,
                 "detail": "Target opened container-local passwd without leaking host secrets",
             }
         return {
             "verdict": "POLICY_DENIED",
             "op": op,
+            "target": target,
             "detail": "Exit 1 with expected policy containment",
         }
 
@@ -82,6 +88,7 @@ def classify_fixture_outcome(exit_code: int, stdout: str, stderr: str) -> dict:
     return {
         "verdict": "UNEXPECTED_FAILURE",
         "op": op,
+        "target": target,
         "errno": errno_str,
         "detail": f"Target failed due to ambient or system error (not proven isolation policy): {status}",
     }
@@ -91,12 +98,19 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
     """Verifies Phase 2 fixture diagnostics, contracts, and safe compilation."""
 
     def test_read_etc_passwd_source_contract(self) -> None:
-        """Verify read_etc_passwd.c source structure and contracts."""
+        """Verify read_etc_passwd.c source structure, canary interface, and contracts."""
         src = (EVIL_DIR / "read_etc_passwd.c").read_text()
 
-        # Must check host canary
-        self.assertIn("/etc/pes_host_canary", src)
-        # Must check host-specific user
+        # Must accept argc, argv
+        self.assertIn("int main(int argc, char *argv[])", src)
+        # Must support dynamic canary path via argv[1] and PES_CANARY_PATH
+        self.assertIn("argv[1]", src)
+        self.assertIn("PES_CANARY_PATH", src)
+        # Must support dynamic canary token via argv[2] and PES_CANARY_TOKEN
+        self.assertIn("argv[2]", src)
+        self.assertIn("PES_CANARY_TOKEN", src)
+        # Must support host user check
+        self.assertIn("PES_HOST_USER", src)
         self.assertIn("zogratis:", src)
         # Must emit structured DIAG tag
         self.assertIn("DIAG:", src)
@@ -154,9 +168,31 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
     def test_mock_classification_filesystem_canary_breach(self) -> None:
         """Verify classifier correctly recognizes canary leak as breach."""
         mock_stdout = "HOST_CANARY_LEAKED\n"
-        mock_stderr = "DIAG: OP=open TARGET=/etc/pes_host_canary STATUS=BREACH\n"
+        mock_stderr = "DIAG: OP=open TARGET=/tmp/pes_canary_test123.txt STATUS=BREACH_CANARY_READ\n"
         res = classify_fixture_outcome(exit_code=0, stdout=mock_stdout, stderr=mock_stderr)
         self.assertEqual(res["verdict"], "BREACH")
+        self.assertEqual(res["target"], "/tmp/pes_canary_test123.txt")
+
+    def test_mock_classification_filesystem_canary_blocked_enoent(self) -> None:
+        """Verify classifier recognizes canary missing (ENOENT) as policy containment."""
+        mock_stderr = "DIAG: OP=open TARGET=/tmp/pes_canary_test123.txt STATUS=BLOCKED_BY_POLICY ERRNO=2 (No such file or directory)\n"
+        res = classify_fixture_outcome(exit_code=1, stdout="", stderr=mock_stderr)
+        self.assertEqual(res["verdict"], "POLICY_DENIED")
+        self.assertEqual(res["errno"], "2")
+
+    def test_mock_classification_filesystem_canary_blocked_eacces(self) -> None:
+        """Verify classifier recognizes canary access denied (EACCES) as policy containment."""
+        mock_stderr = "DIAG: OP=open TARGET=/tmp/pes_canary_test123.txt STATUS=BLOCKED_BY_POLICY ERRNO=13 (Permission denied)\n"
+        res = classify_fixture_outcome(exit_code=1, stdout="", stderr=mock_stderr)
+        self.assertEqual(res["verdict"], "POLICY_DENIED")
+        self.assertEqual(res["errno"], "13")
+
+    def test_mock_classification_filesystem_canary_unexpected_failure(self) -> None:
+        """Verify classifier marks unrelated I/O failure on canary as UNEXPECTED_FAILURE."""
+        mock_stderr = "DIAG: OP=open TARGET=/tmp/pes_canary_test123.txt STATUS=UNEXPECTED_FAILURE ERRNO=5 (Input/output error)\n"
+        res = classify_fixture_outcome(exit_code=2, stdout="", stderr=mock_stderr)
+        self.assertEqual(res["verdict"], "UNEXPECTED_FAILURE")
+        self.assertEqual(res["errno"], "5")
 
     def test_mock_classification_filesystem_local_passwd_safe(self) -> None:
         """
