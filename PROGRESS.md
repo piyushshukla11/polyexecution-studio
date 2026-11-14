@@ -1157,3 +1157,23 @@
 - Linked: LOG-0063
 - Piyush prediction (optional): Mounting procfs before dropping UID 0 in Child 2 ensures mount() possesses CAP_SYS_ADMIN without failing with EPERM.
 - Tutor review: pending
+
+## [LOG-0065] 2026-11-14 14:04 IST | PLAN | actor: agent
+- Reason: Plan capability-drop ordering protocol, bounding set pruning contract, and /proc/self/status verification method.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before updating architecture documentation.
+  2. Audit capabilities(7) and prctl(2) regarding the ordering requirements for capability reduction:
+     - Document that PR_CAPBSET_DROP strictly requires CAP_SETPCAP in the effective capability set. If setuid(nobody) is called first, the transition from UID 0 automatically clears CAP_SETPCAP, causing subsequent PR_CAPBSET_DROP calls to fail with EPERM.
+     - Document temporary capability dependencies during container initialization: mount("proc", ...) requires CAP_SYS_ADMIN; setgroups(0, NULL) requires CAP_SETGID; setgid(nobody_gid) requires CAP_SETGID; setuid(nobody_uid) requires CAP_SETUID; PR_CAPBSET_DROP requires CAP_SETPCAP.
+     - Document the exact step-by-step reduction order: (1) procfs mount (CAP_SYS_ADMIN), (2) bounding set pruning (CAP_SETPCAP), (3) supplementary group clearing (CAP_SETGID), (4) ambient capability clearing, (5) identity drop via setgid/setuid (clearing pE, pP, pA), (6) PR_SET_NO_NEW_PRIVS enforcement, (7) capability bitmask verification via /proc/self/status, (8) seccomp-bpf installation, (9) execve.
+     - Document why seccomp must be installed after setup is complete (strict seccomp filter blocks mount and prctl).
+     - Specify the verification contract: reading /proc/self/status and asserting that CapInh, CapPrm, CapEff, CapBnd, and CapAmb are all 0000000000000000.
+     - Compare alternative architectural designs (Design 1: PID 1 in-namespace target self-setup vs Design 2: multi-process setup helper using setns) and state assumptions.
+  3. Update docs/03_SANDBOX_DEEP_DIVE.md Section 9 with the resolved ordering protocol and verification contract.
+  4. Update LEARNING_NOTES/phase-1.md (local-only, not committed) with matching systems concepts.
+  5. Run test suites to verify.
+  6. Append LOG-0066 (DONE) and commit Part 2 changes.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0064
+- Piyush prediction (optional): Pruning bounding capabilities while CAP_SETPCAP is active prevents EPERM errors and guarantees zero residual capabilities before execve.
+- Tutor review: pending
