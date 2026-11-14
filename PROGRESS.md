@@ -1678,3 +1678,15 @@
 - Files: sandbox-daemon/tests/test_setup_handshake.c, PROGRESS.md, LEARNING_NOTES/phase-overview.md.
 - Linked: LOG-0107, LOG-0106, LOG-0101.
 - Tutor review: pending
+
+## [LOG-0110] 2026-11-15 00:52 IST | NOTE | actor: tutor
+- Reason: Record tutor review of the Phase 2 safe regression additions and independently confirm their focused evidence.
+- Details / Change:
+  1. Approved the test-only compile flag because ordinary production builds retain the existing `close_range` behavior while the focused build deterministically selects `/proc/self/fd` enumeration.
+  2. Confirmed the regression opens FD 256 or higher, lowers only the forked child's soft `RLIMIT_NOFILE` to 128 afterward, and checks that cleanup closes the inherited FD while preserving the setup-error FD.
+  3. Confirmed the seccomp probe runs trusted `/bin/true` after filter installation and separately checks `socket()` and `connect()` return `EPERM`.
+  4. Review scope is limited to those test contracts and code paths. Phase 2 runtime isolation and its DoD remain OPEN; this note is not phase sign-off.
+- Independent verification: `make clean && make all && make test-setup-protocol && make test-phase2-seccomp-safe` passed; normal setup path 5/5; forced fallback 5/5; `/bin/true` startup passed and socket/connect were denied. Preflight 6/6, diagnostics 18/18, append-only/hygiene hooks, and `git diff --check` passed. Build artifacts were cleaned. No Phase 2 attack fixture was run.
+- Files: PROGRESS.md.
+- Linked: LOG-0104 through LOG-0109.
+- Tutor review: approved for the focused safe regressions only.
