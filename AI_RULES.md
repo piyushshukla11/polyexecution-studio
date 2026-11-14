@@ -120,3 +120,10 @@ Stop and ask Piyush (and tell him to consult the tutor) when: you want to change
 - **Staging prohibition:** Never run `git add -f`, `git add .`, or `git add -A` on `LEARNING_NOTES/`. Never stage files from this directory. Do not reference private study contents in public commit messages.
 - **Re-clone notice:** Because `.git/info/exclude` is not cloned, re-adding `LEARNING_NOTES/` to `.git/info/exclude` is required if the repository is cloned afresh.
 - **Continuous maintenance:** In the same turn as each new Change Report, the coding agent must append teaching guides, complete Change Reports with unabridged evidence blocks, new interview questions with empty answer blocks, and new glossary terms to the corresponding files in `LEARNING_NOTES/`.
+
+## 14. Project-wide learning completion gate
+- Piyush may continue authorized project work while required learning questions or exercises remain open. Phase-specific Definitions of Done, explain-back checks, and merge rules still apply.
+- The whole PES project must not be declared finished, complete, or interview-ready until Piyush has independently answered every required question and completed every required exercise listed in `docs/05_INTERVIEW_PREP.md`.
+- The agent may teach, give hints, and review Piyush's work. For exercises explicitly marked owner-authored, the agent must not write the solution and present it as Piyush's contribution.
+- Every new required question or exercise assigned by the tutor or agent must be added to the checklist in `docs/05_INTERVIEW_PREP.md`. Label optional practice as optional so the completion gate stays finite and clear.
+- Track completion through tutor-reviewed `LEARNING` entries in `PROGRESS.md`. Do not mark an item complete merely because agent-authored code or an agent report exists.

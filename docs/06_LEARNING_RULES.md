@@ -15,3 +15,7 @@
 13. **Commit small, commit often.** Each commit message references a LOG id.
 14. **Teach it.** Explain a phase to a friend or write a short blog note; teaching exposes gaps.
 15. **Be honest in the log.** If you didn't understand something, write "NOT UNDERSTOOD" and revisit.
+16. **Keep learning open while building.** Piyush may continue authorized project work while required questions or exercises remain unfinished. Phase-specific DoD, explain-back, review, and merge gates still apply.
+17. **Do not call PES complete early.** The whole project cannot be marked finished until Piyush independently answers every required question and completes every required exercise in `docs/05_INTERVIEW_PREP.md`. The tutor reviews completion and records it in a `LEARNING` entry in `PROGRESS.md`.
+18. **Owner-authored exercises must be yours.** For exercises marked owner-authored, the agent can explain concepts, give hints, and review the result, but must not write the solution for you. Agent-authored code does not count as your exercise completion.
+19. **Keep the completion list current and finite.** Add every newly assigned required question or exercise to `docs/05_INTERVIEW_PREP.md`. Mark extra practice as optional; optional work does not block project completion.

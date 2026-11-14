@@ -1286,3 +1286,16 @@
 - Linked: LOG-0071
 - Piyush prediction (optional): Work can continue while learning exercises remain open, but PES cannot be declared complete until every required question and exercise is passed.
 - Tutor review: pending
+
+## [LOG-0073] 2026-11-14 23:11 IST | DONE | actor: tutor
+- Reason: Begin the requested sign-off process and document Piyush's project-wide learning-completion rule and required interview questions and exercises.
+- Details / Change:
+  1. Added AI_RULES.md section 14: authorized project work may continue with open learning items, but PES cannot be declared complete until every required question and exercise is tutor-reviewed; new required items must be added to the finite checklist.
+  2. Added matching rules to docs/06_LEARNING_RULES.md and made completion of the learning checklist part of Phase 7's final Definition of Done in docs/04_BUILD_PLAN.md.
+  3. Updated docs/05_INTERVIEW_PREP.md with an honest current-state pitch and AI attribution, a project-wide explain-back checklist covering architecture/Yjs/CRDT/gRPC/sandbox/security/evidence, the three owner-authored regression exercises, and required experiments and core-code recall.
+  4. Started sign-off as OPEN. Phase 1 learning sign-off and merge approval remain pending Piyush's explain-back and personal exercise review; no phase was marked complete.
+  5. The Phase 1 status, test results, and prior agent reports were not re-verified as part of this documentation change. No tests were run.
+- Files: AI_RULES.md, docs/04_BUILD_PLAN.md, docs/05_INTERVIEW_PREP.md, docs/06_LEARNING_RULES.md, PROGRESS.md
+- Linked: LOG-0072
+- Piyush prediction (optional): I can continue remaining authorized work while learning is open, but the project stays in progress until I pass the complete required checklist.
+- Tutor review: pending
