@@ -948,3 +948,23 @@
 - Linked: LOG-0052
 - Piyush prediction (optional): Mounting procfs after Child 2 is born will guarantee that /proc contains only sandbox processes rather than host system processes.
 - Tutor review: pending
+
+## [LOG-0054] 2026-11-14 13:35 IST | DONE | actor: agent
+- Reason: Complete verification and documentation of PID namespace and procfs lifecycle ordering contracts.
+- Details / Change:
+  1. Updated docs/03_SANDBOX_DEEP_DIVE.md:
+     - Updated the Phase 2 isolation handshake diagram (Step 13) to explicitly place private procfs mounting inside Child 2 after fork, preventing host process table leaks.
+     - Added comprehensive Section 7: "PID Namespace Lifecycle, PID 1 Semantics, and Procfs Mount Ordering (pid_namespaces(7), proc(5))".
+     - Documented why unshare(CLONE_NEWPID) does not change caller PID namespace (immutable PID allocation invariant).
+     - Documented PID 1 assignment and supervisor hierarchy (Child 1 helper supervises and reaps Child 2 from outer namespace).
+     - Documented procfs mount ordering trap (mounting before fork leaks host PIDs; mounting after fork inside new PID namespace provides isolated process view).
+     - Documented PID 1 termination semantics (kernel immediately sends SIGKILL to all remaining processes in the namespace).
+     - Documented honest runtime status: unshare(CLONE_NEWPID) probe returns ENOSYS on this host.
+  2. Updated scripts/test_phase2_diagnostics.py:
+     - Added test_pid_namespace_and_procfs_lifecycle_contract verifying structured documentation of PID immutability, PID 1 supervision, procfs mount ordering, and PID 1 exit SIGKILL cascade (14/14 tests pass in 0.381s).
+  3. Updated LEARNING_NOTES/phase-1.md (local-only, not committed) with matching systems concepts.
+  4. Ran regression and diagnostic test suites; all tests pass.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, scripts/test_phase2_diagnostics.py, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0053
+- Piyush prediction (optional): Mounting procfs after Child 2 is born will guarantee that /proc contains only sandbox processes rather than host system processes.
+- Tutor review: pending

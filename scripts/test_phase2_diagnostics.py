@@ -251,6 +251,35 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
         self.assertIn("unshare(CLONE_NEWUSER)", doc)
         self.assertIn("errno=38 (ENOSYS)", doc)
 
+    def test_pid_namespace_and_procfs_lifecycle_contract(self) -> None:
+        """
+        Verify that architecture documentation strictly encodes the PID namespace
+        lifecycle, PID 1 semantics, and procfs mount ordering (pid_namespaces(7) and proc(5)).
+        """
+        doc = (REPO_ROOT / "docs" / "03_SANDBOX_DEEP_DIVE.md").read_text()
+
+        # Must document why unshare(CLONE_NEWPID) does not change caller PID namespace
+        self.assertIn("Why `unshare(CLONE_NEWPID)` Does Not Change the Caller", doc)
+        self.assertIn("immutable attribute assigned when the process is created", doc)
+
+        # Must document that the first child becomes PID 1 and Child 1 supervises it
+        self.assertIn("PID 1 Assignment and Supervisor Hierarchy", doc)
+        self.assertIn("Child 2 is born as PID 1", doc)
+        self.assertIn("acts as its supervisor", doc)
+
+        # Must document procfs mount ordering: host leak if before, isolated if after
+        self.assertIn("Procfs Mount Ordering: Host Leak vs True Process Table Isolation", doc)
+        self.assertIn("Step 13: Mount Private Procfs (from inside new PID namespace)", doc)
+        self.assertIn("executed by Child 2 inside new PID namespace", doc)
+
+        # Must document that PID 1 termination causes kernel to send SIGKILL to all processes
+        self.assertIn("PID 1 Exit and Guaranteed Descendant Termination", doc)
+        self.assertIn("kernel immediately sends `SIGKILL` to *all* remaining processes", doc)
+
+        # Must acknowledge the host ENOSYS runtime boundary
+        self.assertIn("unshare(CLONE_NEWPID)", doc)
+        self.assertIn("errno=38 (ENOSYS)", doc)
+
     def test_safe_compilation_all_phase2_fixtures(self) -> None:
         """
         Safely compiles all Phase 2 evil fixtures with -Wall -Wextra -Werror.

@@ -190,17 +190,22 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
 +-----------------------------------------------------------------------------------+
 |                           TARGET PROCESS (Child 2, PID 1)                         |
 +-----------------------------------------------------------------------------------+
-| Step 13: Enforce No-New-Privileges Boundary                                       |
+| Step 13: Mount Private Procfs (from inside new PID namespace)                     |
+|          -> mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) |
+|          -> CRITICAL: Must be executed by Child 2 inside new PID namespace so      |
+|             /proc displays only container processes, not host process table        |
++-----------------------------------------------------------------------------------+
+| Step 14: Enforce No-New-Privileges Boundary                                       |
 |          -> prctl(PR_SET_NO_NEW_PRIVS, 1) [mandatory before unprivileged seccomp] |
 +-----------------------------------------------------------------------------------+
-| Step 14: Install Seccomp-BPF Syscall Filter                                       |
+| Step 15: Install Seccomp-BPF Syscall Filter                                       |
 |          -> Install allowlist validated against runtime dynamic linker (ld.so)    |
 |          -> Permanent lockdown: blocks socket, mount, pivot_root, ptrace, setuid  |
 +-----------------------------------------------------------------------------------+
-| Step 15: Execute Target Program via execve                                        |
+| Step 16: Execute Target Program via execve                                        |
 |          -> execve(binary, argv, envp) with scrubbed environment                 |
 +-----------------------------------------------------------------------------------+
-| Step 16: Supervise & Reap (Child 1 & Parent)                                      |
+| Step 17: Supervise & Reap (Child 1 & Parent)                                      |
 |          -> Child 1 waits on Child 2 (PID 1 of namespace); reaps all exit statuses|
 |          -> If Child 2 dies, kernel terminates all processes in the namespace     |
 |          -> Parent supervisor enforces wall timeouts and cleans up cgroups        |
@@ -255,6 +260,25 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
      - *Single-ID Mapping Limit:* Under unprivileged direct-write, only one UID and one GID can be mapped. A distinct `nobody` identity (UID 65534) cannot be mapped alongside root.
    * *Host Runtime Boundary:*
      - On the current host, `unshare(CLONE_NEWUSER)` returns `ret=-1, errno=38 (ENOSYS)`. Neither Route A nor Route B can be executed live until functional user namespaces are supported by the environment.
+
+7. **PID Namespace Lifecycle, PID 1 Semantics, and Procfs Mount Ordering (`pid_namespaces(7)`, `proc(5)`):**
+   * *Why `unshare(CLONE_NEWPID)` Does Not Change the Caller's PID Namespace:*
+     In Linux, a process's PID in its active namespace is an immutable attribute assigned when the process is created (`fork(2)` / `clone(2)`). Changing the PID of an already-running process would violate POSIX invariants, break glibc's cached PID values (`getpid()`), invalidate file descriptors and `/proc/[pid]` directory structures, and disrupt signal routing. Therefore, `unshare(CLONE_NEWPID)` alters only the namespace in which *subsequent children* of the calling process will be created. The calling process (Child 1) remains in its original (parent) PID namespace.
+   * *PID 1 Assignment and Supervisor Hierarchy:*
+     The first child spawned by Child 1 via `fork()` after calling `unshare(CLONE_NEWPID)` becomes PID 1 of the newly created PID namespace (Child 2).
+     - Inside the container PID namespace, Child 2 has PID 1 (`getpid() == 1`).
+     - In the outer parent PID namespace, Child 2 is assigned a standard host PID (e.g. PID 48215).
+     - Child 1 (the helper process) resides in the parent PID namespace, holding Child 2's host PID, and acts as its supervisor, reaping it via `waitpid(child2_pid, &status, 0)`.
+   * *Procfs Mount Ordering: Host Leak vs True Process Table Isolation (`proc(5)`):*
+     The `/proc` virtual filesystem is not a global static view; its entries directly reflect the PID namespace of the process that executes the `mount(2)` syscall (`mount -t proc proc /proc`).
+     - *The Ordering Trap:* If Child 1 mounts `/proc` *before* forking Child 2 (e.g. during initial rootfs preparation), the mount reflects Child 1's PID namespace (the host parent namespace). As a result, the container inherits a `/proc` filesystem displaying all host processes, completely defeating process table isolation!
+     - *The Correct Contract:* The `/proc` filesystem must be mounted *after* Child 2 is forked, executed from *inside* the new PID namespace by Child 2 (PID 1). Because Child 2 resides in the new PID namespace, mounting `proc` creates a private process table containing only PID 1 and its descendants.
+   * *PID 1 Exit and Guaranteed Descendant Termination:*
+     In Linux (`pid_namespaces(7)`), PID 1 serves as the `init` process of its namespace. If PID 1 terminates for any reason (normal `_exit`, uncaught signal, `SIGKILL` from supervisor, or memory/CPU fault), the Linux kernel immediately sends `SIGKILL` to *all* remaining processes inside that PID namespace.
+     - Unlike standard process groups where orphaned grandchildren can survive if they call `setsid()`, no process can survive in a PID namespace once PID 1 exits.
+     - This guarantees clean, leak-free teardown of multi-process fork-bombs and background daemons.
+   * *Host Runtime Boundary:*
+     On the current host, `unshare(CLONE_NEWPID)` returns `ret=-1, errno=38 (ENOSYS)`. Runtime verification of child PID namespace creation and procfs isolation cannot be exercised live in this environment.
 
 ### 3. Resource Limits vs Sandbox Isolation (Defense in Depth)
 A common beginner misconception is assuming that resource limits (`RLIMIT_CPU`, `RLIMIT_AS`) constitute sandboxing.
