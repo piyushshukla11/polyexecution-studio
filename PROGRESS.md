@@ -490,3 +490,31 @@
 - Linked: LOG-0032
 - Piyush prediction (optional): The regression lab will automate the verification of all 13 Phase 1 behaviors, catch regressions reliably, and ensure clean cleanup of temporary files and processes.
 - Tutor review: pending
+
+## [LOG-0034] 2026-11-14 11:24 IST | DONE | actor: agent
+- Reason: Complete Phase 1 regression lab test harness implementation in sandbox-daemon/tests/test_runner.py and Makefile integration.
+- Details / Change:
+  1. Created sandbox-daemon/tests/test_runner.py using only the Python standard library.
+  2. Implemented 15 comprehensive automated test cases covering all specified Phase 1 behaviors:
+     - Test 1: Clean exit 0 -> OK, exit_code 0, signal 0.
+     - Test 2: Non-zero exit (exit 7) -> RUNTIME_ERROR, exit_code 7 preserved.
+     - Test 3: Disambiguation between valid target exit 127 (RUNTIME_ERROR, clean stderr) and execve failure (SANDBOX_ERROR, exit_code 127, diagnostic in stderr).
+     - Test 4: Ordinary SIGSEGV (signal 11) -> RUNTIME_ERROR without triggering heuristic.
+     - Test 5: CPU loop -> TIMEOUT, signal 24 (SIGXCPU), cpu_ms >= 800.
+     - Test 6: Wall-clock timeout (sleeper) -> TIMEOUT, wall_ms >= 1000, cpu_ms near 0.
+     - Test 7: Stream separation (stdout_stderr, stderr_only) -> isolated buffers.
+     - Test 8: Output flood -> OUTPUT_LIMIT, stdout strictly capped at 64 KiB.
+     - Test 9: File size ceiling -> OUTPUT_LIMIT, signal 25 (SIGXFSZ), cleaned /tmp/pes_test_fsize.tmp.
+     - Test 10: Grandchild holding pipe open (descendant_pipe) -> reaped child in 51ms without waiting for 60s grandchild sleep.
+     - Test 11: Early stream closure (close_stream_sleep) -> wall timeout enforced at 1001ms despite closed stdout/stderr fds.
+     - Test 12: RFC 8259 JSON validation and exact 100% byte-for-byte Latin-1 round-trip reconstruction.
+     - Test 13: Memory bomb -> MEMORY_LIMIT, signal 11, RSS heuristic >= 80% of RLIMIT_AS confirmed.
+     - Test 14: Custom CLI flags (--job-id, --timeout-ms) verified.
+     - Test 15: Host process table check verifying 0 lingering runner/evil processes.
+  3. Integrated harness into sandbox-daemon/Makefile with 'test' target under .PHONY.
+  4. Ran full regression suite: 15/15 passed with 0 failures and 0 skips.
+  5. Verified zero zombie processes and clean temporary file removal.
+- Files: PROGRESS.md, sandbox-daemon/tests/test_runner.py, sandbox-daemon/Makefile, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0033
+- Piyush prediction (optional): The regression lab will automate the verification of all 13 Phase 1 behaviors, catch regressions reliably, and ensure clean cleanup of temporary files and processes.
+- Tutor review: pending

@@ -30,4 +30,7 @@ clean:
 	rm -f $(OBJS) $(TARGET)
 	rm -rf $(EVIL_BIN_DIR)
 
-.PHONY: all clean evil
+test: all evil
+	python3 tests/test_runner.py
+
+.PHONY: all clean evil test
