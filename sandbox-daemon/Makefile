@@ -49,6 +49,8 @@ test-setup-protocol: all
 	mkdir -p $(EVIL_BIN_DIR)
 	$(CC) $(CFLAGS) -o $(EVIL_BIN_DIR)/test_setup_handshake tests/test_setup_handshake.c phase2_cgroup.c phase2_userns.c phase2_rootfs.c phase2_privilege.c $(LDLIBS)
 	$(EVIL_BIN_DIR)/test_setup_handshake
+	$(CC) $(CFLAGS) -DPES_TEST_FORCE_CLOSE_RANGE_FAILURE -o $(EVIL_BIN_DIR)/test_setup_handshake_fallback tests/test_setup_handshake.c phase2_cgroup.c phase2_userns.c phase2_rootfs.c phase2_privilege.c $(LDLIBS)
+	$(EVIL_BIN_DIR)/test_setup_handshake_fallback
 
 test-phase2-structural: all
 	mkdir -p $(EVIL_BIN_DIR)

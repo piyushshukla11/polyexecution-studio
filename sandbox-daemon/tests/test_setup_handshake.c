@@ -74,6 +74,8 @@ static int test_unrelated_descriptor_is_closed(void) {
     if (pipe(gate) < 0 || pipe(stdout_pipe) < 0 || pipe(stderr_pipe) < 0) return 1;
     int unrelated = open("/dev/null", O_RDONLY | O_CLOEXEC);
     if (unrelated < 0) return 1;
+    unrelated = fcntl(unrelated, F_DUPFD_CLOEXEC, 256);
+    if (unrelated < 256) return 1;
     pid_t child = fork();
     if (child < 0) return 1;
     if (child == 0) {
@@ -110,6 +112,10 @@ int main(void) {
     if (test_partial_record_is_protocol_error() != 0) return 3;
     if (test_stalled_handshake_times_out() != 0) return 4;
     if (test_unrelated_descriptor_is_closed() != 0) return 5;
+#ifdef PES_TEST_FORCE_CLOSE_RANGE_FAILURE
+    puts("setup protocol and FD inheritance: 5/5 passed (forced /proc fallback; high FD closed)");
+#else
     puts("setup protocol and FD inheritance: 5/5 passed (including bounded stall timeout)");
+#endif
     return 0;
 }

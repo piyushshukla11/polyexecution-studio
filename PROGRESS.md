@@ -1629,3 +1629,23 @@
 - Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_setup_handshake.c, sandbox-daemon/tests/test_seccomp_policy.c, sandbox-daemon/Makefile, LEARNING_NOTES/*.
 - Linked: LOG-0101, LOG-0103, LOG-0094.
 - Tutor review: pending
+
+## [LOG-0105] 2026-11-15 00:50 IST | CORRECTION | actor: agent
+- Reason: Correct the timestamp recorded in the PLAN entry LOG-0104; its timestamp was entered as a placeholder rather than read from the system clock.
+- Details / Change: LOG-0104 was appended at 2026-11-15 00:48 IST, as observed from `TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M IST'` immediately after the append. The original entry remains unchanged.
+- Files: PROGRESS.md.
+- Linked: LOG-0104.
+- Tutor review: pending
+
+## [LOG-0106] 2026-11-15 00:50 IST | DONE | actor: agent
+- Reason: Add focused safe runtime regressions for the `/proc/self/fd` fallback and the seccomp startup/denial policy while preserving the open Phase 2 status.
+- Details / Change:
+  1. Added test-build-only `PES_TEST_FORCE_CLOSE_RANGE_FAILURE` path to exercise the existing fallback without altering production builds.
+  2. Updated the setup/FD test to duplicate an inherited descriptor to FD 256 or higher; both normal and forced-fallback binaries verify that unrelated FD closes and the setup-error FD remains open. Each reported 5/5.
+  3. Updated the safe seccomp probe: trusted `/bin/true` startup succeeded after filter installation, and `socket()` and `connect()` each returned `EPERM`.
+  4. Added the fallback binary to `make test-setup-protocol` and updated private learning notes with explanation, evidence, and unanswered questions.
+- Verification: `cd sandbox-daemon && make clean && make all && make test-setup-protocol && make test-phase2-seccomp-safe` passed under `-Wall -Wextra -Werror -O2`. `python3 scripts/test_phase2_diagnostics.py` passed 18/18; `python3 scripts/test_phase2_preflight.py` passed 6/6; `git diff --check`, `bash scripts/check_progress_append_only.sh`, and `bash scripts/check_repo_hygiene.sh` passed. The first forced-fallback build exposed an unused test variable under `-Werror`; removed that variable and reran both focused targets successfully.
+  5. No `fork_bomb`, `read_etc_passwd`, or `net_connect` fixtures were run. Phase 2 DoD remains OPEN: host cgroup CPU delegation and required namespace/helper mapping permissions are unavailable; full isolation is not claimed.
+- Files: sandbox-daemon/Makefile, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_setup_handshake.c, sandbox-daemon/tests/test_seccomp_policy.c, PROGRESS.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
+- Linked: LOG-0104, LOG-0101, LOG-0103, LOG-0094.
+- Tutor review: pending

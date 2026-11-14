@@ -231,6 +231,9 @@ static int cleanup_job_resources(phase2_cgroup_t *cgroup, const char *root_mount
 
 static int close_unrelated_fds(int preserve_fd) {
 #ifdef SYS_close_range
+#ifdef PES_TEST_FORCE_CLOSE_RANGE_FAILURE
+    /* Test-only build switch: exercise the /proc fallback deterministically. */
+#else
     bool close_range_ok = true;
     if (preserve_fd > STDERR_FILENO + 1 &&
         syscall(SYS_close_range, (unsigned int)(STDERR_FILENO + 1), (unsigned int)(preserve_fd - 1), 0) < 0) {
@@ -243,6 +246,7 @@ static int close_unrelated_fds(int preserve_fd) {
         close_range_ok = false;
     }
     if (close_range_ok) return 0;
+#endif
 #endif
     DIR *directory = opendir("/proc/self/fd");
     if (!directory) return -1;
