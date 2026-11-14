@@ -775,6 +775,22 @@
 - Piyush prediction (optional): The architecture will accurately reflect Linux kernel requirements, avoiding the invalid attempt to write uid_map before the user namespace exists.
 - Tutor review: pending
 
+## [LOG-0046] 2026-11-14 12:59 IST | DONE | actor: agent
+- Reason: Complete namespace and PID namespace lifecycle architecture correction in docs/03_SANDBOX_DEEP_DIVE.md and LEARNING_NOTES/phase-1.md based on man pages for unshare(2), clone(2), user_namespaces(7), and pid_namespaces(7).
+- Details / Change:
+  1. Updated docs/03_SANDBOX_DEEP_DIVE.md:
+     - Corrected user namespace lifecycle: established that /proc/[pid]/uid_map belongs to the user namespace the child process currently inhabits; the parent cannot map subordinate IDs until after the child invokes unshare(CLONE_NEWUSER).
+     - Documented precise two-pipe synchronization handshake (child_to_parent_sync and parent_to_child_sync) guaranteeing Child 1 pauses while parent establishes cgroup placement and UID/GID mappings.
+     - Documented PID namespace semantics from pid_namespaces(7): unshare(CLONE_NEWPID) does not move the calling process into the new namespace; subsequent children created via fork() inhabit the new namespace.
+     - Documented the intermediate supervisor pattern: Child 1 calls unshare(CLONE_NEWPID) and forks Child 2; Child 2 is born as PID 1 of the new PID namespace, installs seccomp, and execs the target binary.
+     - Explicitly stated architecture assumptions and reiterated that unshare ENOSYS in the current environment prevents executing this flow live.
+  2. Updated LEARNING_NOTES/phase-1.md (local-only) with matching sequence explanations.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0045
+- Piyush prediction (optional): The architecture will accurately reflect Linux kernel requirements, avoiding the invalid attempt to write uid_map before the user namespace exists.
+- Tutor review: pending
+
+
 
 
 

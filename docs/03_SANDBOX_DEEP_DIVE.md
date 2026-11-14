@@ -90,7 +90,13 @@ Three Phase 2 adversarial test programs exist in `sandbox-daemon/tests/evil/`. T
 
 ## Phase 2 Isolation Architecture & Strict Dependency Ordering
 
-To achieve defense in depth without privilege leaks or self-blocking race conditions, Phase 2 containerization must strictly separate **Parent Supervisor Responsibilities** from the **Isolated Child Lifecycle**:
+To achieve defense in depth without privilege leaks or self-blocking race conditions, Phase 2 containerization must strictly separate **Parent Supervisor Responsibilities** from the **Isolated Child Lifecycle**. 
+
+A common pitfall is attempting to write `uid_map`/`gid_map` before the user namespace exists, or expecting `unshare(CLONE_NEWPID)` to place the calling process into the new PID namespace. In Linux (`user_namespaces(7)`, `pid_namespaces(7)`, `unshare(2)`):
+* `/proc/[pid]/uid_map` belongs to the user namespace that `pid` currently inhabits; the parent cannot map subordinate IDs until **after** the child has invoked `unshare(CLONE_NEWUSER)`.
+* `unshare(CLONE_NEWPID)` does **not** move the caller into the new namespace; instead, the **first child created afterward via fork()** becomes PID 1 of the new PID namespace.
+
+### The Concrete Handshake Sequence:
 
 ```
 +-----------------------------------------------------------------------------------+
@@ -99,54 +105,102 @@ To achieve defense in depth without privilege leaks or self-blocking race condit
 | Step 1: Create Job Cgroup Directory                                               |
 |         -> mkdir /sys/fs/cgroup/user.slice/.../pes-job-<id>/                      |
 |         -> Write resource ceilings: pids.max = 32, memory.max = 128M              |
-|         -> Done by parent while holding caller's unprivileged user permissions    |
+|         -> Executed by parent holding caller's delegated permissions              |
 +-----------------------------------------------------------------------------------+
-| Step 2: Fork Sandbox Child Process                                                |
-|         -> Parent forks child; creates inter-process sync pipe / eventfd          |
+| Step 2: Create Inter-Process Sync Pipes (O_CLOEXEC)                               |
+|         -> child_to_parent_sync: child signals when user namespace is created     |
+|         -> parent_to_child_sync: parent signals when cgroup & ID mapping are done |
 +-----------------------------------------------------------------------------------+
-| Step 3: Attach Child to Cgroup & Map User IDs                                     |
-|         -> Parent writes child PID into pes-job-<id>/cgroup.procs                 |
-|         -> If rootless userns: parent executes newuidmap / newgidmap to map       |
-|            subordinate UID/GID ranges before child attempts identity transitions  |
-|         -> Parent signals child via pipe that environment is ready                |
+| Step 3: Fork Sandbox Helper (Child 1)                                             |
+|         -> Parent forks Child 1; Child 1 begins namespace setup                   |
 +-----------------------------------------------------------------------------------+
 
-                                      | (child proceeds)
+                                      | (Child 1 runs)
                                       v
 
 +-----------------------------------------------------------------------------------+
-|                             ISOLATED CHILD LIFECYCLE                              |
+|                        SANDBOX HELPER LIFECYCLE (Child 1)                         |
 +-----------------------------------------------------------------------------------+
-| Step 4: Wait for Parent Synchronization                                           |
-|         -> Child reads from sync pipe; ensures cgroup and uid_map are established |
+| Step 4: Create User Namespace                                                     |
+|         -> unshare(CLONE_NEWUSER)                                                 |
+|         -> Creates new user namespace; /proc/self/uid_map now belongs to it       |
+| Step 5: Pause at Synchronization Point                                            |
+|         -> Write 1 byte to child_to_parent_sync                                   |
+|         -> Block reading 1 byte from parent_to_child_sync                         |
 +-----------------------------------------------------------------------------------+
-| Step 5: Unshare Isolation Namespaces                                              |
+
+                                      | (Parent unblocks)
+                                      v
+
++-----------------------------------------------------------------------------------+
+|                           PARENT SUPERVISOR RESUMES                               |
++-----------------------------------------------------------------------------------+
+| Step 6: Attach Child 1 to Cgroup                                                  |
+|         -> Parent writes Child 1 PID into pes-job-<id>/cgroup.procs               |
+|         -> Must happen while parent has user UID 1000 permissions                 |
+|         -> Guarantees Child 1 (and all future descendants) are bound to cgroup    |
++-----------------------------------------------------------------------------------+
+| Step 7: Establish Subordinate UID and GID Mappings                                |
+|         -> Parent executes newuidmap / newgidmap targeting Child 1 PID            |
+|         -> Maps host UID 1000 to container UID 0, and subuid range (65536 IDs)    |
+|         -> Valid because Child 1 created the user namespace in Step 4            |
++-----------------------------------------------------------------------------------+
+| Step 8: Release Child 1                                                           |
+|         -> Parent writes 1 byte to parent_to_child_sync                           |
++-----------------------------------------------------------------------------------+
+
+                                      | (Child 1 unblocks)
+                                      v
+
++-----------------------------------------------------------------------------------+
+|                        SANDBOX HELPER CONTINUES (Child 1)                         |
++-----------------------------------------------------------------------------------+
+| Step 9: Unshare Remaining Isolation Namespaces                                    |
 |         -> unshare(CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS | CLONE_NEWIPC)     |
+|         -> KEY SEMANTICS: Child 1 remains in parent PID namespace; subsequent     |
+|            children created by Child 1 will inhabit the new PID namespace         |
 +-----------------------------------------------------------------------------------+
-| Step 6: Private Mount Propagation & Minimal Rootfs Setup                          |
-|         -> mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL)                      |
-|         -> Mount private tmpfs workspace and bind-mount read-only libraries       |
+| Step 10: Private Mount Setup & pivot_root                                         |
+|          -> mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL)                     |
+|          -> Mount private tmpfs workspace and bind-mount read-only libraries      |
+|          -> pivot_root(new_root, put_old); detach old root                        |
 +-----------------------------------------------------------------------------------+
-| Step 7: Swap Root Filesystem via pivot_root                                       |
-|         -> pivot_root(new_root, put_old) swaps process view of /                  |
-|         -> Detach and unmount old root directory (umount2(put_old, MNT_DETACH))   |
+| Step 11: Drop Auxiliary Groups & Drop Privileges                                  |
+|          -> setgroups(0, NULL); setgid(nobody_gid); setuid(nobody_uid)            |
+|          -> Uses mapped IDs established by parent in Step 7                       |
 +-----------------------------------------------------------------------------------+
-| Step 8: Drop Auxiliary Groups & Drop Privileges                                   |
-|         -> setgroups(0, NULL); setgid(nobody_gid); setuid(nobody_uid)             |
-|         -> MUST use mapped IDs established by parent in Step 3                    |
+| Step 12: Fork Target Process (Child 2)                                            |
+|          -> Child 1 invokes fork() to spawn Child 2                               |
+|          -> KEY SEMANTICS: Child 2 is born as PID 1 of the new PID namespace!    |
 +-----------------------------------------------------------------------------------+
-| Step 9: Enforce No-New-Privileges Boundary                                        |
-|         -> prctl(PR_SET_NO_NEW_PRIVS, 1)                                          |
-|         -> Mandatory kernel prerequisite before installing unprivileged seccomp   |
+
+                                      | (Child 2 runs as PID 1)
+                                      v
+
 +-----------------------------------------------------------------------------------+
-| Step 10: Install Seccomp-BPF Syscall Filter                                       |
-|          -> Install allowlist validated against runtime dynamic linker (ld.so)   |
+|                           TARGET PROCESS (Child 2, PID 1)                         |
++-----------------------------------------------------------------------------------+
+| Step 13: Enforce No-New-Privileges Boundary                                       |
+|          -> prctl(PR_SET_NO_NEW_PRIVS, 1) [mandatory before unprivileged seccomp] |
++-----------------------------------------------------------------------------------+
+| Step 14: Install Seccomp-BPF Syscall Filter                                       |
+|          -> Install allowlist validated against runtime dynamic linker (ld.so)    |
 |          -> Permanent lockdown: blocks socket, mount, pivot_root, ptrace, setuid  |
 +-----------------------------------------------------------------------------------+
-| Step 11: Execute Target Program via execve                                        |
-|          -> execve(binary, argv, envp) with scrubbed environment                  |
+| Step 15: Execute Target Program via execve                                        |
+|          -> execve(binary, argv, envp) with scrubbed environment                 |
++-----------------------------------------------------------------------------------+
+| Step 16: Supervise & Reap (Child 1 & Parent)                                      |
+|          -> Child 1 waits on Child 2 (PID 1 of namespace); reaps all exit statuses|
+|          -> If Child 2 dies, kernel terminates all processes in the namespace     |
+|          -> Parent supervisor enforces wall timeouts and cleans up cgroups        |
 +-----------------------------------------------------------------------------------+
 ```
+
+### Architectural Notes & Assumptions:
+1. **User Namespace Ordering:** `/proc/[pid]/uid_map` exists only after the child creates the user namespace (`unshare(CLONE_NEWUSER)`). The synchronization pipes ensure the child pauses until the parent has written the mappings using `newuidmap`/`newgidmap`.
+2. **PID Namespace Two-Process Pattern:** Because `unshare(CLONE_NEWPID)` does not place the calling process into the new namespace, an intermediate fork is required. Child 1 unshares `CLONE_NEWPID` and forks Child 2. Child 2 becomes PID 1 of the new namespace.
+3. **Environment Limitation:** In our current container execution environment, `libc.unshare(CLONE_NEWUSER)` returns `errno=38 (ENOSYS)`. This full handshake cannot be executed live in this container until unprivileged user namespaces are available.
 
 ### Why This Ordering is Essential (Avoiding Classic Systems Traps):
 
