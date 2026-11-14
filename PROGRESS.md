@@ -1242,3 +1242,18 @@
 - Linked: LOG-0068
 - Piyush prediction (optional): Maintaining a strict distinction between documentation-contract testing and runtime kernel enforcement prevents false security assumptions.
 - Tutor review: pending
+
+## [LOG-0070] 2026-11-14 22:57 IST | PLAN | actor: agent
+- Reason: Plan test quality enhancements for test_privilege_ordering_and_capability_contract in scripts/test_phase2_diagnostics.py addressing tutor review notes.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before modifying test code.
+  2. In scripts/test_phase2_diagnostics.py, update test_privilege_ordering_and_capability_contract:
+     - Anchor structural stage assertions specifically to the canonical lifecycle subsection: between "*Exact Step-by-Step Privilege Reduction Sequence (Child 2):*" and "*Status Verification Contract (`/proc/self/status`):*".
+     - Assert that all 10 stages ("Stage 1" through "Stage 10") appear in exact numerical sequence with regex matching, proving that no intermediate stages exist between Stage 9 (install seccomp) and Stage 10 (execve), verifying that seccomp is immediately before execve.
+     - Keep assertions verifying that the documentation specifies CAP_SYS_ADMIN for mount, CAP_SETPCAP for PR_CAPBSET_DROP, NNP before seccomp, and the 64-bit zero capability bitmask verification contract.
+  3. Run test suites (test_phase2_preflight.py, test_phase2_diagnostics.py, and sandbox-daemon make clean && make test).
+  4. Append LOG-0071 (DONE) and commit Part 2 changes.
+- Files: PROGRESS.md, scripts/test_phase2_diagnostics.py
+- Linked: LOG-0069
+- Piyush prediction (optional): Anchoring stage checks to the canonical subsection and verifying the complete 10-stage list eliminates false positive matches from other sections and mathematically proves seccomp immediately precedes execve.
+- Tutor review: pending
