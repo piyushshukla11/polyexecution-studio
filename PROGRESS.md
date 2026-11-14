@@ -1659,3 +1659,22 @@
 - Files: PROGRESS.md, sandbox-daemon/tests/test_setup_handshake.c, LEARNING_NOTES/phase-overview.md.
 - Linked: LOG-0106, LOG-0101.
 - Tutor review: pending
+
+## [LOG-0108] 2026-11-15 00:50 IST | CORRECTION | actor: agent
+- Reason: Correct the timestamp in PLAN entry LOG-0107; the recorded time was a placeholder instead of the system clock reading.
+- Details / Change: LOG-0107 was appended at 2026-11-15 00:50 IST, as observed from `TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M IST'` immediately after the append. Its original timestamp remains unchanged.
+- Files: PROGRESS.md.
+- Linked: LOG-0107.
+- Tutor review: pending
+
+## [LOG-0109] 2026-11-15 00:50 IST | DONE | actor: agent
+- Reason: Make the forced fallback regression reproduce the already-open-FD-above-lowered-soft-limit condition identified in review.
+- Details / Change:
+  1. Retained the original low FD in a separate variable, duplicated it to FD 256 or higher, and closed the original descriptor.
+  2. In the forced-fallback fork child, lowered its soft `RLIMIT_NOFILE` to 128 after inheriting the high FD and before invoking `close_unrelated_fds()`.
+  3. The forced fallback still reports 5/5; the regression verifies the high inherited FD is closed and the setup-error FD is preserved. Normal-path setup test also reports 5/5.
+  4. Updated the private learning guide to explain why lowering the limit after opening the high FD catches a capped fallback scan.
+- Verification: `cd sandbox-daemon && make test-setup-protocol` passed under `-Wall -Wextra -Werror -O2`; normal path 5/5 and forced `/proc` fallback 5/5. No Phase 2 attack fixture was run.
+- Files: sandbox-daemon/tests/test_setup_handshake.c, PROGRESS.md, LEARNING_NOTES/phase-overview.md.
+- Linked: LOG-0107, LOG-0106, LOG-0101.
+- Tutor review: pending

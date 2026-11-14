@@ -72,9 +72,10 @@ static int test_stalled_handshake_times_out(void) {
 static int test_unrelated_descriptor_is_closed(void) {
     int gate[2], stdout_pipe[2], stderr_pipe[2];
     if (pipe(gate) < 0 || pipe(stdout_pipe) < 0 || pipe(stderr_pipe) < 0) return 1;
-    int unrelated = open("/dev/null", O_RDONLY | O_CLOEXEC);
-    if (unrelated < 0) return 1;
-    unrelated = fcntl(unrelated, F_DUPFD_CLOEXEC, 256);
+    int original_unrelated = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    if (original_unrelated < 0) return 1;
+    int unrelated = fcntl(original_unrelated, F_DUPFD_CLOEXEC, 256);
+    if (close(original_unrelated) < 0) return 1;
     if (unrelated < 256) return 1;
     pid_t child = fork();
     if (child < 0) return 1;
@@ -85,6 +86,12 @@ static int test_unrelated_descriptor_is_closed(void) {
         if (dup2(stdout_pipe[1], STDOUT_FILENO) < 0 || dup2(stderr_pipe[1], STDERR_FILENO) < 0) _exit(2);
         close(stdout_pipe[1]);
         close(stderr_pipe[1]);
+#ifdef PES_TEST_FORCE_CLOSE_RANGE_FAILURE
+        struct rlimit descriptor_limit;
+        if (getrlimit(RLIMIT_NOFILE, &descriptor_limit) < 0) _exit(4);
+        descriptor_limit.rlim_cur = 128;
+        if (setrlimit(RLIMIT_NOFILE, &descriptor_limit) < 0) _exit(5);
+#endif
         int result = close_unrelated_fds(gate[1]);
         int inherited = fcntl(unrelated, F_GETFD);
         int preserved = fcntl(gate[1], F_GETFD);
