@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""
+Unit and source-level verification tests for Phase 2 fixture diagnostics.
+Tier C Verification Suite
+
+Validates that Phase 2 fixtures provide deterministic diagnostic outputs
+without executing uncontained attacks:
+  1. Source-level checks for structured DIAG output, canary detection, and errno handling
+  2. Mock-based classifier distinguishing policy blocks from ambient errors
+  3. Safe compile-only check verifying zero warnings under -Wall -Wextra -Werror
+"""
+
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+EVIL_DIR = REPO_ROOT / "sandbox-daemon" / "tests" / "evil"
+
+
+def parse_diagnostic_line(line: str) -> dict:
+    """Parses a structured DIAG line emitted by Phase 2 fixtures."""
+    line = line.strip()
+    if not line.startswith("DIAG:"):
+        return {}
+    parts = line[5:].strip().split()
+    fields = {}
+    for part in parts:
+        if "=" in part:
+            k, v = part.split("=", 1)
+            fields[k] = v
+    return fields
+
+
+def classify_fixture_outcome(exit_code: int, stdout: str, stderr: str) -> dict:
+    """
+    Classifies a fixture's outcome based on exit code and diagnostic stream.
+    Rejects ambient network drops and container-internal passwd files from false claims.
+    """
+    diag_fields = {}
+    for line in stderr.splitlines():
+        if line.startswith("DIAG:"):
+            diag_fields = parse_diagnostic_line(line)
+            break
+
+    status = diag_fields.get("STATUS", "")
+    op = diag_fields.get("OP", "")
+    errno_str = diag_fields.get("ERRNO", "")
+
+    if exit_code == 0:
+        return {
+            "verdict": "BREACH",
+            "op": op,
+            "detail": f"Target breached containment policy (stdout: {stdout.strip()!r})",
+        }
+
+    if exit_code == 1:
+        if status == "BLOCKED_BY_POLICY":
+            return {
+                "verdict": "POLICY_DENIED",
+                "op": op,
+                "errno": errno_str,
+                "detail": f"Target was explicitly blocked by sandbox security policy ({op})",
+            }
+        if status == "CONTAINER_LOCAL_PASSWD_OBSERVED":
+            return {
+                "verdict": "SAFE_LOCAL_RESOURCE",
+                "op": op,
+                "detail": "Target opened container-local passwd without leaking host secrets",
+            }
+        return {
+            "verdict": "POLICY_DENIED",
+            "op": op,
+            "detail": "Exit 1 with expected policy containment",
+        }
+
+    # Exit code 2 or other non-zero
+    return {
+        "verdict": "UNEXPECTED_FAILURE",
+        "op": op,
+        "errno": errno_str,
+        "detail": f"Target failed due to ambient or system error (not proven isolation policy): {status}",
+    }
+
+
+class TestPhase2FixtureDiagnostics(unittest.TestCase):
+    """Verifies Phase 2 fixture diagnostics, contracts, and safe compilation."""
+
+    def test_read_etc_passwd_source_contract(self) -> None:
+        """Verify read_etc_passwd.c source structure and contracts."""
+        src = (EVIL_DIR / "read_etc_passwd.c").read_text()
+
+        # Must check host canary
+        self.assertIn("/etc/pes_host_canary", src)
+        # Must check host-specific user
+        self.assertIn("zogratis:", src)
+        # Must emit structured DIAG tag
+        self.assertIn("DIAG:", src)
+        # Must distinguish policy errnos
+        self.assertIn("ENOENT", src)
+        self.assertIn("EACCES", src)
+        self.assertIn("EPERM", src)
+        # Must return exit codes 0 (breach), 1 (policy), 2 (unexpected)
+        self.assertIn("return 0;", src)
+        self.assertIn("return 1;", src)
+        self.assertIn("return 2;", src)
+
+    def test_net_connect_source_contract(self) -> None:
+        """Verify net_connect.c source structure and contracts."""
+        src = (EVIL_DIR / "net_connect.c").read_text()
+
+        # Must emit structured DIAG tag
+        self.assertIn("DIAG:", src)
+        # Must distinguish expected network namespace behavior (ENETUNREACH)
+        self.assertIn("ENETUNREACH", src)
+        # Must distinguish seccomp socket blocks (EPERM, EACCES)
+        self.assertIn("EPERM", src)
+        self.assertIn("EACCES", src)
+        # Must return exit codes 0 (breach), 1 (policy), 2 (unexpected)
+        self.assertIn("return 0;", src)
+        self.assertIn("return 1;", src)
+        self.assertIn("return 2;", src)
+
+    def test_fork_bomb_safety_label(self) -> None:
+        """Verify fork_bomb.c contains safety warnings and verification guidance."""
+        src = (EVIL_DIR / "fork_bomb.c").read_text()
+        self.assertIn("DANGEROUS: DO NOT EXECUTE", src)
+        self.assertIn("pids.max", src)
+        self.assertIn("pids.events", src)
+        self.assertIn("cgroup.kill", src)
+
+    def test_mock_classification_network_policy_blocked(self) -> None:
+        """Verify classifier correctly recognizes ENETUNREACH as proven policy denial."""
+        mock_stderr = "DIAG: OP=connect TARGET=93.184.216.34:80 STATUS=BLOCKED_BY_POLICY ERRNO=101 (Network is unreachable)\n"
+        res = classify_fixture_outcome(exit_code=1, stdout="", stderr=mock_stderr)
+        self.assertEqual(res["verdict"], "POLICY_DENIED")
+        self.assertEqual(res["op"], "connect")
+        self.assertEqual(res["errno"], "101")
+
+    def test_mock_classification_network_ambient_timeout_rejected(self) -> None:
+        """
+        Verify classifier rejects ETIMEDOUT as proof of isolation.
+        Ambient network drops must be classified as UNEXPECTED_FAILURE.
+        """
+        mock_stderr = "DIAG: OP=connect TARGET=93.184.216.34:80 STATUS=UNEXPECTED_FAILURE ERRNO=110 (Connection timed out)\n"
+        res = classify_fixture_outcome(exit_code=2, stdout="", stderr=mock_stderr)
+        self.assertEqual(res["verdict"], "UNEXPECTED_FAILURE")
+        self.assertIn("ambient or system error", res["detail"])
+
+    def test_mock_classification_filesystem_canary_breach(self) -> None:
+        """Verify classifier correctly recognizes canary leak as breach."""
+        mock_stdout = "HOST_CANARY_LEAKED\n"
+        mock_stderr = "DIAG: OP=open TARGET=/etc/pes_host_canary STATUS=BREACH\n"
+        res = classify_fixture_outcome(exit_code=0, stdout=mock_stdout, stderr=mock_stderr)
+        self.assertEqual(res["verdict"], "BREACH")
+
+    def test_mock_classification_filesystem_local_passwd_safe(self) -> None:
+        """
+        Verify classifier correctly recognizes container-local passwd without host
+        data as safe containment rather than false positive breach.
+        """
+        mock_stderr = "DIAG: OP=read TARGET=/etc/passwd STATUS=CONTAINER_LOCAL_PASSWD_OBSERVED\n"
+        res = classify_fixture_outcome(exit_code=1, stdout="", stderr=mock_stderr)
+        self.assertEqual(res["verdict"], "SAFE_LOCAL_RESOURCE")
+
+    def test_safe_compilation_all_phase2_fixtures(self) -> None:
+        """
+        Safely compiles all Phase 2 evil fixtures with -Wall -Wextra -Werror.
+        Confirms zero warnings and zero errors without executing the binaries.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp = Path(tmp_dir)
+            fixtures = ["read_etc_passwd.c", "net_connect.c", "fork_bomb.c"]
+
+            for fname in fixtures:
+                src_path = EVIL_DIR / fname
+                bin_path = tmp / fname.replace(".c", "")
+
+                cmd = [
+                    "cc",
+                    "-Wall",
+                    "-Wextra",
+                    "-Werror",
+                    "-O2",
+                    str(src_path),
+                    "-o",
+                    str(bin_path),
+                ]
+                proc = subprocess.run(cmd, capture_output=True, text=True)
+                self.assertEqual(
+                    proc.returncode,
+                    0,
+                    f"Compilation of {fname} failed: {proc.stderr}",
+                )
+                self.assertTrue(bin_path.is_file())
+
+
+if __name__ == "__main__":
+    unittest.main()

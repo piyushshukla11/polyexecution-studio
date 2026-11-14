@@ -696,6 +696,32 @@
 - Piyush prediction (optional): Diagnosable fixtures will provide deterministic classification for future Phase 2 tests without risking execution today.
 - Tutor review: pending
 
+## [LOG-0042] 2026-11-14 12:42 IST | DONE | actor: agent
+- Reason: Complete diagnosable Phase 2 fixture outcomes and safe mock verification tests to distinguish policy denial from ambient errors without executing attacks.
+- Details / Change:
+  1. Updated sandbox-daemon/tests/evil/read_etc_passwd.c:
+     - Added structured DIAG: stream emission on stderr.
+     - Added host canary check (/etc/pes_host_canary) and host username detection ("zogratis:") to distinguish host leakage from legitimate container-local minimal passwd files.
+     - Established exit code contracts: 0 (BREACH), 1 (BLOCKED_BY_POLICY: ENOENT, EACCES, EPERM, or clean container passwd), 2 (UNEXPECTED_FAILURE).
+  2. Updated sandbox-daemon/tests/evil/net_connect.c:
+     - Added structured DIAG: stream emission on stderr.
+     - Distinguished expected network namespace isolation (connect returns ENETUNREACH synchronously) and seccomp policy (socket returns EPERM/EACCES) from ambient environmental errors (ETIMEDOUT, EHOSTUNREACH, ECONNREFUSED).
+     - Established exit code contracts: 0 (BREACH), 1 (BLOCKED_BY_POLICY), 2 (UNEXPECTED_FAILURE).
+  3. Updated sandbox-daemon/tests/evil/fork_bomb.c:
+     - Clearly labeled DANGEROUS: DO NOT EXECUTE.
+     - Documented future test verification requiring inspection of cgroups v2 pids.events max counter to prove kernel task ceiling enforcement.
+  4. Implemented scripts/test_phase2_diagnostics.py:
+     - Source-level contract checks for DIAG tags, error codes, and safety labels.
+     - Mock-based classification suite verifying policy blocks vs ambient network drops vs host leaks.
+     - Safe compile-only check verifying zero compiler warnings or errors under -Wall -Wextra -Werror.
+     - 8/8 tests passed in 0.397s without executing attacks.
+  5. Verified make clean && make test in sandbox-daemon/: all 18 Phase 1 regression tests pass, 3 Phase 2 checks remain pending.
+- Files: PROGRESS.md, sandbox-daemon/tests/evil/read_etc_passwd.c, sandbox-daemon/tests/evil/net_connect.c, sandbox-daemon/tests/evil/fork_bomb.c, scripts/test_phase2_diagnostics.py
+- Linked: LOG-0041
+- Piyush prediction (optional): Diagnosable fixtures will provide deterministic classification for future Phase 2 tests without risking execution today.
+- Tutor review: pending
+
+
 
 
 
