@@ -1007,3 +1007,25 @@
 - Linked: LOG-0055
 - Piyush prediction (optional): Documenting explicit argv/env contracts now will prevent insecure shell-string patterns when implementing Phase 3 gRPC.
 - Tutor review: pending
+
+## [LOG-0057] 2026-11-14 13:46 IST | PLAN | actor: agent
+- Reason: Plan identity and supplementary-group contract correction for Phase 2 user namespace architecture.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before updating architecture documentation.
+  2. Audit credentials(7), user_namespaces(7), setgroups(2), and execve(2) regarding supplementary groups:
+     - Distinguish real/effective/saved UIDs and GIDs from the supplementary group array (getgroups/setgroups).
+     - Document why setgid() and setuid() do NOT clear or modify supplementary groups.
+     - Document why supplementary groups survive execve(2).
+     - Document Route A vs Route B supplementary group behavior:
+       * Route A (newgidmap helper): Helper holds CAP_SETGID in parent namespace; /proc/PID/setgroups remains "allow"; Child 1 holds CAP_SETGID in new user namespace; Child 1 can and must call setgroups(0, NULL) before setgid/setuid; remains conditional on helper setuid permissions, subuid/subgid mapping, parent PR_SET_NO_NEW_PRIVS ordering, and kernel CLONE_NEWUSER support.
+       * Route B (unprivileged direct-write): Writing "deny" to /proc/PID/setgroups permanently disables setgroups(2); process cannot clear supplementary groups; host supplementary groups (e.g. wheel, docker, sudo) survive into sandboxed binary across execve; mark Route B as UNSUPPORTED for secure multi-tenant execution.
+  3. Update docs/03_SANDBOX_DEEP_DIVE.md:
+     - Update Step 11 of the isolation handshake diagram.
+     - Refine Section 6 to explain the supplementary group inheritance trap and mark Route B unsupported.
+  4. Update LEARNING_NOTES/phase-1.md (local-only, not committed) with matching systems concepts.
+  5. Run test suites to verify.
+  6. Append LOG-0058 (DONE) and commit Part 1 changes.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0056
+- Piyush prediction (optional): Clarifying that setgid/setuid do not clear supplementary groups will prevent subtle host privilege leaks into sandboxed processes.
+- Tutor review: pending
