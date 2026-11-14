@@ -1349,3 +1349,58 @@
 - Linked: LOG-0074
 - Piyush prediction (optional): Technical implementation can continue through the phases while the project remains incomplete until the final learning checklist is passed.
 - Tutor review: pending
+
+## [LOG-0078] 2026-11-14 23:42 IST | PLAN | actor: agent
+- Reason: Implement Phase 2 sandbox hardening and close a pre-exec setup-pipe hang that can bypass the existing wall deadline, while failing closed whenever any required isolation control cannot be established.
+- Details / Change:
+  1. Replace the unbounded setup error-pipe read with a monotonic-deadline state machine that polls the protocol pipe, distinguishes clean exec EOF from a setup error or malformed record, and kills/reaps the child on timeout or protocol failure.
+  2. Add deterministic regression coverage for setup-handshake timeout and protocol states without executing adversarial fixtures on this host.
+  3. Implement or gate Phase 2 isolation setup so namespace creation, UID/GID mapping, cgroup v2 limits, private root/proc, capability reduction, NNP, seccomp, and descendant cleanup are mandatory; report setup failure if any control is absent or fails.
+  4. Re-run the host preflight and safe structural/regression checks; retain explicit skips for attack fixtures unless full isolation is runtime-verified.
+  5. Append a DONE record with exact outcomes, preserve the learning gate, and commit the coherent implementation. Do not merge, push, or claim Phase 2 DoD without runtime attack proofs.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/Makefile, sandbox-daemon/tests/test_runner.py, Phase 2 diagnostics and documentation as required.
+- Linked: LOG-0077
+- Tutor review: pending
+
+## [LOG-0079] 2026-11-14 23:48 IST | PLAN | actor: agent
+- Reason: Fix the Phase 1 runner's pre-exec timeout bypass by bounding the setup-error handshake read with the run deadline and guaranteeing cleanup of a stalled direct child.
+- Details / Change:
+  1. Poll the close-on-exec setup pipe against the existing monotonic deadline while preserving complete-record, clean-EOF, and malformed-record outcomes.
+  2. On deadline expiry, kill the direct child and its process group if established, reap it, and report TIMEOUT; surface cleanup failure instead of claiming success.
+  3. Add a safe standalone C regression covering clean EOF, complete and partial records, stalled-handshake timeout, and kill/reap behavior.
+  4. Build under strict warning flags and run only the standalone regression; do not execute adversarial fixtures.
+- Files: sandbox-daemon/sandbox.c, sandbox-daemon/Makefile, sandbox-daemon/tests/test_setup_handshake.c, PROGRESS.md.
+- Linked: LOG-0078
+- Tutor review: pending
+
+## [LOG-0080] 2026-11-14 23:46 IST | CORRECTION | actor: agent
+- Reason: Correct the manually entered timestamp in LOG-0079; the timestamp command in that same append returned 2026-11-14 23:45 IST, not 23:48 IST.
+- Details / Change: LOG-0079 was appended at 2026-11-14 23:45 IST. Its scope and planned work are unchanged.
+- Files: PROGRESS.md.
+- Linked: LOG-0079
+- Tutor review: pending
+
+## [LOG-0081] 2026-11-14 23:45 IST | CORRECTION | actor: agent
+- Reason: Correct the manually entered timestamp in LOG-0080; its timestamp command returned 2026-11-14 23:45 IST.
+- Details / Change: LOG-0080 was appended at 2026-11-14 23:45 IST. LOG-0079 was appended at the same displayed minute. The task and correction details are unchanged.
+- Files: PROGRESS.md.
+- Linked: LOG-0080
+- Tutor review: pending
+
+## [LOG-0079] 2026-11-14 23:45 IST | DONE | actor: agent
+- Reason: Close the setup-pipe wall-timeout bypass and ensure a stalled pre-exec child is killed and reaped.
+- Details / Change:
+  1. Updated `parent_read_setup_error()` to poll the close-on-exec setup pipe against the original monotonic deadline. It retains distinct complete-record, clean-EOF, partial-protocol, and timeout results.
+  2. Added setup cleanup that sends SIGKILL to the child and (when established) its process group, then waits with `wait4()`. A cleanup failure is returned as a child-lost runner error rather than a successful timeout.
+  3. Added standalone regression coverage for clean EOF, complete record, partial record, and a held-open setup handshake. The timeout case verifies SIGKILL and reap.
+  4. Verification: `cd sandbox-daemon && make clean && make all && make test-setup-protocol` passed; output: `setup handshake protocol: 4/4 passed (including bounded stall timeout)`. `git diff --check` and `bash scripts/check_progress_append_only.sh` passed. Phase 2 attack fixtures were not executed.
+- Files: sandbox-daemon/sandbox.c, sandbox-daemon/Makefile, sandbox-daemon/tests/test_setup_handshake.c, PROGRESS.md.
+- Linked: LOG-0079 PLAN.
+- Tutor review: pending
+
+## [LOG-0082] 2026-11-14 23:46 IST | CORRECTION | actor: agent
+- Reason: Correct the timestamp in the LOG-0079 DONE entry; the timestamp command immediately before its append returned 2026-11-14 23:46 IST.
+- Details / Change: LOG-0079 DONE was appended at 2026-11-14 23:46 IST. Its result and evidence are unchanged.
+- Files: PROGRESS.md.
+- Linked: LOG-0079 DONE.
+- Tutor review: pending

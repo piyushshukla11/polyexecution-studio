@@ -38,4 +38,9 @@ clean:
 test: all evil
 	python3 tests/test_runner.py
 
-.PHONY: all clean evil test phase2-evil
+test-setup-protocol: all
+	mkdir -p $(EVIL_BIN_DIR)
+	$(CC) $(CFLAGS) -o $(EVIL_BIN_DIR)/test_setup_handshake tests/test_setup_handshake.c
+	$(EVIL_BIN_DIR)/test_setup_handshake
+
+.PHONY: all clean evil test test-setup-protocol phase2-evil

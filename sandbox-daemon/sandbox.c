@@ -1,6 +1,8 @@
 #define _GNU_SOURCE
 
 #include "sandbox.h"
+#include <limits.h>
+#include <signal.h>
 
 void sandbox_config_init_default(sandbox_config_t *cfg) {
     if (!cfg) return;
@@ -77,11 +79,26 @@ static void child_report_error_and_exit(int err_pipe_write_fd, setup_stage_t sta
  *  0: Clean EOF encountered with 0 bytes read -> no setup error record arrived.
  * -1: Partial record read or read error -> protocol error.
  */
-static int parent_read_setup_error(int err_pipe_read_fd, setup_error_t *out_err) {
+static int parent_read_setup_error(int err_pipe_read_fd, setup_error_t *out_err, uint64_t deadline_ms) {
     size_t total = 0;
     char *buf = (char *)out_err;
 
     while (total < sizeof(setup_error_t)) {
+        struct timespec now_tp;
+        if (clock_gettime(CLOCK_MONOTONIC, &now_tp) < 0) return -1;
+        uint64_t now_ms = (uint64_t)now_tp.tv_sec * 1000ULL + (uint64_t)now_tp.tv_nsec / 1000000ULL;
+        if (now_ms >= deadline_ms) return -2;
+
+        uint64_t remaining_ms = deadline_ms - now_ms;
+        int wait_ms = remaining_ms > (uint64_t)INT_MAX ? INT_MAX : (int)remaining_ms;
+        struct pollfd pfd = {.fd = err_pipe_read_fd, .events = POLLIN | POLLHUP, .revents = 0};
+        int poll_ret = poll(&pfd, 1, wait_ms);
+        if (poll_ret == 0) continue;
+        if (poll_ret < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+
         ssize_t n = read(err_pipe_read_fd, buf + total, sizeof(setup_error_t) - total);
         if (n > 0) {
             total += (size_t)n;
@@ -100,6 +117,26 @@ static int parent_read_setup_error(int err_pipe_read_fd, setup_error_t *out_err)
     } else {
         return -1; /* Partial record / protocol error */
     }
+}
+
+static pid_t wait4_retry(pid_t pid, int *status, struct rusage *usage) {
+    pid_t result;
+    do {
+        result = wait4(pid, status, 0, usage);
+    } while (result < 0 && errno == EINTR);
+    return result;
+}
+
+static int terminate_and_reap_setup_child(pid_t pid, int *status, struct rusage *usage) {
+    int kill_result = kill(pid, SIGKILL);
+    int kill_errno = errno;
+    /* Also kill the session group in case setsid() already succeeded. */
+    (void)kill(-pid, SIGKILL);
+    pid_t waited = wait4_retry(pid, status, usage);
+    if (waited == pid) return 0;
+    if (waited < 0 && errno == ECHILD) return 0;
+    if (kill_result < 0 && kill_errno != ESRCH) return -1;
+    return -1;
 }
 
 /*
@@ -329,17 +366,14 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
     /* Read error pipe */
     setup_error_t s_err;
     memset(&s_err, 0, sizeof(s_err));
-    int err_res = parent_read_setup_error(err_pipe[0], &s_err);
+    int err_res = parent_read_setup_error(err_pipe[0], &s_err, deadline_ms);
     close(err_pipe[0]);
 
     if (err_res == 1) {
         /* Child explicitly reported setup/exec failure */
         int child_status = 0;
         struct rusage child_usage;
-        pid_t reap_pid;
-        do {
-            reap_pid = wait4(pid, &child_status, 0, &child_usage);
-        } while (reap_pid == -1 && errno == EINTR);
+        pid_t reap_pid = wait4_retry(pid, &child_status, &child_usage);
 
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
@@ -353,21 +387,34 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         res->setup_err = s_err;
         res->exit_code = 127;
         return 0;
-    } else if (err_res == -1) {
-        /* Protocol error: child closed pipe mid-record or write failed */
+    } else if (err_res == -1 || err_res == -2) {
+        /* A broken handshake or expired deadline must not enter the run loop. */
         int child_status = 0;
         struct rusage child_usage;
-        pid_t reap_pid;
-        do {
-            reap_pid = wait4(pid, &child_status, 0, &child_usage);
-        } while (reap_pid == -1 && errno == EINTR);
+        memset(&child_usage, 0, sizeof(child_usage));
+        int cleanup_result = terminate_and_reap_setup_child(pid, &child_status, &child_usage);
 
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
 
-        if (reap_pid != pid) {
+        if (cleanup_result < 0) {
             res->status = STATUS_RUNNER_CHILD_LOST;
             return -1;
+        }
+
+        if (err_res == -2) {
+            struct timespec end_tp;
+            if (clock_gettime(CLOCK_MONOTONIC, &end_tp) == 0) {
+                uint64_t end_ms = (uint64_t)end_tp.tv_sec * 1000ULL + (uint64_t)end_tp.tv_nsec / 1000000ULL;
+                res->wall_ms = (uint32_t)(end_ms - start_ms);
+            }
+            res->cpu_ms = (uint32_t)(
+                (uint64_t)child_usage.ru_utime.tv_sec * 1000ULL + (uint64_t)child_usage.ru_utime.tv_usec / 1000ULL +
+                (uint64_t)child_usage.ru_stime.tv_sec * 1000ULL + (uint64_t)child_usage.ru_stime.tv_usec / 1000ULL
+            );
+            res->peak_memory_kb = (uint64_t)child_usage.ru_maxrss;
+            res->status = STATUS_TIMEOUT;
+            return 0;
         }
 
         res->status = STATUS_SETUP_PROTOCOL_ERROR;
