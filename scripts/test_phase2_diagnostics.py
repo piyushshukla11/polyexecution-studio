@@ -14,11 +14,14 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from phase2_preflight import run_preflight
 EVIL_DIR = REPO_ROOT / "sandbox-daemon" / "tests" / "evil"
 
 
@@ -279,6 +282,59 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
         # Must acknowledge the host ENOSYS runtime boundary
         self.assertIn("unshare(CLONE_NEWPID)", doc)
         self.assertIn("errno=38 (ENOSYS)", doc)
+
+    def test_runner_argument_environment_gap_contract(self) -> None:
+        """
+        Verify that the runner implementation gap (only passing binary_path and empty env)
+        is accurately reflected in code and architecture documentation, and that the four
+        safe future interface principles are strictly specified.
+        """
+        sandbox_c = (REPO_ROOT / "sandbox-daemon" / "sandbox.c").read_text()
+        sandbox_h = (REPO_ROOT / "sandbox-daemon" / "sandbox.h").read_text()
+        doc = (REPO_ROOT / "docs" / "03_SANDBOX_DEEP_DIVE.md").read_text()
+
+        # Check current runner C code: only binary_path in child_argv, empty child_envp
+        self.assertIn("char *const child_argv[] = { (char *)binary_path, NULL };", sandbox_c)
+        self.assertIn("char *const child_envp[] = { NULL };", sandbox_c)
+        self.assertIn("execve(binary_path, child_argv, child_envp);", sandbox_c)
+
+        # Check sandbox.h runner signature: only binary_path, no argv or env parameters
+        self.assertIn("int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg, sandbox_result_t *res);", sandbox_h)
+
+        # Check documentation of the gap and safe interface principles
+        self.assertIn("Target Arguments & Environment: Current Runner Gap & Safe Future Interface Contract", doc)
+        self.assertIn("Explicit Argument Array", doc)
+        self.assertIn("Explicit Environment Allowlist", doc)
+        self.assertIn("No Shell Command String", doc)
+        self.assertIn("No User-Controlled PATH Search", doc)
+        self.assertIn("execve()", doc)
+        self.assertIn("execvp()", doc)
+
+    def test_capability_statuses_distinct_from_enforcement(self) -> None:
+        """
+        Verify that preflight audit categories strictly keep observed filesystem/toolchain
+        artifacts (PRESENT) distinct from runtime enforcement (INFERRED) and unavailable
+        features (UNAVAILABLE), never claiming enforcement during read-only audit.
+        """
+        report = run_preflight()
+        readiness = report["readiness"]
+
+        # User namespaces must be UNAVAILABLE due to unshare probe ENOSYS
+        self.assertEqual(readiness["user_namespaces"]["status"], "UNAVAILABLE")
+        self.assertIn("errno=38", readiness["user_namespaces"]["detail"])
+
+        # Toolchain / controllers may be PRESENT
+        self.assertEqual(readiness["cgroup_v2_controllers"]["status"], "PRESENT")
+        self.assertEqual(readiness["seccomp_bpf_toolchain"]["status"], "PRESENT")
+
+        # Runtime enforcement MUST be INFERRED (not PRESENT or PROBE_SUCCEEDED)
+        self.assertEqual(readiness["cgroup_v2_pids_enforcement"]["status"], "INFERRED")
+        self.assertEqual(readiness["cgroup_v2_memory_enforcement"]["status"], "INFERRED")
+        self.assertEqual(readiness["seccomp_bpf_enforcement"]["status"], "INFERRED")
+        self.assertEqual(readiness["privilege_dropping"]["status"], "INFERRED")
+
+        # Rootless mapping helpers: binaries exist, but mapping UNAVAILABLE due to ENOSYS
+        self.assertEqual(readiness["rootless_id_mapping"]["status"], "UNAVAILABLE")
 
     def test_safe_compilation_all_phase2_fixtures(self) -> None:
         """

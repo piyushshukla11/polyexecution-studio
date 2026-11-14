@@ -280,6 +280,36 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
    * *Host Runtime Boundary:*
      On the current host, `unshare(CLONE_NEWPID)` returns `ret=-1, errno=38 (ENOSYS)`. Runtime verification of child PID namespace creation and procfs isolation cannot be exercised live in this environment.
 
+8. **Target Arguments & Environment: Current Runner Gap & Safe Future Interface Contract:**
+   * *Current Implementation Gap:*
+     Inspecting `sandbox-daemon/sandbox.c` lines 313-316 reveals that the Phase 1 runner hardcodes:
+     ```c
+     char *const child_argv[] = { (char *)binary_path, NULL };
+     char *const child_envp[] = { NULL };
+     execve(binary_path, child_argv, child_envp);
+     ```
+     Furthermore, `sandbox_config_t` and `run_sandbox_with_config()` in `sandbox.h` accept only `const char *binary_path` without argument or environment parameters.
+     In contrast, the Phase 2 adversarial fixtures (`read_etc_passwd.c` and `net_connect.c`) accept dynamic parameters via `argv[1]`, `argv[2]` and environment variables (`PES_CANARY_PATH`, `PES_CANARY_TOKEN`, `PES_NET_TARGET_IP`, `PES_NET_TARGET_PORT`). The current runner cannot pass these values to target programs.
+   * *Safe Future Request Interface Contract (Phase 2 / Phase 3 gRPC `ExecuteRequest`):*
+     When extending the runner and proto contracts, the interface must strictly implement four security principles:
+     1. **Explicit Argument Array (`char *const argv[]` / `repeated string args`):**
+        - Target arguments must be passed as an explicit, ordered array of distinct string tokens passed directly to `execve`.
+        - Enforce hard limits: maximum argument count (e.g. `MAX_ARGV = 64`) and maximum per-argument string length (e.g. `MAX_ARG_LEN = 4096 bytes`) to prevent memory exhaustion in the runner.
+     2. **Explicit Environment Allowlist (`char *const envp[]` / `map<string, string> env`):**
+        - The default environment must remain strictly empty (`envp = { NULL }`).
+        - Only explicitly approved variables may be passed into the container (e.g. `LANG=C.UTF-8`, `PATH=/usr/bin:/bin`, `PES_CANARY_PATH=...`, `PES_CANARY_TOKEN=...`).
+        - Ambient host environment inheritance (`environ`) is strictly forbidden to prevent leaking host credentials, API tokens, or user configuration into untrusted code.
+        - Validate keys and values: reject null bytes, non-ASCII control characters, and impose strict length ceilings (keys <= 128 bytes, values <= 4096 bytes).
+     3. **No Shell Command String (`system()` / `sh -c` Forbidden):**
+        - The interface must never accept a single concatenated command string (e.g. `"python3 script.py --flag; rm -rf /"`).
+        - Shell strings require spawning a shell (`/bin/sh` or `/bin/bash`), which opens the sandbox to command injection, shell metacharacter expansion (`$()`, `;`, `|`, `&&`, `` ` ``), globbing, and subshell escapes.
+     4. **No User-Controlled PATH Search (`execvp` / `execvpe` Forbidden):**
+        - The target executable path must be an explicit absolute path or canonicalized path inside the container rootfs.
+        - The runner must use `execve()`, never `execvp()` or `execvpe()`.
+        - Searching `PATH` allows untrusted code to drop a trojan binary in a writable directory earlier in `PATH`, hijacking execution.
+   * *Tier Boundary Notice:*
+     `sandbox-daemon/sandbox.c` and `sandbox.h` remain Tier A and are not modified during this audit. The current runner is not claimed to support these fixture options.
+
 ### 3. Resource Limits vs Sandbox Isolation (Defense in Depth)
 A common beginner misconception is assuming that resource limits (`RLIMIT_CPU`, `RLIMIT_AS`) constitute sandboxing.
 * **Resource Limits (`setrlimit`, cgroups v2):** Restrict the *quantity* of resources consumed (CPU seconds, memory bytes, process count, file size).

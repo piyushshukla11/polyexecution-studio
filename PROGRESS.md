@@ -989,3 +989,21 @@
 - Linked: LOG-0054
 - Piyush prediction (optional): Documenting explicit argv/env contracts now will prevent insecure shell-string patterns when implementing Phase 3 gRPC.
 - Tutor review: pending
+
+## [LOG-0056] 2026-11-14 13:38 IST | DONE | actor: agent
+- Reason: Complete documentation of runner argument/environment gap, safe future request interface, and capability audit distinction checks.
+- Details / Change:
+  1. Updated docs/03_SANDBOX_DEEP_DIVE.md:
+     - Added Section 8: "Target Arguments & Environment: Current Runner Gap & Safe Future Interface Contract".
+     - Documented the current implementation gap in sandbox-daemon/sandbox.c lines 313-316 (where only { binary_path, NULL } and { NULL } are passed to execve) vs Phase 2 fixture capabilities.
+     - Documented the four required interface security principles: explicit argument array, explicit environment allowlist, no shell command string (no system or sh -c), and no user-controlled PATH search (execve only, no execvp).
+     - Maintained strict boundaries: sandbox.c and sandbox.h were not modified (Tier A), and no fixture options were claimed to work through sandbox-runner today.
+  2. Updated scripts/test_phase2_diagnostics.py:
+     - Added test_runner_argument_environment_gap_contract verifying that runner C code and deep-dive documentation align on the execve gap and the 4 safe interface principles.
+     - Added test_capability_statuses_distinct_from_enforcement asserting that phase2_preflight.py audit categories strictly distinguish observed PRESENT files from INFERRED runtime enforcement and UNAVAILABLE features (16/16 tests pass in 0.424s).
+  3. Updated LEARNING_NOTES/phase-1.md (local-only, not committed) with matching systems concepts.
+  4. Verified all test suites: python3 scripts/test_phase2_preflight.py (6/6 pass), python3 scripts/test_phase2_diagnostics.py (16/16 pass), and cd sandbox-daemon && make clean && make test (18/18 pass).
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, scripts/test_phase2_diagnostics.py, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0055
+- Piyush prediction (optional): Documenting explicit argv/env contracts now will prevent insecure shell-string patterns when implementing Phase 3 gRPC.
+- Tutor review: pending
