@@ -1299,3 +1299,16 @@
 - Linked: LOG-0072
 - Piyush prediction (optional): I can continue remaining authorized work while learning is open, but the project stays in progress until I pass the complete required checklist.
 - Tutor review: pending
+
+## [LOG-0074] 2026-11-14 23:16 IST | PLAN | actor: tutor
+- Reason: Apply Piyush's explicit instruction to defer learning checks until the end of project development, and correct a Phase 2 diagnostics test that assumes an outdated live-host namespace result.
+- Details / Change:
+  1. Update AI_RULES.md, docs/04_BUILD_PLAN.md, and docs/06_LEARNING_RULES.md so phase implementation and technical review may continue while explain-backs are deferred; retain technical DoD, test, tutor review, and honest-reporting requirements. Keep the final project learning gate from LOG-0072/0073.
+  2. Record Piyush's authorization for agent implementation across phases, including Tier A, with all agent-written core work labeled accurately for final study.
+  3. Correct scripts/test_phase2_diagnostics.py so live host capability observations are validated by category without hard-coding the former ENOSYS result; retain deterministic synthetic success/failure tests.
+  4. Update the Phase 2 preflight documentation to distinguish previous observations from the current probe: CLONE_NEWUSER succeeds in the current environment; direct probes for other listed namespace flags return EPERM; the user cgroup is not writable. Do not infer combined namespace creation or runtime isolation from these probes.
+  5. Re-run the preflight, diagnostics, and Phase 1 regression suites. Record the actual result and any remaining environment blocker.
+- Files: AI_RULES.md, docs/03_SANDBOX_DEEP_DIVE.md, docs/04_BUILD_PLAN.md, docs/06_LEARNING_RULES.md, scripts/test_phase2_diagnostics.py, PROGRESS.md
+- Linked: LOG-0073
+- Piyush prediction (optional): The new preflight test will pass whether the live user-namespace probe succeeds or fails while still distinguishing observed availability from unverified enforcement.
+- Tutor review: pending
