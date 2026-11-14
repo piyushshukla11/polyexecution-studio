@@ -1105,3 +1105,21 @@
 - Linked: LOG-0060
 - Piyush prediction (optional): Clarifying that setuid does not clear the capability bounding set will ensure future seccomp and prctl filters block re-acquisition of root privileges.
 - Tutor review: pending
+
+## [LOG-0062] 2026-11-14 13:50 IST | DONE | actor: agent
+- Reason: Complete documentation of capability-drop architecture, remaining identity limitations, and open design questions.
+- Details / Change:
+  1. Updated docs/03_SANDBOX_DEEP_DIVE.md:
+     - Added Section 9: "Capability Dropping Architecture & Open Design Questions (capabilities(7), prctl(2))".
+     - Documented how transition from UID 0 to nobody via setuid() automatically clears Permitted, Effective, and Ambient capabilities, but does NOT clear the Capability Bounding Set (cap_bset).
+     - Documented the critical role of PR_SET_NO_NEW_PRIVS in preventing privilege acquisition via file capabilities or setuid binaries across execve.
+     - Documented open design questions required before Phase 2 sign-off: explicit bounding set reduction via PR_CAPBSET_DROP, ambient set invariant verification, and ordering relative to seccomp allowlist loading.
+     - Summarized the identity route decision: Route A proposed (conditional on helpers, subuid ranges, caller privilege, and kernel support); Route B rejected/unsupported for multi-tenant containment (due to supplementary group leakage); current host unshare ENOSYS boundary honestly recorded.
+  2. Updated scripts/test_phase2_diagnostics.py:
+     - Added assertions in test_supplementary_group_and_identity_contract confirming that capability dropping is explicitly recorded as an open design question and not claimed as complete (17/17 tests pass in 0.444s).
+  3. Updated LEARNING_NOTES/phase-1.md (local-only, not committed) with matching systems concepts on capability sets and bounding sets.
+  4. Verified all test suites: python3 scripts/test_phase2_preflight.py (6/6 pass), python3 scripts/test_phase2_diagnostics.py (17/17 pass), and cd sandbox-daemon && make clean && make test (18/18 pass).
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, scripts/test_phase2_diagnostics.py, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0061
+- Piyush prediction (optional): Clarifying that setuid does not clear the capability bounding set will ensure future seccomp and prctl filters block re-acquisition of root privileges.
+- Tutor review: pending

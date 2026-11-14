@@ -321,6 +321,27 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
    * *Tier Boundary Notice:*
      `sandbox-daemon/sandbox.c` and `sandbox.h` remain Tier A and are not modified during this audit. The current runner is not claimed to support these fixture options.
 
+9. **Capability Dropping Architecture & Open Design Questions (`capabilities(7)`, `prctl(2)`):**
+   * *The Current Specification Gap:*
+     The Phase 2 architecture specifies calling `prctl(PR_SET_NO_NEW_PRIVS, 1)` and loading a seccomp-bpf filter before `execve()`. However, it does not detail the exact protocol for dropping POSIX capabilities within the container user namespace prior to execution.
+   * *How Linux Capability Sets Behave at `setuid()` (`capabilities(7)`):*
+     Inside a newly created user namespace (`CLONE_NEWUSER`), the process starts as UID 0 and possesses all capabilities in that namespace's user capability set (`CAP_SYS_ADMIN`, `CAP_SETUID`, `CAP_SETGID`, `CAP_NET_ADMIN`, etc.).
+     When the process calls `setuid(nobody_uid)`:
+     1. The kernel automatically clears the process's **Effective (`pE`)**, **Permitted (`pP`)**, and **Ambient (`pA`)** capability sets because real, effective, and saved UIDs transition from 0 to non-zero.
+     2. However, `setuid()` does **not** alter the **Capability Bounding Set (`pB` / `cap_bset`)**!
+     3. If a binary inside the container rootfs has file capabilities (`setcap`), or if `PR_SET_KEEPCAPS` was enabled, capabilities could be re-acquired upon `execve()` unless explicitly blocked.
+   * *The Role of `PR_SET_NO_NEW_PRIVS`:*
+     Calling `prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)` is mandatory. It ensures that no binary executed via `execve()` can ever gain privileges, completely neutralizing file capabilities (`security.capability`) and setuid bits within the sandbox rootfs.
+   * *Required Capability Drop Design Work (Before Phase 2 Sign-off):*
+     To ensure defense-in-depth, future Tier A implementation must address three open design questions:
+     1. **Explicit Bounding Set Pruning:** Should the runner iterate over all capabilities and invoke `prctl(PR_CAPBSET_DROP, cap)` to permanently reduce the bounding set to empty before `execve()`?
+     2. **Ambient Capability Set Invariant:** Verify that the ambient capability set remains empty (`prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_CLEAR_ALL, ...)`).
+     3. **Timing Relative to Seccomp:** Capability pruning and `PR_SET_NO_NEW_PRIVS` must occur *before* seccomp is loaded, because strict seccomp allowlists block `prctl()` calls with administrative options.
+   * *Identity Route Selection Summary:*
+     - **Route A (`newuidmap` / `newgidmap`):** **PROPOSED.** It permits clearing supplementary groups via `setgroups(0, NULL)` and mapping separate `root` and `nobody` IDs. Remains strictly conditional on helper permissions, `/etc/subuid` allocations, parent invocation without `PR_SET_NO_NEW_PRIVS`, and a host kernel supporting `CLONE_NEWUSER`.
+     - **Route B (Unprivileged Direct-Write):** **REJECTED / UNSUPPORTED.** Cannot clear supplementary groups due to the `/proc/[pid]/setgroups` `"deny"` requirement (CVE-2014-8989), leaking host supplementary groups across `execve()`.
+     - **Host Runtime Boundary:** On this host, `unshare(CLONE_NEWUSER)` returns `ret=-1, errno=38 (ENOSYS)`. No user namespace route is runtime-safe or executable here without kernel/container support.
+
 ### 3. Resource Limits vs Sandbox Isolation (Defense in Depth)
 A common beginner misconception is assuming that resource limits (`RLIMIT_CPU`, `RLIMIT_AS`) constitute sandboxing.
 * **Resource Limits (`setrlimit`, cgroups v2):** Restrict the *quantity* of resources consumed (CPU seconds, memory bytes, process count, file size).

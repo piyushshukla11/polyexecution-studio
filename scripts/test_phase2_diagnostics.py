@@ -282,6 +282,12 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
         self.assertIn("possessing setuid-root file permissions", doc)
         self.assertIn("PR_SET_NO_NEW_PRIVS", doc)
 
+        # Must document capability drop as an open design question, not claimed complete
+        self.assertIn("Capability Dropping Architecture & Open Design Questions", doc)
+        self.assertIn("Capability Bounding Set", doc)
+        self.assertIn("PR_CAPBSET_DROP", doc)
+        self.assertIn("Required Capability Drop Design Work (Before Phase 2 Sign-off)", doc)
+
     def test_pid_namespace_and_procfs_lifecycle_contract(self) -> None:
         """
         Verify that architecture documentation strictly encodes the PID namespace
