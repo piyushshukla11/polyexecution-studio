@@ -1649,3 +1649,13 @@
 - Files: sandbox-daemon/Makefile, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_setup_handshake.c, sandbox-daemon/tests/test_seccomp_policy.c, PROGRESS.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
 - Linked: LOG-0104, LOG-0101, LOG-0103, LOG-0094.
 - Tutor review: pending
+
+## [LOG-0107] 2026-11-15 00:00 IST | PLAN | actor: agent
+- Reason: Strengthen the forced `/proc/self/fd` regression so it reproduces the prior bounded-scan failure mode with an already-open descriptor above a subsequently lowered soft `RLIMIT_NOFILE`.
+- Details / Change:
+  1. Preserve the original low descriptor separately and close it after duplicating to FD 256 or higher.
+  2. In the forked test child, lower only its soft `RLIMIT_NOFILE` below the inherited high descriptor before invoking `close_unrelated_fds()`.
+  3. Run the forced-fallback regression and verify the high descriptor is closed and the preserved setup descriptor remains open; retain the normal-path check.
+- Files: PROGRESS.md, sandbox-daemon/tests/test_setup_handshake.c, LEARNING_NOTES/phase-overview.md.
+- Linked: LOG-0106, LOG-0101.
+- Tutor review: pending
