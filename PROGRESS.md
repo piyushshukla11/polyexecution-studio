@@ -884,3 +884,24 @@
 
 
 
+
+## [LOG-0051] 2026-11-14 13:31 IST | PLAN | actor: agent
+- Reason: Plan audit of UID/GID mapping routes and setgroups compatibility contracts for Phase 2 namespace architecture.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before updating architecture docs and verification tests.
+  2. Audit user_namespaces(7), setgroups(2), and newuidmap/newgidmap documentation to resolve setgroups(0, NULL) compatibility:
+     - Route A (newuidmap/newgidmap helper route): Explain multi-ID mapping, elevated setuid permissions, why /proc/PID/setgroups does not need to be "deny", why setgroups(0, NULL) remains permitted in the child, and what presence of helpers does and does not prove (does not prove setuid bit, subuid/subgid ownership, lack of PR_SET_NO_NEW_PRIVS in caller, or kernel CLONE_NEWUSER support).
+     - Route B (unprivileged direct-write fallback): Explain mandatory write of "deny" to /proc/PID/setgroups before writing gid_map (CVE-2014-8989), why writing "deny" permanently disables setgroups(2) in the user namespace, and why calling setgroups(0, NULL) fails with EPERM in that setup.
+     - Document that neither route can execute on the current host because unshare(CLONE_NEWUSER) returns ENOSYS.
+  3. Update docs/03_SANDBOX_DEEP_DIVE.md:
+     - Add detailed analysis comparing Route A and Route B.
+     - Clarify the child supplementary group dropping contract in Step 11 for both routes.
+  4. Update scripts/test_phase2_diagnostics.py:
+     - Add structured source and contract checks asserting that documentation and test contracts properly distinguish Route A vs Route B setgroups compatibility, helper existence vs capability, and ENOSYS host status.
+  5. Update LEARNING_NOTES/phase-1.md (local-only, not committed) with detailed systems guide on CVE-2014-8989 and setgroups denial.
+  6. Run test suites to verify.
+  7. Append LOG-0052 (DONE) and commit Part 1 changes.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, scripts/test_phase2_diagnostics.py, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0050
+- Piyush prediction (optional): Documenting the setgroups "deny" requirement will prevent EPERM bugs when falling back to unprivileged single-UID mappings.
+- Tutor review: pending
