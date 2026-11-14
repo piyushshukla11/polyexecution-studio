@@ -1312,3 +1312,15 @@
 - Linked: LOG-0073
 - Piyush prediction (optional): The new preflight test will pass whether the live user-namespace probe succeeds or fails while still distinguishing observed availability from unverified enforcement.
 - Tutor review: pending
+
+## [LOG-0075] 2026-11-14 23:17 IST | PLAN | actor: tutor
+- Reason: Correct the preflight readiness label for rootless ID mapping: current logic reports PROBE_SUCCEEDED after observing helper files and successful user-namespace creation, without actually exercising UID/GID mapping.
+- Details / Change:
+  1. Change rootless_id_mapping to INFERRED when subordinate-ID entries, mapping helpers, and a successful user namespace probe are present, while explicitly stating that mapping itself was not performed.
+  2. Keep UNAVAILABLE for missing prerequisites or failed user-namespace creation and preserve the exact observed errno without assuming ENOSYS.
+  3. Update deterministic preflight tests for synthetic success/failure and the live diagnostics test to validate categories without hard-coding this host's outcome.
+  4. Run the focused preflight and diagnostics suites and record exact outcomes.
+- Files: scripts/phase2_preflight.py, scripts/test_phase2_preflight.py, scripts/test_phase2_diagnostics.py, PROGRESS.md
+- Linked: LOG-0074
+- Piyush prediction (optional): A prerequisite probe can justify an inference, but it does not prove that actual UID/GID mapping works.
+- Tutor review: pending
