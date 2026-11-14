@@ -254,6 +254,34 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
         self.assertIn("unshare(CLONE_NEWUSER)", doc)
         self.assertIn("errno=38 (ENOSYS)", doc)
 
+    def test_supplementary_group_and_identity_contract(self) -> None:
+        """
+        Verify that architecture documentation strictly encodes the supplementary
+        group contract (credentials(7), setgroups(2), and execve(2)), rejects the
+        setgid/setuid fallacy, and marks Route B unsupported for containment.
+        """
+        doc = (REPO_ROOT / "docs" / "03_SANDBOX_DEEP_DIVE.md").read_text()
+
+        # Must distinguish process identity (real/effective/saved) from supplementary groups
+        self.assertIn("Process Identity vs Supplementary Groups (`credentials(7)`)", doc)
+        self.assertIn("supplementary group IDs (`getgroups(2)`)", doc)
+
+        # Must explicitly reject the fallacy that setgid()/setuid() clear supplementary groups
+        self.assertIn("The `setuid`/`setgid` Fallacy and `execve(2)` Inheritance", doc)
+        self.assertIn("does **not** modify or clear the supplementary group list", doc)
+
+        # Must document that supplementary groups survive execve(2)
+        self.assertIn("`execve(2)` preserves supplementary group IDs across process execution", doc)
+
+        # Must document the supplementary group inheritance trap for direct-write (Route B)
+        self.assertIn("The Supplementary Group Inheritance Trap", doc)
+        self.assertIn("Route B is **UNSUPPORTED** for secure multi-tenant sandbox execution", doc)
+
+        # Must document that Route A is strictly conditional on helper permissions
+        self.assertIn("Conditional Route A Contract", doc)
+        self.assertIn("possessing setuid-root file permissions", doc)
+        self.assertIn("PR_SET_NO_NEW_PRIVS", doc)
+
     def test_pid_namespace_and_procfs_lifecycle_contract(self) -> None:
         """
         Verify that architecture documentation strictly encodes the PID namespace

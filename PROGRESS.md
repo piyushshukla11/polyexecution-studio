@@ -1067,3 +1067,20 @@
 - Linked: LOG-0058
 - Piyush prediction (optional): Automated checks against documentation contracts ensure future refactorings will not accidentally reintroduce unsafe Route B claims.
 - Tutor review: pending
+
+## [LOG-0060] 2026-11-14 13:48 IST | DONE | actor: agent
+- Reason: Complete safe regression checks for supplementary group contract, identity rules, and capability drop status.
+- Details / Change:
+  1. Updated scripts/test_phase2_diagnostics.py:
+     - Added test_supplementary_group_and_identity_contract:
+       * Asserts that docs/03_SANDBOX_DEEP_DIVE.md explicitly distinguishes real/effective IDs from supplementary groups (credentials(7)).
+       * Asserts rejection of the fallacy that setgid()/setuid() clear supplementary groups.
+       * Asserts documentation that supplementary groups survive execve(2).
+       * Asserts that Route B is documented as UNSUPPORTED for secure multi-tenant sandbox execution due to the supplementary group inheritance trap.
+       * Asserts that Route A's setgroups capability is conditional on helper setuid permissions and lack of caller PR_SET_NO_NEW_PRIVS.
+     - Confirmed all 17 tests in test_phase2_diagnostics.py pass cleanly in 0.436s.
+  2. Verified test_phase2_preflight.py (6/6 tests pass).
+- Files: PROGRESS.md, scripts/test_phase2_diagnostics.py
+- Linked: LOG-0059
+- Piyush prediction (optional): Automated checks against documentation contracts ensure future refactorings will not accidentally reintroduce unsafe Route B claims.
+- Tutor review: pending
