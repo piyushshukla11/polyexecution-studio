@@ -1594,3 +1594,27 @@
 - Files: sandbox-daemon/sandbox.c, PROGRESS.md.
 - Linked: LOG-0100.
 - Tutor review: pending
+
+## [LOG-0102] 2026-11-15 00:39 IST | PLAN | actor: agent
+- Reason: Determine experimentally whether a transient unprivileged user namespace can directly map one UID/GID to the caller while also clearing inherited supplementary groups under `PR_GET_NO_NEW_PRIVS=1`.
+- Details / Change:
+  1. Compile and run a temporary standalone probe only; it creates one short-lived user namespace, does not execute a target, and removes no host files other than its temporary source/binary.
+  2. Attempt supplementary-group clearing before map setup, then write `setgroups=deny` before the direct GID map as required for an unprivileged mapping.
+  3. Read UID/GID maps and `setgroups` state back exactly, record syscall errno and supplementary groups, then exit/reap the probe.
+  4. Implement no fallback unless the direct maps work and the inherited supplementary group set can be proven empty; otherwise keep the production path fail-closed and record the exact limitation.
+- Files: PROGRESS.md; temporary probe files under `/tmp` only unless the evidence supports a follow-up implementation plan.
+- Linked: LOG-0091, LOG-0094.
+- Tutor review: pending
+
+## [LOG-0103] 2026-11-15 00:46 IST | DONE | actor: tutor
+- Reason: Resolve the direct UID/GID mapping experiment planned in LOG-0102 with observed evidence and reject a fallback that cannot clear inherited supplementary groups.
+- Details / Change:
+  1. Re-ran the existing standalone probe `/tmp/pes_direct_userns_probe`; it created a short-lived user namespace child, executed no target, and exited normally.
+  2. Observed `PR_GET_NO_NEW_PRIVS=1`, host UID/GID 1000, and host supplementary groups 65534 and 1000.
+  3. `setgroups(0, NULL)` before the GID map failed with EPERM. Exact one-row maps (`65534 -> 1000`) were then written and read back; `setgroups=deny` was required before the GID map.
+  4. After mapping, both inherited groups remained (as namespace GID 65534), and another `setgroups(0, NULL)` failed with EPERM. Exact map/policy readback passed; child exit was 0.
+  5. Confirmed the architecture document rejects this direct-map route and keeps the production helper path fail-closed. No fallback was implemented.
+- Verification: `/tmp/pes_direct_userns_probe` exited 0 and printed `exact map/policy readback: PASS`; `git diff --check`, `bash scripts/check_progress_append_only.sh`, and `bash scripts/check_repo_hygiene.sh` passed. No project tests or hostile fixtures were run because this completion records a host experiment and documentation only.
+- Files: docs/03_SANDBOX_DEEP_DIVE.md, PROGRESS.md.
+- Linked: LOG-0102, LOG-0091, LOG-0094.
+- Tutor review: direct-map fallback rejected; Phase 2 DoD remains open.
