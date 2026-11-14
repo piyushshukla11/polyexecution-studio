@@ -68,12 +68,11 @@ python3 scripts/phase2_preflight.py --json
 | **Linux Kernel** | 7.2.8-9-omarchy x86_64 | Standard 64-bit Linux kernel |
 | **Namespace Symlinks** | `/proc/self/ns/{cgroup,ipc,mnt,net,pid,time,user,uts}` present | Namespace subsystem symlinks exist in procfs |
 | **User Clone Sysctl** | `/proc/sys/kernel/unprivileged_userns_clone = 1` | Unprivileged user cloning enabled in kernel sysctl |
-| **Unshare Syscall Probe** | `libc.unshare(CLONE_NEWUSER)` returns `ret=-1, errno=38 (ENOSYS)` | **Observed Fact:** Syscall returns Function not implemented. <br>**Unverified Cause:** Does not prove kernel lacks support; may be intercepted by outer container supervisor, seccomp profile, or LSM. Rootless namespaces unavailable in current container. |
-| **Cgroups v2** | Unified cgroup2 mounted at `/sys/fs/cgroup`; delegated user slice at `/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/` | **Ready:** `cpu`, `memory`, and `pids` controllers are delegated to user `zogratis` (UID 1000). Both `cgroup.procs` and `cgroup.subtree_control` are writable without root. |
-| **Seccomp** | Header `/usr/include/seccomp.h` present; `libseccomp.so.2` version 2.6.0 loaded | **Ready:** Seccomp development libraries installed and linkable. |
-| **Prctl Flags** | `prctl(PR_GET_NO_NEW_PRIVS)` returns 1; `prctl(PR_GET_PDEATHSIG)` returns 0 | **Ready:** Kernel supports `PR_SET_NO_NEW_PRIVS` and `PR_SET_PDEATHSIG`. |
-| **Rootless Setup** | `/etc/subuid` and `/etc/subgid` have `zogratis:100000:65536`; `newuidmap`/`newgidmap` available | **Ready:** Subordinate UID/GID allocations configured. |
-| **Privilege Dropping** | `nobody:nobody` account available (UID 65534, GID 65534) | **Ready:** Unprivileged target identity available. |
+| **Unshare Syscall Probe** | `libc.unshare(CLONE_NEWUSER)` returns `ret=-1, errno=38 (ENOSYS)` | **Observed Fact:** Syscall returns Function not implemented. <br>**Unverified Cause:** Does not prove kernel lacks support; cause is UNKNOWN (leaves open whether kernel lacks support, an outer container supervisor intercepts the syscall, or an LSM blocks it). |
+| **Cgroups v2** | Unified cgroup2 mounted at `/sys/fs/cgroup`; delegated user slice at `/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/` | **Controllers PRESENT; Enforcement INFERRED:** Controllers `cpu`, `memory`, and `pids` are present and user slice directory is writable. However, creating a child cgroup and writing/enforcing `pids.max` or `memory.max` were NOT verified (read-only audit). |
+| **Seccomp** | Header `/usr/include/seccomp.h` present; `libseccomp.so.2` version 2.6.0 loaded; `PR_GET_NO_NEW_PRIVS` = 1 | **Toolchain PRESENT; Enforcement INFERRED:** Seccomp development files are present, but compiling and installing an active BPF filter in the kernel was NOT verified (read-only audit). |
+| **Rootless Setup** | `/etc/subuid` and `/etc/subgid` have `zogratis:100000:65536`; `newuidmap`/`newgidmap` available | **Files PRESENT; Mapping UNAVAILABLE:** Subordinate ID files and mapping binaries are present, but cannot establish an unprivileged sandbox while `unshare(CLONE_NEWUSER)` fails with ENOSYS. |
+| **Privilege Dropping** | `nobody:nobody` account available (UID 65534, GID 65534) | **Identity PRESENT; Transition INFERRED:** Unprivileged identity exists, but executing `setuid`/`setgid` was NOT tested (read-only audit). |
 
 ---
 
@@ -81,66 +80,100 @@ python3 scripts/phase2_preflight.py --json
 
 Three Phase 2 adversarial test programs exist in `sandbox-daemon/tests/evil/`. They are compiled under `make evil` but **NEVER executed by the Phase 1 runner**, which lacks filesystem, network, and process isolation.
 
-| Fixture File | Attack Attempted | Containment Failure Criteria | Expected Phase 2 Defense | Distinguishing Policy Enforcement from Unrelated Errors |
+| Fixture File | Attack Attempted | Containment Failure Criteria | Expected Phase 2 Defense | How Test Distinguishes Policy Enforcement from Unrelated Errors |
 |---|---|---|---|---|
-| `fork_bomb.c` | Recursive `while(1) fork();` PID exhaustion loop | Host PID table exhausted; `EAGAIN` thrown to host/runner; orphan processes surviving | Cgroups v2 `pids.max` (e.g. 32); `CLONE_NEWPID`; atomic `cgroup.kill` | Check `/sys/fs/cgroup/.../pids.events` for `max > 0` (causal proof that kernel enforced limit). Unrelated errors show `max == 0`. |
-| `read_etc_passwd.c` | Attempts `open("/etc/passwd", O_RDONLY)` and reading host secrets | Process opens file, prints `HOST_PASSWD_LEAKED`, and exits 0 | `CLONE_NEWNS` + `pivot_root` minimal rootfs; seccomp open allowlist; unprivileged user | Target exits status 1; open returns `ENOENT` (file absent from private rootfs) or `EPERM`/`EACCES`. Stdout is completely empty. |
-| `net_connect.c` | Attempts TCP socket creation and connect to `93.184.216.34:80` | `connect()` succeeds, process prints `NETWORK_CONNECTED`, and exits 0 | `CLONE_NEWNET` (empty network stack); seccomp socket/connect blocking | `connect()` returns `ret < 0, errno = ENETUNREACH` immediately (<1ms) or `socket()` blocked by seccomp (`SIGSYS` or `EPERM`). Does not hang or hit wall timeout. |
+| `fork_bomb.c` | Recursive `while(1) fork();` PID exhaustion loop | Host PID table exhausted; `EAGAIN` thrown to host/runner; orphan processes surviving | Cgroups v2 `pids.max` (e.g. 16 or 32); `CLONE_NEWPID`; atomic `cgroup.kill` | Inspect `/sys/fs/cgroup/.../pids.events` for `max > 0` (causal proof that kernel enforced task ceiling). Unrelated failures show `max == 0`. Labeled DANGEROUS: DO NOT EXECUTE. |
+| `read_etc_passwd.c` | Attempts host filesystem snooping | Host canary (`/etc/pes_host_canary`) read, or host user (`zogratis:`) leaked from `/etc/passwd`. Exit 0. | `CLONE_NEWNS` + `pivot_root` minimal rootfs; seccomp open allowlist; unprivileged user | Emits structured `DIAG:` to stderr. Distinguishes host data leak (exit 0) from legitimate container-local minimal passwd files or policy denial (`ENOENT`, `EACCES`, `EPERM` -> exit 1). Unrelated errors exit 2. |
+| `net_connect.c` | Attempts TCP socket creation and connect to `93.184.216.34:80` | Outbound TCP connection succeeded. Exit 0. | `CLONE_NEWNET` (empty network stack); seccomp socket/connect blocking | Emits structured `DIAG:` to stderr. Distinguishes proven network namespace policy (`ENETUNREACH`) and seccomp policy (`EPERM`/`EACCES` -> exit 1) from ambient network drops or firewall filters (`ETIMEDOUT`, `EHOSTUNREACH` -> exit 2). |
 
 ---
 
 ## Phase 2 Isolation Architecture & Strict Dependency Ordering
 
-To achieve defense in depth without privilege leaks, Phase 2 containerization must follow a strict dependency sequence:
+To achieve defense in depth without privilege leaks or self-blocking race conditions, Phase 2 containerization must strictly separate **Parent Supervisor Responsibilities** from the **Isolated Child Lifecycle**:
 
 ```
-[1. User Namespace / Subordinate UID Mapping]
-     | (unshare CLONE_NEWUSER or newuidmap/newgidmap)
-     v
-[2. Unshare Isolation Namespaces]
-     | (CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS | CLONE_NEWIPC | CLONE_NEWUTS)
-     v
-[3. Private Mount Propagation & Minimal Rootfs Setup]
-     | (mount --make-rprivate /; bind-mount minimal workspace tmpfs and runtime libs)
-     v
-[4. Filesystem Swap via pivot_root]
-     | (pivot_root to new minimal rootfs; unmount / detach old root)
-     v
-[5. Drop Auxiliary Groups & Change Identity]
-     | (setgroups(0, NULL); setgid(nobody); setuid(nobody))
-     v
-[6. Enforce No-New-Privileges Boundary]
-     | (prctl(PR_SET_NO_NEW_PRIVS, 1) -> mandatory before unprivileged seccomp)
-     v
-[7. Install Seccomp-BPF Syscall Filter]
-     | (Load allowlist: read, write, exit_group, brk, mmap, poll; deny socket, mount, ptrace)
-     v
-[8. Bind Target Process to Cgroups v2 Resource Hierarchy]
-     | (Write PID to cgroup.procs under user slice; enforce pids.max and memory.max)
-     v
-[9. Replace Process Image via execve]
-       (execve(target_binary, argv, envp) with clean environment)
++-----------------------------------------------------------------------------------+
+|                           PARENT SUPERVISOR LIFECYCLE                             |
++-----------------------------------------------------------------------------------+
+| Step 1: Create Job Cgroup Directory                                               |
+|         -> mkdir /sys/fs/cgroup/user.slice/.../pes-job-<id>/                      |
+|         -> Write resource ceilings: pids.max = 32, memory.max = 128M              |
+|         -> Done by parent while holding caller's unprivileged user permissions    |
++-----------------------------------------------------------------------------------+
+| Step 2: Fork Sandbox Child Process                                                |
+|         -> Parent forks child; creates inter-process sync pipe / eventfd          |
++-----------------------------------------------------------------------------------+
+| Step 3: Attach Child to Cgroup & Map User IDs                                     |
+|         -> Parent writes child PID into pes-job-<id>/cgroup.procs                 |
+|         -> If rootless userns: parent executes newuidmap / newgidmap to map       |
+|            subordinate UID/GID ranges before child attempts identity transitions  |
+|         -> Parent signals child via pipe that environment is ready                |
++-----------------------------------------------------------------------------------+
+
+                                      | (child proceeds)
+                                      v
+
++-----------------------------------------------------------------------------------+
+|                             ISOLATED CHILD LIFECYCLE                              |
++-----------------------------------------------------------------------------------+
+| Step 4: Wait for Parent Synchronization                                           |
+|         -> Child reads from sync pipe; ensures cgroup and uid_map are established |
++-----------------------------------------------------------------------------------+
+| Step 5: Unshare Isolation Namespaces                                              |
+|         -> unshare(CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS | CLONE_NEWIPC)     |
++-----------------------------------------------------------------------------------+
+| Step 6: Private Mount Propagation & Minimal Rootfs Setup                          |
+|         -> mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL)                      |
+|         -> Mount private tmpfs workspace and bind-mount read-only libraries       |
++-----------------------------------------------------------------------------------+
+| Step 7: Swap Root Filesystem via pivot_root                                       |
+|         -> pivot_root(new_root, put_old) swaps process view of /                  |
+|         -> Detach and unmount old root directory (umount2(put_old, MNT_DETACH))   |
++-----------------------------------------------------------------------------------+
+| Step 8: Drop Auxiliary Groups & Drop Privileges                                   |
+|         -> setgroups(0, NULL); setgid(nobody_gid); setuid(nobody_uid)             |
+|         -> MUST use mapped IDs established by parent in Step 3                    |
++-----------------------------------------------------------------------------------+
+| Step 9: Enforce No-New-Privileges Boundary                                        |
+|         -> prctl(PR_SET_NO_NEW_PRIVS, 1)                                          |
+|         -> Mandatory kernel prerequisite before installing unprivileged seccomp   |
++-----------------------------------------------------------------------------------+
+| Step 10: Install Seccomp-BPF Syscall Filter                                       |
+|          -> Install allowlist validated against runtime dynamic linker (ld.so)   |
+|          -> Permanent lockdown: blocks socket, mount, pivot_root, ptrace, setuid  |
++-----------------------------------------------------------------------------------+
+| Step 11: Execute Target Program via execve                                        |
+|          -> execve(binary, argv, envp) with scrubbed environment                  |
++-----------------------------------------------------------------------------------+
 ```
 
-### Why Dependency Ordering Matters:
-1. **User Namespace before Mount Namespace:** Creating private mounts and invoking `pivot_root` requires `CAP_SYS_ADMIN` within the user namespace.
-2. **Mount Setup before Privilege Dropping:** Mounting tmpfs, bind mounting libraries, and swapping roots with `pivot_root` requires namespace privileges; dropping to `nobody` must happen *after* mounts are locked down.
-3. **`PR_SET_NO_NEW_PRIVS` before Seccomp:** The Linux kernel strictly forbids unprivileged processes from installing seccomp-bpf filters unless `no_new_privs` has already been set (`prctl(PR_SET_NO_NEW_PRIVS, 1)`).
-4. **Seccomp after Filesystem/Socket Setup:** Once the seccomp allowlist is loaded, syscalls like `mount()`, `pivot_root()`, and `socket()` are permanently blocked for that process and its children.
+### Why This Ordering is Essential (Avoiding Classic Systems Traps):
 
----
+1. **Why Cgroup Placement Must Happen in the Parent (Step 1 & 3):**
+   * *Permission Trap:* Moving a process into a cgroup requires write permission on `cgroup.procs`. In user delegation, the directory is owned by the host user (UID 1000). If the child process dropped identity to `nobody` (UID 65534) before writing to `cgroup.procs`, the write fails with `EACCES`.
+   * *Seccomp Self-Block:* Once a seccomp filter is loaded (Step 10), writing to `/sys/fs/cgroup` is permanently blocked. The parent must bind the child to the cgroup *before* the child drops privileges or locks itself down.
 
-## Systems Correctness Notes
+2. **Why User Namespace Mapping Must Precede Identity Dropping (Step 3 before Step 8):**
+   * Inside a newly created user namespace (`CLONE_NEWUSER`), UIDs and GIDs start in an unmapped state.
+   * Calling `setuid(nobody_uid)` or `setgid(nobody_gid)` fails immediately (`EINVAL` or `EPERM`) if those IDs have not been registered in `/proc/[pid]/uid_map` and `/proc/[pid]/gid_map`. The parent must establish the ID mapping before the child attempts to switch to `nobody`.
 
-### 1. `PR_SET_PDEATHSIG` Limitation with Grandchildren
-`prctl(PR_SET_PDEATHSIG, SIGKILL)` asks the Linux kernel to send `SIGKILL` to the calling process when its immediate parent dies.
-* **The Failure Mode:** Signals delivered to a direct child do **not** propagate down process trees automatically. If the direct child spawns grandchild processes or detaches background daemons, those grandchildren do not receive the signal. When the direct child dies, grandchildren are reparented to PID 1 (`init` / `systemd`) as orphaned background workloads.
-* **The Solution:** True descendant lifecycle containment requires **PID namespaces (`CLONE_NEWPID`)** (where terminating PID 1 terminates all processes in the namespace) and **cgroups v2 (`cgroup.kill`)** (which sends `SIGKILL` to every task in the cgroup simultaneously).
+3. **Why Seccomp Allowlist Requires Dynamic Linker Mapping (Step 10):**
+   * A common beginner mistake is assuming a simple 6-syscall allowlist (`read`, `write`, `exit_group`, `brk`, `mmap`, `poll`) can run real programs.
+   * In Linux, dynamic binaries require the dynamic linker (`ld.so`) and C runtime to execute dozens of low-level syscalls during process initialization: `arch_prctl`, `set_tid_address`, `set_robust_list`, `prlimit64`, `rseq`, `futex`, `mprotect`, `rt_sigaction`, `rt_sigprocmask`, and `getrandom`.
+   * If any of these are omitted, the process is instantly terminated by `SIGSYS` before reaching `main()`.
+   * *Required Approach:* Develop seccomp filters in two stages:
+     1. **Audit / Log Mode (`SECCOMP_RET_LOG`):** Intercept and record all syscalls made during legitimate runs of target language runtimes.
+     2. **Strict Enforcement Mode (`SECCOMP_RET_KILL_PROCESS`):** Lock down the filter only after integration tests prove the allowlist permits all runtime prerequisites.
 
-### 2. Disambiguating unshare ENOSYS
-In containerized development environments, `libc.unshare(CLONE_NEWUSER)` may return `errno=38 (ENOSYS)`.
-* **Observed Fact:** The kernel returns `ENOSYS` ("Function not implemented").
-* **Separation from Inferences:** Do not assert without proof that an outer container seccomp filter caused the error. `ENOSYS` can occur because the kernel was built without `CONFIG_USER_NS`, because an outer container filter rewrites the syscall, or because a security module (LSM) blocks it. Document the observed errno and record the cause as unverified.
+4. **`PR_SET_PDEATHSIG` Limitation with Process Trees:**
+   * `prctl(PR_SET_PDEATHSIG, SIGKILL)` delivers a signal to the **immediate child only** when the calling parent process terminates.
+   * Signals delivered to a child do **not** propagate down process trees automatically. If the child process forks grandchildren or starts background processes, those grandchildren do not receive `PDEATHSIG`. When the child terminates, grandchildren are reparented to PID 1 (`init` / `systemd`) as orphaned background workloads.
+   * True descendant lifecycle containment requires **PID namespaces (`CLONE_NEWPID`)** (where terminating PID 1 terminates all processes in the namespace) and **cgroups v2 (`cgroup.kill`)** (which sends `SIGKILL` to every process in the cgroup simultaneously).
+
+5. **Disambiguating unshare ENOSYS:**
+   * *Observed Evidence:* In our environment, `libc.unshare(CLONE_NEWUSER)` returned `ret=-1, errno=38 (ENOSYS)`.
+   * *Separation from Inferences:* `ENOSYS` ("Function not implemented") is recorded as observed fact. Its underlying cause remains an unverified hypothesis: it leaves open whether the running kernel lacks user namespace support (`CONFIG_USER_NS`), an outer container supervisor seccomp profile intercepts the call, an LSM policy blocks it, or container hypervisor restrictions apply. Do not assume or assert container seccomp filtering without independent proof.
 
 ### 3. Resource Limits vs Sandbox Isolation (Defense in Depth)
 A common beginner misconception is assuming that resource limits (`RLIMIT_CPU`, `RLIMIT_AS`) constitute sandboxing.

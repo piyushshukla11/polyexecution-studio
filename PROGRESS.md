@@ -741,6 +741,25 @@
 - Piyush prediction (optional): Corrected sequencing will prevent permission denial and seccomp self-block bugs when Phase 2 implementation begins.
 - Tutor review: pending
 
+## [LOG-0044] 2026-11-14 12:45 IST | DONE | actor: agent
+- Reason: Complete Phase 2 dependency ordering and systems documentation corrections in docs/03_SANDBOX_DEEP_DIVE.md and LEARNING_NOTES/phase-1.md.
+- Details / Change:
+  1. Updated docs/03_SANDBOX_DEEP_DIVE.md:
+     - Corrected capability status table to eliminate overclaimed 'Ready:' tags, aligning with PRESENT, PROBE_SUCCEEDED, INFERRED, UNAVAILABLE, and UNKNOWN taxonomy.
+     - Restructured Phase 2 implementation sequence into two clearly separated lifecycles: Parent Supervisor (cgroup creation under delegated user slice, setting limits, writing child PID to cgroup.procs, establishing user ID mapping via newuidmap/newgidmap) and Isolated Child (unsharing namespaces, private mounts, pivot_root, dropping identity, setting no_new_privs, loading seccomp, execve).
+     - Explained the permission trap: writing to cgroup.procs must happen from the supervisor before the child drops identity to nobody, and before seccomp blocks filesystem writes.
+     - Explained the user namespace mapping trap: child cannot drop identity to nobody until the parent registers subordinate UID/GID mappings in /proc/[pid]/uid_map.
+     - Clarified that a static 6-call seccomp allowlist will fail with SIGSYS on dynamic binaries, and documented the two-stage rollout (audit mode -> enforcement mode).
+     - Reasserted PR_SET_PDEATHSIG direct-child limitation vs CLONE_NEWPID and cgroup.kill.
+     - Documented diagnosable fixture outcomes and canary verification.
+  2. Updated LEARNING_NOTES/phase-1.md (local-only) with matching systems corrections and architectural explanations.
+  3. Verified make clean && make test (all 18 Phase 1 tests pass, 3 Phase 2 checks pending) and run preflight + diagnostics test suites (14/14 tests pass).
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0043
+- Piyush prediction (optional): Corrected sequencing will prevent permission denial and seccomp self-block bugs when Phase 2 implementation begins.
+- Tutor review: pending
+
+
 
 
 
