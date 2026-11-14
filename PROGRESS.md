@@ -1230,3 +1230,15 @@
 - Linked: LOG-0067
 - Piyush prediction (optional): Adding structural index-ordering checks in diagnostics ensures future document or runner updates cannot invert privilege-dropping stages without failing tests.
 - Tutor review: pending
+
+
+## [LOG-0069] 2026-11-14 22:56 IST | CORRECTION | actor: agent
+- Reason: Record clarification to LOG-0068 wording regarding documentation-contract verification versus host runtime kernel enforcement.
+- Details / Change:
+  1. In LOG-0068 Details and Change Report, the phrasing stated that the test "verified mount("proc", ...) requires CAP_SYS_ADMIN" and "verified PR_CAPBSET_DROP requires CAP_SETPCAP".
+  2. Clarification: The unit test in scripts/test_phase2_diagnostics.py asserts that the written architecture documentation (docs/03_SANDBOX_DEEP_DIVE.md) explicitly specifies these kernel prerequisites and encodes the proper sequence. The test does not invoke privileged syscalls, create namespaces, drop capabilities, or verify runtime kernel enforcement on the host.
+  3. Host runtime validation of Phase 2 isolation boundaries remains strictly pending until Phase 2 container isolation prerequisites are implemented and authorized.
+- Files: PROGRESS.md
+- Linked: LOG-0068
+- Piyush prediction (optional): Maintaining a strict distinction between documentation-contract testing and runtime kernel enforcement prevents false security assumptions.
+- Tutor review: pending
