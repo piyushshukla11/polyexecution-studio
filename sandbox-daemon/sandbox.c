@@ -1,8 +1,17 @@
 #define _GNU_SOURCE
 
+/* AGENT-WROTE-TIER-A: Phase 2 sandbox core changes are owner-authorized. */
 #include "sandbox.h"
+#include "phase2_cgroup.h"
+#include "phase2_userns.h"
+#include "phase2_rootfs.h"
+#include "phase2_privilege.h"
 #include <limits.h>
 #include <signal.h>
+#include <sys/syscall.h>
+
+#define MAX_TARGET_ARGS 128U
+#define MAX_TARGET_ARG_LEN 4096U
 
 void sandbox_config_init_default(sandbox_config_t *cfg) {
     if (!cfg) return;
@@ -14,6 +23,8 @@ void sandbox_config_init_default(sandbox_config_t *cfg) {
     cfg->rlimit_fsize = 1024ULL * 1024ULL;              /* 1 MiB */
     cfg->rlimit_nofile = 64;
     cfg->max_output_bytes = 64ULL * 1024ULL;            /* 64 KiB */
+    cfg->target_args = NULL;
+    cfg->target_argc = 0;
 }
 
 void sandbox_result_cleanup(sandbox_result_t *res) {
@@ -139,6 +150,110 @@ static int terminate_and_reap_setup_child(pid_t pid, int *status, struct rusage 
     return -1;
 }
 
+static void set_setup_failure(sandbox_result_t *res, setup_stage_t stage, int errnum) {
+    res->status = STATUS_SETUP_ERROR;
+    res->setup_err.stage = (int32_t)stage;
+    res->setup_err.errnum = (int32_t)errnum;
+    res->exit_code = 127;
+}
+
+static void set_elapsed_wall(sandbox_result_t *res, uint64_t start_ms) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) return;
+    uint64_t now_ms = (uint64_t)now.tv_sec * 1000ULL + (uint64_t)now.tv_nsec / 1000000ULL;
+    res->wall_ms = (uint32_t)(now_ms - start_ms);
+}
+
+static int setup_gate_wait(int read_fd) {
+    unsigned char release = 0;
+    ssize_t n;
+    do {
+        n = read(read_fd, &release, sizeof(release));
+    } while (n < 0 && errno == EINTR);
+    if (n != 1 || release != 1) {
+        errno = n < 0 ? errno : ECANCELED;
+        return -1;
+    }
+    return 0;
+}
+
+static int setup_gate_release(int write_fd) {
+    const unsigned char release = 1;
+    ssize_t n;
+    do {
+        n = write(write_fd, &release, sizeof(release));
+    } while (n < 0 && errno == EINTR);
+    if (n != 1) {
+        errno = n < 0 ? errno : EIO;
+        return -1;
+    }
+    return 0;
+}
+
+static int parent_read_userns_ready(int read_fd, phase2_userns_ready_t *ready, uint64_t deadline_ms) {
+    size_t total = 0;
+    char *bytes = (char *)ready;
+    while (total < sizeof(*ready)) {
+        struct timespec now;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) return -1;
+        uint64_t now_ms = (uint64_t)now.tv_sec * 1000ULL + (uint64_t)now.tv_nsec / 1000000ULL;
+        if (now_ms >= deadline_ms) return -2;
+        uint64_t remaining = deadline_ms - now_ms;
+        int wait_ms = remaining > (uint64_t)INT_MAX ? INT_MAX : (int)remaining;
+        struct pollfd pfd = {.fd = read_fd, .events = POLLIN | POLLHUP, .revents = 0};
+        int poll_result = poll(&pfd, 1, wait_ms);
+        if (poll_result == 0) continue;
+        if (poll_result < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        ssize_t n = read(read_fd, bytes + total, sizeof(*ready) - total);
+        if (n > 0) total += (size_t)n;
+        else if (n == 0) return -1;
+        else if (errno != EINTR) return -1;
+    }
+    return 0;
+}
+
+static int cleanup_job_resources(phase2_cgroup_t *cgroup, const char *root_mountpoint) {
+    if (!cgroup || !cgroup->active) return 0;
+    if (phase2_cgroup_kill(cgroup) < 0) return -1;
+    int result = phase2_cgroup_remove(cgroup);
+    int saved_errno = result < 0 ? errno : 0;
+    if (root_mountpoint && root_mountpoint[0] != '\0' && phase2_rootfs_remove_mountpoint(root_mountpoint) < 0) {
+        if (result == 0) saved_errno = errno;
+        result = -1;
+    }
+    if (result < 0) errno = saved_errno;
+    return result;
+}
+
+static int close_unrelated_fds(int preserve_fd) {
+#ifdef SYS_close_range
+    bool close_range_ok = true;
+    if (preserve_fd > STDERR_FILENO + 1 &&
+        syscall(SYS_close_range, (unsigned int)(STDERR_FILENO + 1), (unsigned int)(preserve_fd - 1), 0) < 0) {
+        if (errno != ENOSYS && errno != EINVAL) return -1;
+        close_range_ok = false;
+    }
+    if (preserve_fd < INT_MAX &&
+        syscall(SYS_close_range, (unsigned int)(preserve_fd + 1), UINT_MAX, 0) < 0) {
+        if (errno != ENOSYS && errno != EINVAL) return -1;
+        close_range_ok = false;
+    }
+    if (close_range_ok) return 0;
+#endif
+    struct rlimit nofile;
+    if (getrlimit(RLIMIT_NOFILE, &nofile) < 0) return -1;
+    rlim_t max_fd = nofile.rlim_cur;
+    if (max_fd == RLIM_INFINITY || max_fd > 1048576) max_fd = 1048576;
+    for (int fd = STDERR_FILENO + 1; (rlim_t)fd < max_fd; fd++) {
+        if (fd == preserve_fd) continue;
+        if (close(fd) < 0 && errno != EBADF) return -1;
+    }
+    return 0;
+}
+
 /*
  * Safe buffer append helper.
  * Appends up to n bytes from data into *buf without exceeding max_bytes.
@@ -226,6 +341,18 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         return -1;
     }
     memset(res, 0, sizeof(*res));
+    if (cfg->target_argc > MAX_TARGET_ARGS || (cfg->target_argc > 0 && !cfg->target_args)) {
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+        errno = E2BIG;
+        return -1;
+    }
+    for (size_t i = 0; i < cfg->target_argc; i++) {
+        if (!cfg->target_args[i] || strnlen(cfg->target_args[i], MAX_TARGET_ARG_LEN + 1U) > MAX_TARGET_ARG_LEN) {
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
+            errno = E2BIG;
+            return -1;
+        }
+    }
 
     /* Ensure descriptors 0, 1, 2 are valid */
     if (normalize_standard_descriptors() < 0) {
@@ -268,19 +395,93 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         return -1;
     }
 
-    /* Sample start monotonic time */
-    struct timespec start_tp;
-    clock_gettime(CLOCK_MONOTONIC, &start_tp);
-    uint64_t start_ms = (uint64_t)start_tp.tv_sec * 1000ULL + (uint64_t)start_tp.tv_nsec / 1000000ULL;
-    uint64_t deadline_ms = start_ms + (uint64_t)cfg->timeout_ms;
-
-    pid_t pid = fork();
-    if (pid < 0) {
+    int gate_pipe[2];
+    if (pipe2(gate_pipe, O_CLOEXEC) < 0) {
         close(err_pipe[0]); close(err_pipe[1]);
         close(stdout_pipe[0]); close(stdout_pipe[1]);
         close(stderr_pipe[0]); close(stderr_pipe[1]);
         res->status = STATUS_RUNNER_INTERNAL_ERROR;
         return -1;
+    }
+
+    int userns_ready_pipe[2];
+    if (pipe2(userns_ready_pipe, O_CLOEXEC) < 0) {
+        close(gate_pipe[0]); close(gate_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stderr_pipe[0]); close(stderr_pipe[1]);
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+        return -1;
+    }
+
+    int placement_pipe[2];
+    if (pipe2(placement_pipe, O_CLOEXEC) < 0) {
+        close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
+        close(gate_pipe[0]); close(gate_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stderr_pipe[0]); close(stderr_pipe[1]);
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+        return -1;
+    }
+
+    phase2_cgroup_t job_cgroup;
+    phase2_cgroup_limits_t cgroup_limits;
+    phase2_cgroup_limits_init(&cgroup_limits);
+    if (phase2_cgroup_create(&job_cgroup, "/sys/fs/cgroup", "/proc/self/cgroup", &cgroup_limits) < 0) {
+        int setup_errno = errno;
+        if (job_cgroup.active && cleanup_job_resources(&job_cgroup, NULL) < 0) {
+            close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
+            close(placement_pipe[0]); close(placement_pipe[1]);
+            close(gate_pipe[0]); close(gate_pipe[1]);
+            close(err_pipe[0]); close(err_pipe[1]);
+            close(stdout_pipe[0]); close(stdout_pipe[1]);
+            close(stderr_pipe[0]); close(stderr_pipe[1]);
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
+            return -1;
+        }
+        close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
+        close(placement_pipe[0]); close(placement_pipe[1]);
+        close(gate_pipe[0]); close(gate_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stderr_pipe[0]); close(stderr_pipe[1]);
+        set_setup_failure(res, SETUP_STAGE_CGROUP_CREATE, setup_errno);
+        return 0;
+    }
+
+    char root_mountpoint[PATH_MAX] = {0};
+    if (phase2_rootfs_create_mountpoint(root_mountpoint, sizeof(root_mountpoint)) < 0) {
+        int setup_errno = errno;
+        (void)cleanup_job_resources(&job_cgroup, NULL);
+        close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
+        close(placement_pipe[0]); close(placement_pipe[1]);
+        close(gate_pipe[0]); close(gate_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stderr_pipe[0]); close(stderr_pipe[1]);
+        set_setup_failure(res, SETUP_STAGE_ROOTFS, setup_errno);
+        return 0;
+    }
+
+    /* Sample start monotonic time */
+    struct timespec start_tp;
+    clock_gettime(CLOCK_MONOTONIC, &start_tp);
+    uint64_t start_ms = (uint64_t)start_tp.tv_sec * 1000ULL + (uint64_t)start_tp.tv_nsec / 1000000ULL;
+    uint64_t deadline_ms = start_ms + (uint64_t)cfg->timeout_ms;
+    pid_t runner_pid = getpid();
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        int fork_errno = errno;
+        (void)cleanup_job_resources(&job_cgroup, root_mountpoint);
+        close(placement_pipe[0]); close(placement_pipe[1]);
+        close(gate_pipe[0]); close(gate_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stderr_pipe[0]); close(stderr_pipe[1]);
+        set_setup_failure(res, SETUP_STAGE_CGROUP_CREATE, fork_errno);
+        return 0;
     }
 
     if (pid == 0) {
@@ -290,7 +491,36 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         close(err_pipe[0]);
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
+        close(gate_pipe[1]);
+        close(userns_ready_pipe[0]);
+        close(placement_pipe[1]);
 
+        if (setup_gate_wait(placement_pipe[0]) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CGROUP_RELEASE, errno);
+        }
+        close(placement_pipe[0]);
+
+        if (phase2_set_parent_death_signal(runner_pid) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+        }
+
+        if (phase2_userns_child_start(userns_ready_pipe[1]) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_USERNS_CREATE, errno);
+        }
+        close(userns_ready_pipe[1]);
+
+        if (setup_gate_wait(gate_pipe[0]) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CGROUP_RELEASE, errno);
+        }
+        close(gate_pipe[0]);
+
+        int null_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        if (null_fd < 0 || dup2(null_fd, STDIN_FILENO) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CLOSE_FDS, errno);
+        }
+        if (null_fd != STDIN_FILENO && close(null_fd) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CLOSE_FDS, errno);
+        }
         /* 1. Establish new session / process group */
         if (setsid() < 0) {
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SETSID, errno);
@@ -307,6 +537,9 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         /* Close original write descriptors if not already 1 and 2 */
         if (stdout_pipe[1] != STDOUT_FILENO) close(stdout_pipe[1]);
         if (stderr_pipe[1] != STDERR_FILENO) close(stderr_pipe[1]);
+        if (close_unrelated_fds(err_pipe[1]) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CLOSE_FDS, errno);
+        }
 
         /* 3. Apply resource limits (rlimits) */
         struct rlimit rl;
@@ -346,14 +579,75 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SETRLIMIT_NOFILE, errno);
         }
 
-        /* 4. Execute target binary with scrubbed environment */
-        char *const child_argv[] = { (char *)binary_path, NULL };
-        char *const child_envp[] = { NULL };
+        if (phase2_child_create_namespaces() < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NAMESPACES, errno);
+        }
 
-        execve(binary_path, child_argv, child_envp);
+        char target_path[PATH_MAX];
+        if (phase2_rootfs_prepare(binary_path, root_mountpoint, target_path, sizeof(target_path)) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_ROOTFS, errno);
+        }
 
-        /* If execve returns, it failed */
-        child_report_error_and_exit(err_pipe[1], SETUP_STAGE_EXECVE, errno);
+        pid_t supervisor_pid = getpid();
+        pid_t target_pid = fork();
+        if (target_pid < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NAMESPACES, errno);
+        }
+        if (target_pid == 0) {
+            if (phase2_set_parent_death_signal(supervisor_pid) < 0) {
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+            }
+            if (phase2_rootfs_mount_proc() < 0) {
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_PROCFS, errno);
+            }
+            if (phase2_target_drop_capabilities_and_identity() < 0) {
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CAPABILITY_DROP, errno);
+            }
+            if (phase2_target_enable_nnp() < 0) {
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NNP, errno);
+            }
+            if (phase2_target_install_seccomp() < 0) {
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SECCOMP, errno);
+            }
+            char *child_argv[MAX_TARGET_ARGS + 2];
+            child_argv[0] = target_path;
+            for (size_t arg_index = 0; arg_index < cfg->target_argc; arg_index++) {
+                child_argv[arg_index + 1] = (char *)cfg->target_args[arg_index];
+            }
+            child_argv[cfg->target_argc + 1] = NULL;
+            char *const child_envp[] = { NULL };
+            execve(target_path, child_argv, child_envp);
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_EXECVE, errno);
+        }
+
+        /* The trusted supervisor stays outside the PID namespace and reaps PID 1. */
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
+        if (phase2_supervisor_drop_privileges() < 0) {
+            int supervisor_errno = errno;
+            int target_status = 0;
+            struct rusage target_usage;
+            memset(&target_usage, 0, sizeof(target_usage));
+            (void)kill(target_pid, SIGKILL);
+            (void)wait4_retry(target_pid, &target_status, &target_usage);
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, supervisor_errno);
+        }
+        close(err_pipe[1]);
+
+        int target_status = 0;
+        pid_t waited;
+        do {
+            waited = waitpid(target_pid, &target_status, 0);
+        } while (waited < 0 && errno == EINTR);
+        if (waited != target_pid) _exit(126);
+        if (WIFEXITED(target_status)) _exit(WEXITSTATUS(target_status));
+        if (WIFSIGNALED(target_status)) {
+            int target_signal = WTERMSIG(target_status);
+            (void)signal(target_signal, SIG_DFL);
+            (void)raise(target_signal);
+            _exit(128 + target_signal);
+        }
+        _exit(126);
     }
 
     /*
@@ -362,6 +656,105 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
     close(err_pipe[1]);
     close(stdout_pipe[1]);
     close(stderr_pipe[1]);
+    close(gate_pipe[0]);
+    close(userns_ready_pipe[1]);
+    close(placement_pipe[0]);
+
+    if (phase2_cgroup_attach(&job_cgroup, pid) < 0) {
+        int attach_errno = errno;
+        int child_status = 0;
+        struct rusage child_usage;
+        memset(&child_usage, 0, sizeof(child_usage));
+        (void)terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        close(gate_pipe[1]); close(userns_ready_pipe[0]); close(placement_pipe[1]); close(err_pipe[0]);
+        close(stdout_pipe[0]); close(stderr_pipe[0]);
+        if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
+            return -1;
+        }
+        set_setup_failure(res, SETUP_STAGE_CGROUP_ATTACH, attach_errno);
+        return 0;
+    }
+
+    if (setup_gate_release(placement_pipe[1]) < 0) {
+        int placement_errno = errno;
+        int child_status = 0;
+        struct rusage child_usage;
+        memset(&child_usage, 0, sizeof(child_usage));
+        int cleanup_result = terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        close(placement_pipe[1]); close(userns_ready_pipe[0]); close(gate_pipe[1]); close(err_pipe[0]);
+        close(stdout_pipe[0]); close(stderr_pipe[0]);
+        if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_CHILD_LOST;
+            return -1;
+        }
+        set_setup_failure(res, SETUP_STAGE_CGROUP_RELEASE, placement_errno);
+        return 0;
+    }
+    close(placement_pipe[1]);
+
+    phase2_userns_ready_t userns_ready = {0};
+    int ready_result = parent_read_userns_ready(userns_ready_pipe[0], &userns_ready, deadline_ms);
+    close(userns_ready_pipe[0]);
+    if (ready_result != 0 || userns_ready.result != 0) {
+        int child_status = 0;
+        struct rusage child_usage;
+        memset(&child_usage, 0, sizeof(child_usage));
+        int cleanup_result = terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        close(gate_pipe[1]); close(err_pipe[0]);
+        close(stdout_pipe[0]); close(stderr_pipe[0]);
+        if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_CHILD_LOST;
+            return -1;
+        }
+        if (ready_result == -2) {
+            res->status = STATUS_TIMEOUT;
+            set_elapsed_wall(res, start_ms);
+            return 0;
+        }
+        set_setup_failure(res, SETUP_STAGE_USERNS_CREATE,
+                          userns_ready.errnum != 0 ? userns_ready.errnum : EPROTO);
+        return 0;
+    }
+
+    bool gid_map_failed = false;
+    if (phase2_userns_parent_map(pid, deadline_ms, &gid_map_failed) < 0) {
+        int map_errno = errno;
+        int child_status = 0;
+        struct rusage child_usage;
+        memset(&child_usage, 0, sizeof(child_usage));
+        int cleanup_result = terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        close(gate_pipe[1]); close(err_pipe[0]);
+        close(stdout_pipe[0]); close(stderr_pipe[0]);
+        if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_CHILD_LOST;
+            return -1;
+        }
+        if (map_errno == ETIMEDOUT) {
+            res->status = STATUS_TIMEOUT;
+            set_elapsed_wall(res, start_ms);
+            return 0;
+        }
+        set_setup_failure(res, gid_map_failed ? SETUP_STAGE_GID_MAP : SETUP_STAGE_UID_MAP, map_errno);
+        return 0;
+    }
+
+    if (setup_gate_release(gate_pipe[1]) < 0) {
+        int release_errno = errno;
+        int child_status = 0;
+        struct rusage child_usage;
+        memset(&child_usage, 0, sizeof(child_usage));
+        (void)terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        close(gate_pipe[1]); close(err_pipe[0]);
+        close(stdout_pipe[0]); close(stderr_pipe[0]);
+        if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
+            return -1;
+        }
+        set_setup_failure(res, SETUP_STAGE_CGROUP_RELEASE, release_errno);
+        return 0;
+    }
+    close(gate_pipe[1]);
 
     /* Read error pipe */
     setup_error_t s_err;
@@ -379,7 +772,13 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         close(stderr_pipe[0]);
 
         if (reap_pid != pid) {
+            (void)cleanup_job_resources(&job_cgroup, root_mountpoint);
             res->status = STATUS_RUNNER_CHILD_LOST;
+            return -1;
+        }
+
+        if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
             return -1;
         }
 
@@ -397,7 +796,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
 
-        if (cleanup_result < 0) {
+        if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
             res->status = STATUS_RUNNER_CHILD_LOST;
             return -1;
         }
@@ -582,6 +981,10 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             }
             if (stdout_open) { close(stdout_pipe[0]); stdout_open = false; }
             if (stderr_open) { close(stderr_pipe[0]); stderr_open = false; }
+            if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+                res->status = STATUS_RUNNER_INTERNAL_ERROR;
+                return -1;
+            }
             res->status = STATUS_RUNNER_INTERNAL_ERROR;
             return -1;
         }
@@ -695,6 +1098,11 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                 res->status = STATUS_INDETERMINATE_SETUP_STATUS;
             }
         }
+    }
+
+    if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+        return -1;
     }
 
     /* Compute elapsed wall time and CPU time */
@@ -868,6 +1276,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "  --as-mb <mb>           RLIMIT_AS limit in MiB (default: 128)\n");
         fprintf(stderr, "  --fsize-mb <mb>        RLIMIT_FSIZE limit in MiB (default: 1)\n");
         fprintf(stderr, "  --max-output-kb <kb>   Output stream cap in KiB (default: 64)\n");
+        fprintf(stderr, "  -- <binary> [args...]  Target executable and arguments (max 128, 4096 bytes each)\n");
         return 1;
     }
 
@@ -875,9 +1284,20 @@ int main(int argc, char *argv[]) {
     sandbox_config_init_default(&cfg);
 
     const char *binary_path = NULL;
+    bool target_args_started = false;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--job-id") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "--") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: -- requires a target binary\n");
+                return 1;
+            }
+            binary_path = argv[++i];
+            cfg.target_args = (const char *const *)&argv[i + 1];
+            cfg.target_argc = (size_t)(argc - i - 1);
+            target_args_started = true;
+            break;
+        } else if (strcmp(argv[i], "--job-id") == 0 && i + 1 < argc) {
             cfg.job_id = argv[++i];
         } else if (strcmp(argv[i], "--timeout-ms") == 0 && i + 1 < argc) {
             cfg.timeout_ms = (uint32_t)strtoul(argv[++i], NULL, 10);
@@ -901,6 +1321,11 @@ int main(int argc, char *argv[]) {
 
     if (!binary_path) {
         fprintf(stderr, "Error: no target binary specified\n");
+        return 1;
+    }
+
+    if (target_args_started && cfg.target_argc > MAX_TARGET_ARGS) {
+        fprintf(stderr, "Error: target argument count exceeds %u\n", MAX_TARGET_ARGS);
         return 1;
     }
 

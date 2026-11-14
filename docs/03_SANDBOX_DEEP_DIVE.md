@@ -314,21 +314,15 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
    * *Host Runtime Boundary:*
      A direct `unshare(CLONE_NEWPID)` probe from the original environment currently returns `EPERM`. Whether creating a user namespace first enables the required PID namespace setup is unverified. Runtime verification of child PID namespace creation and procfs isolation is still pending.
 
-8. **Target Arguments & Environment: Current Runner Gap & Safe Future Interface Contract:**
-   * *Current Implementation Gap:*
-     Inspecting `sandbox-daemon/sandbox.c` lines 313-316 reveals that the Phase 1 runner hardcodes:
-     ```c
-     char *const child_argv[] = { (char *)binary_path, NULL };
-     char *const child_envp[] = { NULL };
-     execve(binary_path, child_argv, child_envp);
-     ```
-     Furthermore, `sandbox_config_t` and `run_sandbox_with_config()` in `sandbox.h` accept only `const char *binary_path` without argument or environment parameters.
-     In contrast, the Phase 2 adversarial fixtures (`read_etc_passwd.c` and `net_connect.c`) accept dynamic parameters via `argv[1]`, `argv[2]` and environment variables (`PES_CANARY_PATH`, `PES_CANARY_TOKEN`, `PES_NET_TARGET_IP`, `PES_NET_TARGET_PORT`). The current runner cannot pass these values to target programs.
-   * *Safe Future Request Interface Contract (Phase 2 / Phase 3 gRPC `ExecuteRequest`):*
+8. **Target Arguments & Environment: Bounded Argument Vector and Safe Future Interface Contract:**
+   * *Current Implementation:*
+     The runner accepts `sandbox-runner -- <binary> [args...]` and passes the ordered tokens directly to `execve()` after copying the binary into the private root. `sandbox_config_t` carries `target_args` and `target_argc`; the runner caps these at 128 arguments and 4096 bytes per argument. The environment remains empty. No shell command string or ambient environment is passed to the target.
+     The Phase 2 adversarial fixtures (`read_etc_passwd.c` and `net_connect.c`) can receive paths, tokens, IPs, and ports through argv. Environment-based fixture settings remain unavailable because the runner intentionally supplies an empty environment.
+   * *Safe Request Interface Contract (Phase 3 gRPC `ExecuteRequest`):*
      When extending the runner and proto contracts, the interface must strictly implement four security principles:
      1. **Explicit Argument Array (`char *const argv[]` / `repeated string args`):**
         - Target arguments must be passed as an explicit, ordered array of distinct string tokens passed directly to `execve`.
-        - Enforce hard limits: maximum argument count (e.g. `MAX_ARGV = 64`) and maximum per-argument string length (e.g. `MAX_ARG_LEN = 4096 bytes`) to prevent memory exhaustion in the runner.
+        - Keep hard limits on argument count and per-argument length to prevent memory exhaustion in the runner.
      2. **Explicit Environment Allowlist (`char *const envp[]` / `map<string, string> env`):**
         - The default environment must remain strictly empty (`envp = { NULL }`).
         - Only explicitly approved variables may be passed into the container (e.g. `LANG=C.UTF-8`, `PATH=/usr/bin:/bin`, `PES_CANARY_PATH=...`, `PES_CANARY_TOKEN=...`).
@@ -342,7 +336,7 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
         - The runner must use `execve()`, never `execvp()` or `execvpe()`.
         - Searching `PATH` allows untrusted code to drop a trojan binary in a writable directory earlier in `PATH`, hijacking execution.
    * *Tier Boundary Notice:*
-     `sandbox-daemon/sandbox.c` and `sandbox.h` remain Tier A and are not modified during this audit. The current runner is not claimed to support these fixture options.
+     `sandbox-daemon/sandbox.c` and `sandbox.h` are Tier A files. Owner authorization for agent-written Tier A changes is recorded in `AI_RULES.md` section 14; this implementation is labeled `AGENT-WROTE-TIER-A` in the Phase 2 change report.
 
 9. **Capability Dropping Architecture & Open Design Questions (`capabilities(7)`, `prctl(2)`):**
    * *Resolution of the Capability Reduction Ordering Protocol:*
@@ -413,3 +407,24 @@ A common beginner misconception is assuming that resource limits (`RLIMIT_CPU`, 
 
 ## How we will test it (adversarial suite, `sandbox-daemon/tests/evil/`)
 `infinite_loop.c`, `sleeper.c`, `memory_bomb.c`, `fork_bomb.c`, `disk_filler.c`, `output_flood.c`, `read_etc_passwd.c`, `net_connect.c`, `ptrace_self.c`, `setuid_try.c`, `escape_child.c` (child that outlives parent). Each must produce a clean, correct status and leave **no stray processes** (`pgrep` check).
+
+## Phase 2 Implementation and Live Host Evidence (2026-11-15)
+
+The Phase 2 runner path is implemented in `sandbox-daemon/phase2_cgroup.c`, `phase2_userns.c`, `phase2_rootfs.c`, and `phase2_privilege.c`, and is wired through `sandbox.c`. The parent creates a per-run cgroup, blocks the child behind a placement pipe, attaches it before namespace setup, waits for `CLONE_NEWUSER`, applies and reads back exact UID/GID maps using `newuidmap`/`newgidmap`, then releases the child. The child creates PID, mount, network, IPC, and UTS namespaces, prepares a tmpfs root with read-only runtime directory binds, pivots root, and forks PID 1. PID 1 mounts procfs, drops supplementary groups and capabilities, changes all UID/GID slots to 65534, verifies all five capability masks, verifies NNP, installs the default-kill seccomp allowlist, then execs the copied binary. The outer process kills and reaps the cgroup before removing it and the temporary root mountpoint.
+
+Target execution is fail-closed at every setup stage. Target arguments can be passed with `sandbox-runner -- <binary> [args...]`; the environment remains empty. The runner also closes inherited file descriptors except standard streams and its close-on-exec setup error descriptor, and redirects stdin from `/dev/null`.
+
+### Current host observations
+
+The read-only preflight was rerun on 2026-11-15. `CLONE_NEWUSER` alone succeeds; direct probes of `CLONE_NEWPID`, `CLONE_NEWNET`, `CLONE_NEWNS`, `CLONE_NEWIPC`, and `CLONE_NEWUTS` each fail with `EPERM`. The current cgroup is not writable and exposes only `memory` and `pids`; `cpu` is absent from that cgroup. The parent user slice is also not writable. `PR_GET_NO_NEW_PRIVS` returns 1.
+
+A separate safe UID/GID mapping probe created only a transient user-namespace child and attempted the configured subordinate-ID route. `/usr/bin/newuidmap` failed with `Could not set caps`; the parent observed `EACCES` (13), terminated and reaped the probe child, and did not release it. The UID/GID maps were not established. This does not establish the cause of the helper failure. The direct-write mapping route remains unsupported because it would deny `setgroups` and retain inherited supplementary groups.
+
+A safe runner smoke call with `/bin/true` returned `SANDBOX_ERROR`, setup stage 11 (`CGROUP_CREATE`), errno 95 (`EOPNOTSUPP`), before forking or releasing a target. The cgroup requirement therefore blocks execution on this host. No hostile Phase 2 fixture was run.
+
+### Evidence boundaries and remaining Phase 2 gate
+
+- Structural evidence: strict C build passed; setup handshake/FD inheritance regression passed 5/5; synthetic cgroup readiness test rejected missing delegation before creating a job cgroup; a separate runtime seccomp probe loaded the filter and observed `socket()` fail with `EPERM`.
+- Phase 1 regression evidence: on the exact timeout-fix commit `072c5a0`, `make clean && make test` passed 18/18; the three Phase 2 attack checks were reported PENDING and not executed.
+- Not proven on this host: successful cgroup limit writes, UID/GID mappings, combined namespace creation, private root/proc isolation, target capability/identity transition, NNP in the complete runner path, seccomp compatibility with a target runtime, PID namespace teardown, and cgroup descendant cleanup under attack.
+- Phase 2 DoD remains OPEN. The fork-bomb, filesystem-canary, and network-connect fixtures must stay skipped until the complete runner path has runtime proof for every required boundary and then passes those adversarial checks with causal evidence.

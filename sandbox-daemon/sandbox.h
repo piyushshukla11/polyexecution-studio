@@ -30,7 +30,21 @@ typedef enum {
     SETUP_STAGE_SETRLIMIT_FSIZE,
     SETUP_STAGE_SETRLIMIT_CORE,
     SETUP_STAGE_SETRLIMIT_NOFILE,
-    SETUP_STAGE_EXECVE
+    SETUP_STAGE_EXECVE,
+    SETUP_STAGE_CGROUP_CREATE,
+    SETUP_STAGE_CGROUP_ATTACH,
+    SETUP_STAGE_CGROUP_RELEASE,
+    SETUP_STAGE_USERNS_CREATE,
+    SETUP_STAGE_UID_MAP,
+    SETUP_STAGE_GID_MAP,
+    SETUP_STAGE_NAMESPACES,
+    SETUP_STAGE_ROOTFS,
+    SETUP_STAGE_PROCFS,
+    SETUP_STAGE_CAPABILITY_DROP,
+    SETUP_STAGE_NNP,
+    SETUP_STAGE_SECCOMP,
+    SETUP_STAGE_SUPERVISOR,
+    SETUP_STAGE_PHASE2_ISOLATION
 } setup_stage_t;
 
 /* Binary record transmitted over err_pipe on failure */
@@ -80,6 +94,8 @@ typedef struct {
     uint64_t rlimit_fsize;     /* e.g. 1 MiB = 1024 * 1024 */
     uint32_t rlimit_nofile;    /* e.g. 64 */
     size_t   max_output_bytes; /* e.g. 64 KiB = 64 * 1024 */
+    const char *const *target_args; /* optional argv entries after argv[0] */
+    size_t target_argc;
 } sandbox_config_t;
 
 /* Execution results */

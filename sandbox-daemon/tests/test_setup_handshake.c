@@ -69,11 +69,47 @@ static int test_stalled_handshake_times_out(void) {
     return WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL ? 0 : 1;
 }
 
+static int test_unrelated_descriptor_is_closed(void) {
+    int gate[2], stdout_pipe[2], stderr_pipe[2];
+    if (pipe(gate) < 0 || pipe(stdout_pipe) < 0 || pipe(stderr_pipe) < 0) return 1;
+    int unrelated = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    if (unrelated < 0) return 1;
+    pid_t child = fork();
+    if (child < 0) return 1;
+    if (child == 0) {
+        close(gate[0]);
+        close(stdout_pipe[0]);
+        close(stderr_pipe[0]);
+        if (dup2(stdout_pipe[1], STDOUT_FILENO) < 0 || dup2(stderr_pipe[1], STDERR_FILENO) < 0) _exit(2);
+        close(stdout_pipe[1]);
+        close(stderr_pipe[1]);
+        int result = close_unrelated_fds(gate[1]);
+        int inherited = fcntl(unrelated, F_GETFD);
+        int preserved = fcntl(gate[1], F_GETFD);
+        if (result != 0 || inherited >= 0 || errno != EBADF || preserved < 0) _exit(1);
+        if (write(STDOUT_FILENO, "o", 1) != 1 || write(STDERR_FILENO, "e", 1) != 1) _exit(3);
+        _exit(0);
+    }
+    close(gate[0]);
+    close(gate[1]);
+    close(stdout_pipe[1]);
+    close(stderr_pipe[1]);
+    close(unrelated);
+    char out = '\0', err = '\0';
+    if (read(stdout_pipe[0], &out, 1) != 1 || read(stderr_pipe[0], &err, 1) != 1) return 1;
+    close(stdout_pipe[0]);
+    close(stderr_pipe[0]);
+    int status = 0;
+    if (waitpid(child, &status, 0) != child) return 1;
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0 && out == 'o' && err == 'e' ? 0 : 1;
+}
+
 int main(void) {
     if (test_clean_eof() != 0) return 1;
     if (test_complete_record() != 0) return 2;
     if (test_partial_record_is_protocol_error() != 0) return 3;
     if (test_stalled_handshake_times_out() != 0) return 4;
-    puts("setup handshake protocol: 4/4 passed (including bounded stall timeout)");
+    if (test_unrelated_descriptor_is_closed() != 0) return 5;
+    puts("setup protocol and FD inheritance: 5/5 passed (including bounded stall timeout)");
     return 0;
 }

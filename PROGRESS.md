@@ -1404,3 +1404,160 @@
 - Files: PROGRESS.md.
 - Linked: LOG-0079 DONE.
 - Tutor review: pending
+
+## [LOG-0083] 2026-11-14 23:47 IST | PLAN | actor: agent
+- Reason: Implement the Phase 2 cgroup v2 resource boundary so each run receives enforceable CPU, memory, and process-count ceilings and can be atomically killed at teardown.
+- Details / Change:
+  1. Add a cgroup v2 manager that discovers the caller's delegated cgroup, requires `cpu`, `memory`, and `pids` controllers to be delegated, and fails without running a target when any prerequisite is absent.
+  2. Create a per-run cgroup, configure `cpu.max`, `memory.max`, and `pids.max`, attach the sandbox child before it proceeds, and clean it with `cgroup.kill` followed by removal.
+  3. Integrate the manager into the runner lifecycle with setup error reporting and cleanup on every exit path.
+  4. Add safe structural/unit coverage using a temporary fake cgroup tree; do not run attack fixtures or claim kernel enforcement from that synthetic evidence.
+- Files: PROGRESS.md, sandbox-daemon/phase2_cgroup.c, sandbox-daemon/phase2_cgroup.h, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/Makefile, sandbox-daemon/tests/.
+- Linked: LOG-0078.
+- Tutor review: pending
+
+## [LOG-0084] 2026-11-14 23:48 IST | CORRECTION | actor: agent
+- Reason: Correct the duplicate LOG-0079 identifier used for both the Phase 1 timeout PLAN and DONE entries; prior log history is append-only and cannot be rewritten.
+- Details / Change: The first LOG-0079 entry remains the PLAN. The later duplicate LOG-0079 DONE heading is a historical numbering error and its content is the canonical timeout-fix DONE record. For all subsequent work, use unique increasing IDs beginning with LOG-0085; preserve the original duplicated headings as historical text.
+- Files: PROGRESS.md.
+- Linked: LOG-0079 PLAN and duplicate LOG-0079 DONE.
+- Tutor review: pending
+
+## [LOG-0085] 2026-11-14 23:52 IST | PLAN | actor: agent
+- Reason: Implement the Phase 2 rootless user namespace and UID/GID map handshake, including bounded parent-side mapping helper execution before the child is released to continue setup.
+- Details / Change:
+  1. Have the child create `CLONE_NEWUSER`, signal readiness, and block at the parent gate before any target setup or execution.
+  2. Have the parent attach the blocked child to its cgroup, run `newuidmap` and `newgidmap` with explicit argument vectors and observed subordinate-ID ranges, and release only after both mapping helpers exit successfully.
+  3. Bound readiness and helper waits by the execution deadline; on error or timeout, kill/reap the child and cgroup and report the exact setup stage and errno.
+  4. Add deterministic mapping-contract tests without executing hostile targets or treating synthetic maps as kernel proof.
+- Files: PROGRESS.md, sandbox-daemon/phase2_userns.c, sandbox-daemon/phase2_userns.h, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/Makefile, sandbox-daemon/tests/.
+- Linked: LOG-0078.
+- Tutor review: pending
+
+## [LOG-0086] 2026-11-15 00:00 IST | PLAN | actor: agent
+- Reason: Build the Phase 2 filesystem boundary required before target execution: a size-limited private root with read-only runtime libraries, a copied target binary, `pivot_root`, and procfs mounted only after entering the new PID namespace.
+- Details / Change:
+  1. Prepare a private mount tree and bounded tmpfs root, bind only runtime directories read-only, copy a regular target binary into the root, and pivot away from the host root.
+  2. Expose a separate procfs mount operation for the first child in the new PID namespace so `/proc` reflects only sandbox processes.
+  3. Return setup errors on any mount, copy, remount, pivot, or procfs failure; no target may run before every required boundary succeeds.
+  4. Compile with strict flags and use structural checks only; runtime root/proc proof remains blocked unless combined namespaces and mappings work.
+- Files: PROGRESS.md, sandbox-daemon/phase2_rootfs.c, sandbox-daemon/phase2_rootfs.h, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/Makefile, sandbox-daemon/tests/.
+- Linked: LOG-0078.
+- Tutor review: pending
+
+## [LOG-0087] 2026-11-15 00:01 IST | DECISION | actor: agent
+- Reason: Phase 2 requires a strict seccomp allowlist; hand-writing classic BPF risks architecture and syscall-number mistakes that can silently weaken the boundary.
+- Details / Change: Use the host's existing libseccomp development/runtime package to compile and load a default-kill allowlist with explicit syscall rules. The dependency was observed during preflight (`seccomp.h`, `libseccomp.so.2` 2.6.0); no package installation or vendored code is planned. If headers or library are absent at build/runtime, fail the build or sandbox setup rather than disable seccomp. Alternatives considered: handwritten BPF (more error-prone for architecture handling) and a denylist (does not meet default-deny policy).
+- Files: PROGRESS.md, sandbox-daemon/Makefile, sandbox-daemon/phase2_privilege.c.
+- Linked: LOG-0078.
+- Tutor review: pending
+
+## [LOG-0088] 2026-11-15 00:03 IST | CORRECTION | actor: agent
+- Reason: Record that the first phase2_rootfs.c/.h draft appeared in the worktree shortly before LOG-0086 was appended, contrary to the required PLAN-before-change sequence.
+- Details / Change: LOG-0086 remains the plan for completing and integrating the private root/proc boundary; it was not a pre-change authorization record for the initial draft. The draft is retained and all further rootfs work follows the logged plan. No previous entry is edited.
+- Files: PROGRESS.md.
+- Linked: LOG-0086.
+- Tutor review: pending
+
+## [LOG-0089] 2026-11-15 00:03 IST | PLAN | actor: agent
+- Reason: Complete the Phase 2 target privilege boundary with ordered capability pruning, supplementary-group clearing, identity reduction, zero-mask verification, no-new-privileges, and a default-kill seccomp allowlist.
+- Details / Change:
+  1. Integrate namespace creation and private root setup before forking the PID-namespace init target.
+  2. Mount private procfs in the first child inside the new PID namespace, then drop its capability bounding set and supplementary groups, switch all UID/GID slots to the mapped unprivileged IDs, verify all five capability masks are zero, set NNP, and install the allowlist immediately before execve.
+  3. Reduce the outer namespace supervisor's privileges and ensure it reaps the PID-namespace init process; outer timeout cleanup uses cgroup.kill.
+  4. Keep target execution blocked if any stage fails. Compile and run only safe structural checks; attack fixtures remain skipped until complete isolation is runtime-proven.
+- Files: PROGRESS.md, sandbox-daemon/phase2_privilege.c, sandbox-daemon/phase2_privilege.h, sandbox-daemon/phase2_rootfs.c, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/Makefile, sandbox-daemon/tests/.
+- Linked: LOG-0078 and LOG-0087.
+- Tutor review: pending
+
+## [LOG-0090] 2026-11-15 00:21 IST | DONE | actor: agent
+- Reason: Add a fail-closed cgroup v2 manager and wire per-run CPU, memory, PID, and descendant cleanup controls into the Phase 2 runner path.
+- Details / Change:
+  1. Added cgroup v2 discovery from `/proc/self/cgroup`; creation requires `cpu`, `memory`, and `pids` to be both available and delegated before creating a job group.
+  2. Configured `cpu.max`, `memory.max`, and `pids.max`; held the child at a placement pipe until the parent writes its PID to `cgroup.procs`.
+  3. Added cgroup-wide `cgroup.kill` teardown and a bounded wait for `cgroup.events` to report `populated 0` before removing the group and temporary root mountpoint.
+  4. Added a synthetic fail-closed readiness check. It proves missing delegation is rejected before job-cgroup creation; it does not claim cgroupfs enforcement.
+  5. Live evidence: rerun preflight found current cgroup controllers `memory,pids` (no `cpu`) and a non-writable current cgroup. A harmless `sandbox-runner -- /bin/true x` smoke call returned `SANDBOX_ERROR`, stage 11 (`CGROUP_CREATE`), errno 95 (`EOPNOTSUPP`), before any target fork/release.
+- Verification: `make clean && make all && make test-setup-protocol && make test-phase2-structural && make test-phase2-seccomp-safe` passed; `git diff --check` passed. No Phase 2 attack fixture executed.
+- Files: sandbox-daemon/phase2_cgroup.c, sandbox-daemon/phase2_cgroup.h, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/Makefile, sandbox-daemon/tests/test_phase2_cgroup.c, PROGRESS.md.
+- Linked: LOG-0083.
+- Tutor review: pending
+
+## [LOG-0091] 2026-11-15 00:21 IST | DONE | actor: agent
+- Reason: Implement the parent-controlled rootless user namespace mapping protocol and fail closed unless helper-written maps and the `setgroups` policy match the exact contract.
+- Details / Change:
+  1. Added a child readiness record after `unshare(CLONE_NEWUSER)` and a parent gate; a separate placement gate now ensures cgroup attachment occurs before namespace setup.
+  2. Added direct `execve()` of `newuidmap`/`newgidmap` with bounded `waitpid(WNOHANG)` polling against the run deadline, login-name or numeric subordinate-ID lookup, and exact readback of two map rows plus `/proc/<pid>/setgroups == allow`.
+  3. Any helper, readback, timeout, or mapping error kills and reaps the blocked child and cgroup before target release. Direct-write mapping remains unsupported.
+  4. Safe runtime mapping probe attempted the transient handshake. `newuidmap` printed `Could not set caps`; the helper exited unsuccessfully and the parent reported errno 13 (`EACCES`). The child was killed/reaped; neither map was established and no target was released. The cause of the helper failure is unknown. Host preflight separately reports `PR_GET_NO_NEW_PRIVS=1`.
+- Verification: strict build and setup regression passed; mapping runtime probe produced the explicit host failure above. The probe did not run an attack fixture.
+- Files: sandbox-daemon/phase2_userns.c, sandbox-daemon/phase2_userns.h, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/Makefile, sandbox-daemon/tests/test_userns_mapping.c, PROGRESS.md.
+- Linked: LOG-0085.
+- Tutor review: pending
+
+## [LOG-0092] 2026-11-15 00:21 IST | DONE | actor: agent
+- Reason: Implement private-root and procfs setup so target processes cannot inherit the host root or host process table.
+- Details / Change:
+  1. Parent creates a unique temporary mountpoint; the namespace helper mounts a 128 MiB tmpfs root, binds `/usr`, `/lib`, `/lib64`, `/bin`, and `/sbin` read-only, and copies only a regular target binary (bounded to 64 MiB) into `/run/target`.
+  2. The helper pivots root, detaches the old root, uses a writable mode-1777 `/tmp`, and mounts procfs only in the first child inside the new PID namespace.
+  3. Parent cleanup waits for cgroup emptiness before removing the cgroup and mountpoint. Every mount/copy/pivot/procfs error aborts before exec.
+  4. Strict build passed. Runtime mount and proc isolation were not exercised because this host fails earlier at cgroup setup and direct namespace probes are EPERM.
+- Files: sandbox-daemon/phase2_rootfs.c, sandbox-daemon/phase2_rootfs.h, sandbox-daemon/sandbox.c, sandbox-daemon/Makefile, docs/03_SANDBOX_DEEP_DIVE.md, PROGRESS.md.
+- Linked: LOG-0086.
+- Tutor review: pending
+
+## [LOG-0093] 2026-11-15 00:21 IST | DONE | actor: agent
+- Reason: Wire Phase 2 namespace supervision, capability and identity reduction, NNP verification, seccomp allowlisting, argument passing, and descriptor cleanup into the target execution path.
+- Details / Change:
+  1. After mapping, the helper creates PID/network/mount/IPC/UTS namespaces; the first PID-namespace child mounts procfs, prunes the capability bounding set (dropping `CAP_SETPCAP` last), clears supplementary and ambient capabilities, sets all UID/GID slots to 65534, clears inheritable/permitted/effective masks, and verifies all five masks are exactly 16 zero hex digits.
+  2. The target sets `PR_SET_NO_NEW_PRIVS`, verifies `PR_GET_NO_NEW_PRIVS == 1`, installs a libseccomp default-kill allowlist immediately before exec, and explicitly returns EPERM for socket/connect operations. The outer helper drops privileges and reaps PID 1; parent death signals plus cgroup.kill cover descendant teardown.
+  3. Added bounded argv forwarding (`-- <binary> [args...]`, at most 128 arguments and 4096 bytes each), retained an empty environment, redirected stdin to `/dev/null`, and closes unrelated inherited FDs after redirecting stdout/stderr while preserving the setup error FD.
+  4. Safe seccomp runtime probe passed: a loaded filter denied `socket()` with EPERM. Setup/FD regression passed 5/5. This does not verify the full target runtime allowlist or capability/NNP transitions through the complete runner.
+  5. Updated the stale argument-gap documentation and its structural test; `python3 scripts/test_phase2_diagnostics.py` passed 18/18 and `python3 scripts/test_phase2_preflight.py` passed 6/6.
+- Files: sandbox-daemon/phase2_privilege.c, sandbox-daemon/phase2_privilege.h, sandbox-daemon/phase2_rootfs.c, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/Makefile, sandbox-daemon/tests/test_setup_handshake.c, sandbox-daemon/tests/test_seccomp_policy.c, scripts/test_phase2_diagnostics.py, docs/03_SANDBOX_DEEP_DIVE.md, PROGRESS.md.
+- Linked: LOG-0089.
+- Tutor review: pending
+
+## [LOG-0094] 2026-11-15 00:21 IST | BLOCKED | actor: agent
+- Reason: Phase 2 runtime DoD cannot be proven in the current host because required delegation and namespace/mapping operations are unavailable; the implementation therefore remains unapproved for phase completion.
+- Details / Change:
+  1. Current preflight: `CLONE_NEWUSER` alone succeeds; direct `CLONE_NEWPID`, `CLONE_NEWNET`, `CLONE_NEWNS`, `CLONE_NEWIPC`, and `CLONE_NEWUTS` return EPERM. Current cgroup has only `memory,pids`, lacks `cpu`, and is not writable. UID mapping helper fails with EACCES. `PR_GET_NO_NEW_PRIVS` is 1.
+  2. Structural evidence is recorded separately from runtime evidence. Only the standalone seccomp socket-denial probe has runtime enforcement evidence; cgroup, maps, combined namespaces, private root/proc, identity/capability transition, full seccomp runtime compatibility, and descendant teardown remain unverified.
+  3. The three Phase 2 attack fixtures (`fork_bomb`, `read_etc_passwd`, `net_connect`) were not executed. Phase 2 DoD remains OPEN; no merge, push, or completion claim is made.
+  4. Phase 1 regression was run in a detached worktree at exact commit `072c5a0`: `make clean && make test` passed 18/18; the harness kept all three Phase 2 fixtures PENDING. The current Phase 2 branch was not run through that fixture-executing suite because this host cannot satisfy the new cgroup gate.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md.
+- Linked: LOG-0078.
+- Tutor review: pending
+
+## [LOG-0095] 2026-11-15 00:24 IST | CORRECTION | actor: agent
+- Reason: Record that the first phase2_privilege.c/.h draft was present in the worktree before the PLAN entry LOG-0089 was appended, contrary to the required PLAN-before-change sequence.
+- Details / Change: LOG-0089 remains the plan for completing and integrating the privilege/seccomp boundary; it was not a pre-change authorization record for the initial draft. The draft is retained, follow-up work proceeds under the logged plan, and no earlier entry is edited.
+- Files: PROGRESS.md.
+- Linked: LOG-0089.
+- Tutor review: pending
+
+## [LOG-0096] 2026-11-15 00:26 IST | CORRECTION | actor: agent
+- Reason: The final syscall/cleanup audit found additional unchecked stream and descriptor cleanup paths after LOG-0090 through LOG-0093 had been recorded as DONE.
+- Details / Change: Those DONE entries remain accurate for their recorded implementation and checks at that time, but do not include the later audit fixes. The fixes and their fresh safe verification are recorded separately in LOG-0097; earlier entries are not edited.
+- Files: PROGRESS.md.
+- Linked: LOG-0090, LOG-0091, LOG-0092, LOG-0093.
+- Tutor review: pending
+
+## [LOG-0097] 2026-11-15 00:26 IST | DONE | actor: agent
+- Reason: Close the final cleanup audit findings in the Phase 2 cgroup, userns, rootfs, and privilege helpers.
+- Details / Change:
+  1. Check descriptor and stdio close results, preserve operation errors, and report cleanup failures rather than silently treating cleanup as successful.
+  2. Make subordinate-ID helper timeout handling check SIGKILL and reap outcomes; report unexpected nanosleep errors.
+  3. Check cgroup rollback and bounded wait errors; do not silently ignore cleanup failures.
+  4. No changes to runtime evidence: Phase 2 attack fixtures remain unexecuted, and the DoD remains OPEN pending a host with required delegation and namespace support.
+- Verification: `make clean && make all && make test-setup-protocol && make test-phase2-structural && make test-phase2-seccomp-safe && make clean` passed; setup 5/5, synthetic cgroup gate passed, safe seccomp probe passed. `python3 scripts/test_phase2_diagnostics.py` passed 18/18; `python3 scripts/test_phase2_preflight.py` passed 6/6; progress and hygiene hooks passed; `git diff --check` passed.
+- Files: sandbox-daemon/phase2_cgroup.c, sandbox-daemon/phase2_userns.c, sandbox-daemon/phase2_rootfs.c, sandbox-daemon/phase2_privilege.c, PROGRESS.md.
+- Linked: LOG-0090, LOG-0091, LOG-0092, LOG-0093.
+- Tutor review: pending
+
+## [LOG-0098] 2026-11-15 00:26 IST | DONE | actor: agent
+- Reason: Make the owner-authorized Tier A attribution explicit at the sandbox core source entry point.
+- Details / Change: Added the `AGENT-WROTE-TIER-A` attribution comment to `sandbox-daemon/sandbox.c`, consistent with AI_RULES.md section 14 and the project change report. The final owner learning gate remains OPEN.
+- Files: sandbox-daemon/sandbox.c, PROGRESS.md.
+- Linked: LOG-0093, LOG-0097.
+- Tutor review: pending
