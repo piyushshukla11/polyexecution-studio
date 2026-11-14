@@ -1177,3 +1177,20 @@
 - Linked: LOG-0064
 - Piyush prediction (optional): Pruning bounding capabilities while CAP_SETPCAP is active prevents EPERM errors and guarantees zero residual capabilities before execve.
 - Tutor review: pending
+
+## [LOG-0066] 2026-11-14 14:05 IST | DONE | actor: agent
+- Reason: Complete specification of capability-drop ordering protocol and /proc/self/status verification contract.
+- Details / Change:
+  1. Updated docs/03_SANDBOX_DEEP_DIVE.md Section 9:
+     - Documented the strict dependency of prctl(PR_CAPBSET_DROP) on CAP_SETPCAP in pE, and explained why calling setuid(nobody) beforehand causes PR_CAPBSET_DROP to fail with EPERM.
+     - Documented the temporary capability lifecycle during initialization: CAP_SYS_ADMIN (procfs mount), CAP_SETPCAP (PR_CAPBSET_DROP), CAP_SETGID (setgroups, setgid), CAP_SETUID (setuid).
+     - Specified the exact 10-stage execution sequence for Child 2: mount proc -> prune bounding set -> clear supplementary groups -> clear ambient caps -> setgid/setuid -> PR_SET_NO_NEW_PRIVS -> verify /proc/self/status -> install seccomp-bpf -> execve.
+     - Documented why seccomp must be installed last immediately prior to execve.
+     - Defined the /proc/self/status capability verification contract: asserting CapInh, CapPrm, CapEff, CapBnd, and CapAmb are all 0000000000000000.
+     - Compared architectural designs: Design 1 (in-namespace PID 1 self-setup) vs Design 2 (external multi-process helper using setns), detailing assumptions and trade-offs.
+  2. Updated LEARNING_NOTES/phase-1.md (local-only, not committed) with Section 15 on capability ordering and status verification.
+  3. Verified test_phase2_diagnostics.py (17/17 tests pass).
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0065
+- Piyush prediction (optional): Pruning bounding capabilities while CAP_SETPCAP is active prevents EPERM errors and guarantees zero residual capabilities before execve.
+- Tutor review: pending
