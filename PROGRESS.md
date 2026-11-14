@@ -543,3 +543,27 @@
 - Linked: LOG-0034
 - Piyush prediction (optional): Phase 1 regression lab will pass all 17 active tests, Phase 2 fixtures will compile cleanly, and Phase 2 checks will be reported as pending without compromising host safety.
 - Tutor review: pending
+
+## [LOG-0036] 2026-11-14 11:53 IST | DONE | actor: agent
+- Reason: Complete Phase 1 regression lab strengthening with all three exercises and complete Phase 2 fixture groundwork without modifying Tier A files or executing unisolated attacks.
+- Details / Change:
+  1. Updated sandbox-daemon/tests/test_runner.py:
+     - Implemented Exercise 1 (test_empty_output_streams): verifies empty stdout/stderr on exit0.
+     - Implemented Exercise 2 (test_cpu_vs_wall_timeout): verifies loop under --cpu-soft 1 --timeout-ms 4000 triggers SIGXCPU at ~1s (wall_ms < 3500ms).
+     - Implemented Exercise 3 (test_stderr_cap_overflow): verifies symmetrical output capping on stderr_only under --max-output-kb 1 (stderr len == 1024, stdout == "").
+     - Added precise outer timeout handling and warnings regarding detached sessions (setsid).
+     - Refined failure categories (HARNESS_TIMEOUT, RUNNER_EXEC_ERROR, SCHEMA_ERROR, CONTRACT_VIOLATION).
+     - Added Phase 2 scaffolded checks (fork_bomb, read_etc_passwd, net_connect) marked as PENDING and not counted as passed.
+  2. Created Phase 2 adversarial fixture sources:
+     - sandbox-daemon/tests/evil/fork_bomb.c (PID exhaustion attack).
+     - sandbox-daemon/tests/evil/read_etc_passwd.c (host filesystem read attempt).
+     - sandbox-daemon/tests/evil/net_connect.c (outbound TCP connect attempt).
+  3. Updated sandbox-daemon/Makefile: added PHASE2_EVIL_NAMES, compiled fixtures under evil and phase2-evil targets. Confirmed no execution of Phase 2 attacks through Phase 1 runner.
+  4. Executed read-only host capability audit: verified cgroups v2 controllers (cpu, memory, pids) delegated to user 1000; noted unshare ENOSYS inside container; verified libseccomp 2.6.0.
+  5. Updated LEARNING_NOTES/phase-1.md with regression lab guide, setsid systems analysis, host capability audit, concrete Phase 2 implementation sequence, glossary updates, and 3 explain-back questions.
+  6. Verified make clean && make test: 18/18 Phase 1 tests passed, 3 Phase 2 checks pending, 0 failed.
+  7. Retained strict ownership boundaries: zero edits to Tier A files (sandbox.c, sandbox.h); no push, merge, or PR.
+- Files: PROGRESS.md, sandbox-daemon/tests/test_runner.py, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/fork_bomb.c, sandbox-daemon/tests/evil/read_etc_passwd.c, sandbox-daemon/tests/evil/net_connect.c, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0035
+- Piyush prediction (optional): Phase 1 regression lab will pass all 17 active tests, Phase 2 fixtures will compile cleanly, and Phase 2 checks will be reported as pending without compromising host safety.
+- Tutor review: pending

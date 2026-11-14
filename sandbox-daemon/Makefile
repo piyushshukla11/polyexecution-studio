@@ -10,6 +10,9 @@ EVIL_NAMES = loop sleeper exit0 exit7 segv exit127 stdout_stderr stderr_only out
 EVIL_BIN_DIR = tests/evil/bin
 EVIL_BINS = $(addprefix $(EVIL_BIN_DIR)/, $(EVIL_NAMES))
 
+PHASE2_EVIL_NAMES = fork_bomb read_etc_passwd net_connect
+PHASE2_EVIL_BINS = $(addprefix $(EVIL_BIN_DIR)/, $(PHASE2_EVIL_NAMES))
+
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
@@ -18,7 +21,9 @@ $(TARGET): $(OBJS)
 %.o: %.c sandbox.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
-evil: $(EVIL_BINS)
+evil: $(EVIL_BINS) $(PHASE2_EVIL_BINS)
+
+phase2-evil: $(PHASE2_EVIL_BINS)
 
 $(EVIL_BIN_DIR)/%: tests/evil/%.c | $(EVIL_BIN_DIR)
 	$(CC) $(EVIL_CFLAGS) -o $@ $<
@@ -33,4 +38,4 @@ clean:
 test: all evil
 	python3 tests/test_runner.py
 
-.PHONY: all clean evil test
+.PHONY: all clean evil test phase2-evil
