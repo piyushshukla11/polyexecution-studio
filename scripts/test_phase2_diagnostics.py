@@ -401,6 +401,67 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
                 )
                 self.assertTrue(bin_path.is_file())
 
+    def test_privilege_ordering_and_capability_contract(self) -> None:
+        """
+        Verify that architecture documentation strictly encodes the privilege
+        ordering contract, temporary capability dependencies, bounding set pruning
+        requirements, seccomp timing, and /proc/self/status verification method.
+
+        NOTE: This test validates the documented contract and architectural invariants
+        only. It does NOT prove runtime enforcement on the host.
+        """
+        doc = (REPO_ROOT / "docs" / "03_SANDBOX_DEEP_DIVE.md").read_text()
+
+        # 1. Privileged mount before identity drop:
+        # Catch dropping identity before a later privileged mount.
+        self.assertIn('mount("proc", ...)', doc)
+        self.assertIn("CAP_SYS_ADMIN", doc)
+        self.assertIn("The Capability Trap", doc)
+        self.assertIn("drops identity to `nobody` via `setuid()` before mounting `/proc`", doc)
+        self.assertIn("fail immediately with `EPERM`", doc)
+
+        # 2. PR_CAPBSET_DROP requires CAP_SETPCAP:
+        # Catch attempting PR_CAPBSET_DROP after CAP_SETPCAP has been discarded.
+        self.assertIn("`PR_CAPBSET_DROP` and `CAP_SETPCAP` Dependency", doc)
+        self.assertIn("CAP_SETPCAP", doc)
+        self.assertIn("prctl(PR_CAPBSET_DROP", doc)
+        self.assertIn("If `setuid(nobody_uid)` is called *before* `prctl(PR_CAPBSET_DROP)`", doc)
+
+        # 3. Seccomp must be applied last:
+        # Catch applying seccomp before required setup is complete.
+        self.assertIn("Seccomp must be installed last", doc)
+        self.assertIn("strict filter blocks setup syscalls", doc)
+        self.assertIn("PR_SET_NO_NEW_PRIVS", doc)
+
+        # 4. Status verification contract:
+        # Catch claiming capability-drop completion without a specified verification method.
+        self.assertIn("Status Verification Contract (`/proc/self/status`)", doc)
+        self.assertIn("CapInh: 0000000000000000", doc)
+        self.assertIn("CapPrm: 0000000000000000", doc)
+        self.assertIn("CapEff: 0000000000000000", doc)
+        self.assertIn("CapBnd: 0000000000000000", doc)
+        self.assertIn("CapAmb: 0000000000000000", doc)
+        self.assertIn("claiming capability drop without a defined verification method is invalid", doc)
+
+        # 5. Structural ordering validation:
+        # Verify the sequential stages appear in the correct non-inverted order.
+        idx_mount = doc.index("Stage 2 (Mount Private Procfs)")
+        idx_bnd = doc.index("Stage 3 (Prune Capability Bounding Set)")
+        idx_groups = doc.index("Stage 4 (Clear Supplementary Groups)")
+        idx_setuid = doc.index("Stage 6 (Drop Real, Effective, Saved Identity)")
+        idx_nnp = doc.index("Stage 7 (Enforce No-New-Privileges Boundary)")
+        idx_verify = doc.index("Stage 8 (Verify Capability Bitmasks)")
+        idx_seccomp = doc.index("Stage 9 (Install Seccomp-BPF Syscall Filter)")
+        idx_execve = doc.index("Stage 10 (Execute Target)")
+
+        self.assertLess(idx_mount, idx_setuid, "Mount must occur before identity drop")
+        self.assertLess(idx_bnd, idx_setuid, "Bounding set drop must occur before identity drop")
+        self.assertLess(idx_groups, idx_setuid, "Supplementary group drop must occur before identity drop")
+        self.assertLess(idx_setuid, idx_nnp, "Identity drop must occur before NNP")
+        self.assertLess(idx_nnp, idx_verify, "NNP must occur before capability verification")
+        self.assertLess(idx_verify, idx_seccomp, "Verification must occur before seccomp installation")
+        self.assertLess(idx_seccomp, idx_execve, "Seccomp must occur immediately before execve")
+
 
 if __name__ == "__main__":
     unittest.main()

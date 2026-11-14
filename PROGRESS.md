@@ -1211,3 +1211,22 @@
 - Linked: LOG-0066
 - Piyush prediction (optional): Adding structural index-ordering checks in diagnostics ensures future document or runner updates cannot invert privilege-dropping stages without failing tests.
 - Tutor review: pending
+
+## [LOG-0068] 2026-11-14 14:07 IST | DONE | actor: agent
+- Reason: Complete safe architecture checks in test_phase2_diagnostics.py for privilege ordering, capability drop, and /proc/self/status verification.
+- Details / Change:
+  1. Updated scripts/test_phase2_diagnostics.py:
+     - Added test_privilege_ordering_and_capability_contract to TestPhase2FixtureDiagnostics suite (bringing total test count to 18).
+     - Verified mount("proc", ...) requires CAP_SYS_ADMIN and must occur before identity drop.
+     - Verified PR_CAPBSET_DROP requires CAP_SETPCAP and fails with EPERM if called after setuid(nobody).
+     - Verified seccomp must be installed last because strict filters block initialization syscalls.
+     - Verified the /proc/self/status verification contract asserting CapInh, CapPrm, CapEff, CapBnd, and CapAmb are 0000000000000000.
+     - Implemented programmatic index assertions verifying sequential ordering of Stages 2..10 without inversion.
+     - Noted in test docstring that these tests validate the documented contract only and do NOT prove runtime enforcement.
+  2. Verified test_phase2_preflight.py (6/6 tests pass).
+  3. Verified test_phase2_diagnostics.py (18/18 tests pass).
+  4. Ran regression lab: make clean && make test in sandbox-daemon (18/18 tests pass, 3 Phase 2 fixtures cleanly skipped/pending).
+- Files: PROGRESS.md, scripts/test_phase2_diagnostics.py
+- Linked: LOG-0067
+- Piyush prediction (optional): Adding structural index-ordering checks in diagnostics ensures future document or runner updates cannot invert privilege-dropping stages without failing tests.
+- Tutor review: pending
