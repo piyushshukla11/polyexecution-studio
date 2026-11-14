@@ -13,7 +13,7 @@ Read in this order at the start of every session: `AI_RULES.md` → `PROGRESS.md
 6. **REPORT:** produce the Change Report (section 3).
 
 ## 2. Ownership tiers
-- **Tier A — Piyush writes (you guide):** `sandbox-daemon/sandbox.c` core (fork/exec, rlimits, pipes, poll loop, wait4, timeout kill), seccomp filter, namespace setup. You provide: concept explanation, man-page pointers, a skeleton with `TODO(piyush)` markers, and code review. You may write the final code ONLY if Piyush explicitly says "write it", and then you must explain it line by line and log it as `AGENT-WROTE-TIER-A`.
+- **Tier A — Piyush writes by default (you guide):** `sandbox-daemon/sandbox.c` core (fork/exec, rlimits, pipes, poll loop, wait4, timeout kill), seccomp filter, namespace setup. You provide: concept explanation, man-page pointers, a skeleton with `TODO(piyush)` markers, and code review. You may write the final code when Piyush explicitly authorizes it, and then you must explain it line by line and log it as `AGENT-WROTE-TIER-A`. Piyush's current project-wide authorization is recorded in Section 14.
 - **Tier B — Pair:** gRPC service, compile pipeline, WebSocket handlers, Yjs integration. You write, you explain every non-trivial line, and you end with 3 check questions for Piyush.
 - **Tier C — Free:** build files, Docker, scaffolding, CSS, boilerplate. You still file a Change Report.
 
@@ -113,3 +113,18 @@ Stop and ask Piyush (and tell him to consult the tutor) when: you want to change
 - Open one Pull Request per phase branch using `.github/pull_request_template.md`. Merge with a normal merge commit (`--no-ff`), NOT squash, so the real commit history is kept.
 - Commits only count on the contribution graph once they are on the default branch, and only if the git author email matches a verified email on Piyush's GitHub account. Check `git config user.email` before the first commit.
 - Never create empty, fake, backdated, or padding commits. Contributions must reflect real work. Many small meaningful commits are good; noise is not.
+
+## 13. LEARNING_NOTES workflow (local-only study folder)
+- Piyush maintains a local study folder `LEARNING_NOTES/` at the repository root containing detailed concept guides, Change Reports, questions with answer blocks, and a systems glossary.
+- **Local-only exclusion:** `LEARNING_NOTES/` is excluded via `.git/info/exclude` (not `.gitignore`, since `.gitignore` is committed). It must never be tracked or pushed to remote repositories.
+- **Staging prohibition:** Never run `git add -f`, `git add .`, or `git add -A` on `LEARNING_NOTES/`. Never stage files from this directory. Do not reference private study contents in public commit messages.
+- **Re-clone notice:** Because `.git/info/exclude` is not cloned, re-adding `LEARNING_NOTES/` to `.git/info/exclude` is required if the repository is cloned afresh.
+- **Continuous maintenance:** In the same turn as each new Change Report, the coding agent must append teaching guides, complete Change Reports with unabridged evidence blocks, new interview questions with empty answer blocks, and new glossary terms to the corresponding files in `LEARNING_NOTES/`.
+
+## 14. Project-wide learning completion gate
+- Piyush may continue authorized project work through all planned phases while required learning questions or exercises remain open. During this deferred-learning mode, phase-specific technical DoD, test evidence, tutor code review, and normal Git checks still apply; the explain-back and interview questions are collected for the final learning review instead of blocking the next technical phase.
+- The whole PES project must not be declared finished, complete, or interview-ready until Piyush has independently answered every required question and completed every required exercise listed in `docs/05_INTERVIEW_PREP.md`.
+- The agent may teach, give hints, and review Piyush's work. For exercises explicitly marked owner-authored, the agent must not write the solution and present it as Piyush's contribution.
+- Every new required question or exercise assigned by the tutor or agent must be added to the checklist in `docs/05_INTERVIEW_PREP.md`. Label optional practice as optional so the completion gate stays finite and clear.
+- Track completion through tutor-reviewed `LEARNING` entries in `PROGRESS.md`. Do not mark an item complete merely because agent-authored code or an agent report exists.
+- **Current implementation authorization:** Piyush explicitly asked to complete the planned phases before doing the learning review. The agent may implement Tier A work across those phases while this mode is active. Label agent-written sandbox core as `AGENT-WROTE-TIER-A`, keep the change reports and code attribution honest, and preserve the final owner learning gate.

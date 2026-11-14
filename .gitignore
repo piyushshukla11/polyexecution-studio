@@ -18,6 +18,8 @@ node_modules/
 *.jar
 *.exe
 sandbox-daemon/sandbox-runner
+sandbox-daemon/*.o
+sandbox-daemon/tests/evil/bin/
 __pycache__/
 *.pyc
 

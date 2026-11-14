@@ -1,0 +1,46 @@
+CC ?= gcc
+CFLAGS ?= -Wall -Wextra -Werror -O2
+EVIL_CFLAGS ?= -Wall -Wextra -Werror -O0
+
+SRCS = sandbox.c
+OBJS = $(SRCS:.c=.o)
+TARGET = sandbox-runner
+
+EVIL_NAMES = loop sleeper exit0 exit7 segv exit127 stdout_stderr stderr_only output_flood close_stream_sleep descendant_pipe memory_bomb file_size_limit json_escaping_test
+EVIL_BIN_DIR = tests/evil/bin
+EVIL_BINS = $(addprefix $(EVIL_BIN_DIR)/, $(EVIL_NAMES))
+
+PHASE2_EVIL_NAMES = fork_bomb read_etc_passwd net_connect
+PHASE2_EVIL_BINS = $(addprefix $(EVIL_BIN_DIR)/, $(PHASE2_EVIL_NAMES))
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $(OBJS)
+
+%.o: %.c sandbox.h
+	$(CC) $(CFLAGS) -c $< -o $@
+
+evil: $(EVIL_BINS) $(PHASE2_EVIL_BINS)
+
+phase2-evil: $(PHASE2_EVIL_BINS)
+
+$(EVIL_BIN_DIR)/%: tests/evil/%.c | $(EVIL_BIN_DIR)
+	$(CC) $(EVIL_CFLAGS) -o $@ $<
+
+$(EVIL_BIN_DIR):
+	mkdir -p $(EVIL_BIN_DIR)
+
+clean:
+	rm -f $(OBJS) $(TARGET)
+	rm -rf $(EVIL_BIN_DIR)
+
+test: all evil
+	python3 tests/test_runner.py
+
+test-setup-protocol: all
+	mkdir -p $(EVIL_BIN_DIR)
+	$(CC) $(CFLAGS) -o $(EVIL_BIN_DIR)/test_setup_handshake tests/test_setup_handshake.c
+	$(EVIL_BIN_DIR)/test_setup_handshake
+
+.PHONY: all clean evil test test-setup-protocol phase2-evil

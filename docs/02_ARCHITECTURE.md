@@ -37,5 +37,30 @@ User program (untrusted)
 - `ExecuteRequest { job_id, language, source_code, stdin, limits{cpu_ms, wall_ms, memory_mb, max_output_kb} }`
 - `ExecuteResponse { job_id, status(OK|COMPILE_ERROR|RUNTIME_ERROR|TIMEOUT|MEMORY_LIMIT|OUTPUT_LIMIT|SANDBOX_ERROR), stdout, stderr, exit_code, signal, wall_ms, cpu_ms, peak_memory_kb }`
 
+### Status and Telemetry Semantics
+1. **OK**: Target process executed and completed normally with exit code 0 (`exit_code: 0`, `signal: 0`).
+2. **TIMEOUT**: Covers both wall-clock deadline expiration (`wall_ms >= timeout_ms`) and CPU resource limit exhaustion via `RLIMIT_CPU` / `SIGXCPU` (`signal: 24`, `cpu_ms >= cpu_limit_ms`). The telemetry fields `signal`, `wall_ms`, and `cpu_ms` allow clients to distinguish the two timeout causes without altering the JSON schema:
+   - CPU timeout: `signal == 24` (`SIGXCPU`), `cpu_ms` reaches soft/hard limit.
+   - Wall timeout: runner sends `SIGKILL` (or reaps with exit/signal 0), `wall_ms >= timeout_ms`.
+3. **MEMORY_LIMIT**: In the Phase 1 POSIX sandbox, `setrlimit(RLIMIT_AS)` causes `malloc` or `mmap` to fail with NULL. Applications typically dereference NULL and terminate with `SIGSEGV` (signal 11). If peak RSS reaches $\ge 80\%$ of `rlimit_as_bytes`, the runner classifies the event as `MEMORY_LIMIT` using an explicit resident-memory heuristic. Note: POSIX `setrlimit` does not deliver a dedicated kernel OOM signal (unlike Linux cgroups v2 OOM killer in Phase 2); `SIGSEGV` without reaching the memory heuristic threshold remains classified as `RUNTIME_ERROR`.
+4. **OUTPUT_LIMIT**: Covers stdout/stderr stream cap breach (runner kills process group upon reaching `max_output_bytes`) or file size ceiling breach via `RLIMIT_FSIZE` (`signal: 25` / `SIGXFSZ`).
+5. **RUNTIME_ERROR**: Target terminated with an uncaught signal (e.g. `SIGSEGV` not matching memory heuristic, `SIGABRT`, `SIGFPE`) or returned a non-zero exit code (e.g. code 7, 127). The exact exit code is preserved in `exit_code`.
+6. **SANDBOX_ERROR**: Runner initialization error, setup/exec failure (e.g. binary not found, execve error), setup pipe protocol error, or lost child process. Diagnostic stage and errno strings are reported in `stderr`. A valid target returning 127 produces `status: RUNTIME_ERROR`, remaining strictly distinguishable from an execve failure which produces `status: SANDBOX_ERROR` with stage/errno diagnostics in `stderr`.
+
+### Stream Encoding & Byte Reconstruction Protocol
+Strings in `ExecuteResponse` (`stdout`, `stderr`) follow RFC 8259 JSON encoding using a byte-oriented Latin-1 representation:
+- Printable ASCII characters (`0x20 <= byte <= 0x7E`, except `"` and `\`) pass through as literal ASCII characters.
+- Standard JSON escape sequences are used for quotes (`\"`), backslashes (`\\`), and control escapes (`\b`, `\f`, `\n`, `\r`, `\t`).
+- All control characters (`< 0x20` and `0x7F`) and all bytes `>= 0x80` are escaped as `\u00XX` (Unicode Latin-1 Supplement code points `U+0000`..`U+00FF`).
+- **Why this design?** Emitting all bytes `>= 0x80` as `\u00XX` guarantees that valid UTF-8 sequences (e.g. `0xC3 0xA9` for `é`) never collide with raw isolated bytes (e.g. `0xE9`). `0xC3 0xA9` emits `\u00c3\u00a9` (two characters: `U+00C3` and `U+00A9`), whereas raw byte `0xE9` emits `\u00e9` (one character: `U+00E9`).
+- **100% Pure ASCII JSON:** The JSON output contains only 7-bit ASCII characters, making it universally valid JSON that parses cleanly across every language and runtime without UTF-8 decode errors.
+- **Lossless Byte Reconstruction:** Any client reconstructs the original raw binary stream losslessly:
+  ```python
+  def reconstruct_bytes(text: str) -> bytes:
+      return text.encode("latin1")
+      # or equivalently: bytes(ord(c) for c in text)
+  ```
+
+
 ## Failure modes to design for
 Worker crashes mid-job; sandbox hangs; client disconnects during run; two Runs in one room at once; output of 1 GB; compile bombs (huge templates / macros).
