@@ -1084,3 +1084,24 @@
 - Linked: LOG-0059
 - Piyush prediction (optional): Automated checks against documentation contracts ensure future refactorings will not accidentally reintroduce unsafe Route B claims.
 - Tutor review: pending
+
+## [LOG-0061] 2026-11-14 13:49 IST | PLAN | actor: agent
+- Reason: Plan documentation of capability-drop architecture, remaining identity limitations, and open design questions.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before updating architecture docs and tests.
+  2. Audit capabilities(7) and prctl(2) regarding privilege transitions in user namespaces:
+     - Document that transition from UID 0 to nobody via setuid() clears effective, permitted, and ambient capability sets, but does NOT alter the Capability Bounding Set (cap_bset).
+     - Document the role of PR_SET_NO_NEW_PRIVS in preventing file-capability or setuid execution.
+     - Document open design questions: explicit bounding set reduction via PR_CAPBSET_DROP, ambient set clearing via PR_CAP_AMBIENT_CLEAR_ALL, and ordering relative to seccomp lockdown.
+     - Document the final identity route decision: Route A proposed (conditional on helpers and kernel support); Route B rejected/unsupported (supplementary group leak); current host unshare ENOSYS limitations honestly recorded.
+  3. Update docs/03_SANDBOX_DEEP_DIVE.md:
+     - Add Section 9: "Capability Dropping Architecture & Open Design Questions (capabilities(7), prctl(2))".
+  4. Update scripts/test_phase2_diagnostics.py:
+     - Add structured assertion in test_supplementary_group_and_identity_contract verifying that capability dropping is explicitly recorded as an open design question and not claimed as complete.
+  5. Update LEARNING_NOTES/phase-1.md (local-only, not committed) with matching systems concepts.
+  6. Run full verification suites.
+  7. Append LOG-0062 (DONE) and commit Part 3 changes.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, scripts/test_phase2_diagnostics.py, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0060
+- Piyush prediction (optional): Clarifying that setuid does not clear the capability bounding set will ensure future seccomp and prctl filters block re-acquisition of root privileges.
+- Tutor review: pending
