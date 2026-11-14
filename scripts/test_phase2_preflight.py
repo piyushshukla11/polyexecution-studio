@@ -108,8 +108,9 @@ class TestPhase2Preflight(unittest.TestCase):
             self.assertEqual(readiness["seccomp_bpf_toolchain"]["status"], "PRESENT")
             self.assertEqual(readiness["seccomp_bpf_enforcement"]["status"], "INFERRED")
 
-            # Rootless mapping succeeds when unshare probe succeeds
-            self.assertEqual(readiness["rootless_id_mapping"]["status"], "PROBE_SUCCEEDED")
+            # Prerequisites and userns probe succeeded, but ID mapping itself was not exercised.
+            self.assertEqual(readiness["rootless_id_mapping"]["status"], "INFERRED")
+            self.assertIn("mapping was NOT performed", readiness["rootless_id_mapping"]["detail"])
 
             obs = report["observed"]
             self.assertEqual(obs["caller_identity"]["uid"], 1000)

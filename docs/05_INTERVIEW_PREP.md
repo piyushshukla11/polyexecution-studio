@@ -45,7 +45,7 @@ After each phase, answer the matching questions out loud with no notes. Log the 
 
 ## Required learning sign-off before calling PES complete
 
-This is the project-wide completion checklist. Keep every item open until Piyush can answer or perform it independently and the tutor has reviewed the result. Agent-authored answers or code do not count as Piyush's completion. Work on remaining authorized phases may continue while these items are open; phase-specific DoD and merge gates still apply.
+This is the project-wide final learning checklist. Piyush asked to finish technical work across the planned phases first and complete these questions and exercises at the end. Keep every item open until Piyush can answer or perform it independently and the tutor has reviewed the result. Agent-authored answers or code do not count as Piyush's completion. Open items do not block authorized technical phase work, but technical DoD, security review, and Git checks still apply. The whole project remains in progress until this checklist is complete.
 
 ### Required explain-back questions
 

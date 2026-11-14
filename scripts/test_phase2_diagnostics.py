@@ -353,22 +353,30 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
         report = run_preflight()
         readiness = report["readiness"]
 
-        # User namespaces must be UNAVAILABLE due to unshare probe ENOSYS
-        self.assertEqual(readiness["user_namespaces"]["status"], "UNAVAILABLE")
-        self.assertIn("errno=38", readiness["user_namespaces"]["detail"])
+        # Live namespace probes are host-dependent; validate truthful categories
+        # rather than assuming a historical errno from an earlier environment.
+        userns_status = readiness["user_namespaces"]["status"]
+        self.assertIn(userns_status, {"PROBE_SUCCEEDED", "UNAVAILABLE"})
+        if userns_status == "PROBE_SUCCEEDED":
+            self.assertIn("succeeded", readiness["user_namespaces"]["detail"])
+        else:
+            self.assertIn("errno=", readiness["user_namespaces"]["detail"])
 
-        # Toolchain / controllers may be PRESENT
-        self.assertEqual(readiness["cgroup_v2_controllers"]["status"], "PRESENT")
-        self.assertEqual(readiness["seccomp_bpf_toolchain"]["status"], "PRESENT")
+        # Presence depends on the host; neither absence nor presence proves enforcement.
+        self.assertIn(readiness["cgroup_v2_controllers"]["status"], {"PRESENT", "UNAVAILABLE"})
+        self.assertIn(readiness["seccomp_bpf_toolchain"]["status"], {"PRESENT", "UNAVAILABLE"})
 
-        # Runtime enforcement MUST be INFERRED (not PRESENT or PROBE_SUCCEEDED)
-        self.assertEqual(readiness["cgroup_v2_pids_enforcement"]["status"], "INFERRED")
-        self.assertEqual(readiness["cgroup_v2_memory_enforcement"]["status"], "INFERRED")
-        self.assertEqual(readiness["seccomp_bpf_enforcement"]["status"], "INFERRED")
-        self.assertEqual(readiness["privilege_dropping"]["status"], "INFERRED")
+        # Runtime enforcement cannot be PRESENT or PROBE_SUCCEEDED in this read-only audit.
+        for key in ("cgroup_v2_pids_enforcement", "cgroup_v2_memory_enforcement", "seccomp_bpf_enforcement"):
+            self.assertIn(readiness[key]["status"], {"INFERRED", "UNAVAILABLE"})
+            self.assertNotIn(readiness[key]["status"], {"PRESENT", "PROBE_SUCCEEDED"})
+        self.assertIn(readiness["privilege_dropping"]["status"], {"INFERRED", "UNAVAILABLE"})
 
-        # Rootless mapping helpers: binaries exist, but mapping UNAVAILABLE due to ENOSYS
-        self.assertEqual(readiness["rootless_id_mapping"]["status"], "UNAVAILABLE")
+        # Helpers plus a user-namespace probe do not prove actual UID/GID mapping.
+        mapping_status = readiness["rootless_id_mapping"]["status"]
+        self.assertIn(mapping_status, {"INFERRED", "UNAVAILABLE"})
+        if mapping_status == "INFERRED":
+            self.assertIn("mapping was NOT performed", readiness["rootless_id_mapping"]["detail"])
 
     def test_safe_compilation_all_phase2_fixtures(self) -> None:
         """

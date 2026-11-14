@@ -514,20 +514,23 @@ def run_preflight(
         "nobody_gid": nobody_gid,
     }
 
-    # Rootless ID mapping: subuid/newuidmap alone are NOT sufficient if user namespaces are unavailable!
+    # Rootless ID mapping prerequisites are not proof that a mapping was applied.
     if subuid_entry and subgid_entry and newuidmap_bin and newgidmap_bin:
         if user_unshare_ok:
             readiness["rootless_id_mapping"] = {
-                "status": "PROBE_SUCCEEDED",
-                "detail": f"subuid ({subuid_entry}) and newuidmap/newgidmap present; user namespace probe succeeded",
+                "status": "INFERRED",
+                "detail": f"subuid ({subuid_entry}) and newuidmap/newgidmap are present and user namespace probe succeeded; UID/GID mapping was NOT performed",
             }
+            unverified.append(
+                "UID/GID mapping was not exercised: subordinate-ID entries and mapping helpers are present, but no uid_map/gid_map write was attempted."
+            )
         else:
             readiness["rootless_id_mapping"] = {
                 "status": "UNAVAILABLE",
                 "detail": f"/etc/subuid and newuidmap binaries are PRESENT, but unshare(CLONE_NEWUSER) returned errno={user_unshare.get('errno')}; rootless user namespace mapping cannot be established without functional user namespaces",
             }
             inferences.append(
-                "Rootless mapping helpers (newuidmap/newgidmap) cannot establish an unprivileged sandbox while unshare(CLONE_NEWUSER) fails with ENOSYS."
+                f"Rootless mapping helpers (newuidmap/newgidmap) cannot establish an unprivileged sandbox while unshare(CLONE_NEWUSER) fails with errno={user_unshare.get('errno')}."
             )
     else:
         missing = []

@@ -1324,3 +1324,28 @@
 - Linked: LOG-0074
 - Piyush prediction (optional): A prerequisite probe can justify an inference, but it does not prove that actual UID/GID mapping works.
 - Tutor review: pending
+
+## [LOG-0076] 2026-11-14 23:22 IST | DONE | actor: tutor
+- Reason: Correct environment-sensitive Phase 2 diagnostics and accurately report which rootless namespace prerequisites were observed versus which enforcement steps remain untested.
+- Details / Change:
+  1. Updated the live diagnostics test to accept observed host outcomes instead of hard-coding historical ENOSYS, while rejecting any read-only probe that calls runtime enforcement PRESENT or PROBE_SUCCEEDED.
+  2. Updated the synthetic preflight-success test and rootless mapping classification: present subuid/subgid entries, helper binaries, and a successful userns probe now yield INFERRED because no UID/GID map was written. Failed probes still report the actual errno.
+  3. Updated docs/03_SANDBOX_DEEP_DIVE.md: the earlier userns ENOSYS result is labeled historical; the latest audit reports userns probe success, direct probes for other namespace flags returning EPERM, and an unwritable user cgroup. Combined namespace creation, UID/GID mapping, and runtime isolation remain unverified.
+  4. Verification: `python3 scripts/test_phase2_preflight.py` passed 6/6; `python3 scripts/test_phase2_diagnostics.py` passed 18/18; `cd sandbox-daemon && make clean && make test` passed Phase 1 18/18 with three Phase 2 attack checks pending; `python3 scripts/phase2_preflight.py` produced the updated live observations.
+  5. No Phase 2 containment code or runtime attack tests were added. The diagnostics and preflight describe prerequisites only.
+- Files: docs/03_SANDBOX_DEEP_DIVE.md, scripts/phase2_preflight.py, scripts/test_phase2_diagnostics.py, scripts/test_phase2_preflight.py, PROGRESS.md
+- Linked: LOG-0075
+- Piyush prediction (optional): A live probe should state the current observed result while mapping and enforcement remain labeled unverified until those actions are exercised.
+- Tutor review: pending
+
+## [LOG-0077] 2026-11-14 23:22 IST | DONE | actor: tutor
+- Reason: Apply Piyush's requested development mode: complete technical phases first and defer the required learning answers and exercises until the end.
+- Details / Change:
+  1. Updated AI_RULES.md to authorize agent implementation across phases, including Tier A work, while requiring `AGENT-WROTE-TIER-A` attribution and preserving the final owner learning gate.
+  2. Updated docs/04_BUILD_PLAN.md and docs/06_LEARNING_RULES.md so deferred explain-backs do not block technical phase work; phase tests, tutor review, security evidence, and Git checks remain required.
+  3. Updated docs/05_INTERVIEW_PREP.md to state the deferred-learning mode and keep the project-wide questions/exercises as a required final completion gate.
+  4. The learning checklist remains OPEN. No phase has been declared complete and no merge was performed.
+- Files: AI_RULES.md, docs/04_BUILD_PLAN.md, docs/05_INTERVIEW_PREP.md, docs/06_LEARNING_RULES.md, PROGRESS.md
+- Linked: LOG-0074
+- Piyush prediction (optional): Technical implementation can continue through the phases while the project remains incomplete until the final learning checklist is passed.
+- Tutor review: pending

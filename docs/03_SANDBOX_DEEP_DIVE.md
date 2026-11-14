@@ -63,15 +63,17 @@ python3 scripts/phase2_preflight.py --json
 
 ### Observed Host Facts vs Inferences
 
+The following is a read-only snapshot from the current environment on 2026-11-14. These probes are environment-specific and must be rerun before implementation decisions; a successful single-flag probe does not prove a combined namespace setup works.
+
 | Dimension | Directly Observed Fact | Status / Interpretation |
 |---|---|---|
 | **Linux Kernel** | 7.2.8-9-omarchy x86_64 | Standard 64-bit Linux kernel |
 | **Namespace Symlinks** | `/proc/self/ns/{cgroup,ipc,mnt,net,pid,time,user,uts}` present | Namespace subsystem symlinks exist in procfs |
 | **User Clone Sysctl** | `/proc/sys/kernel/unprivileged_userns_clone = 1` | Unprivileged user cloning enabled in kernel sysctl |
-| **Unshare Syscall Probe** | `libc.unshare(CLONE_NEWUSER)` returns `ret=-1, errno=38 (ENOSYS)` | **Observed Fact:** Syscall returns Function not implemented. <br>**Unverified Cause:** Does not prove kernel lacks support; cause is UNKNOWN (leaves open whether kernel lacks support, an outer container supervisor intercepts the syscall, or an LSM blocks it). |
-| **Cgroups v2** | Unified cgroup2 mounted at `/sys/fs/cgroup`; delegated user slice at `/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/` | **Controllers PRESENT; Enforcement INFERRED:** Controllers `cpu`, `memory`, and `pids` are present and user slice directory is writable. However, creating a child cgroup and writing/enforcing `pids.max` or `memory.max` were NOT verified (read-only audit). |
+| **Unshare Syscall Probe** | Historical probe recorded `CLONE_NEWUSER` as `ret=-1, errno=38 (ENOSYS)`. Current probe: `CLONE_NEWUSER` succeeds; direct probes for `CLONE_NEWPID`, `CLONE_NEWNET`, `CLONE_NEWNS`, `CLONE_NEWIPC`, and `CLONE_NEWUTS` return `EPERM`. | **Observed Fact:** A transient child can create a user namespace. The other probes were made independently from the original environment. **Unknown:** Whether a combined or sequential namespace setup will succeed has not been tested. The old ENOSYS result is historical and its cause was never established. |
+| **Cgroups v2** | Unified cgroup2 mounted at `/sys/fs/cgroup`; controllers include `cpu`, `memory`, and `pids`; current user slice is not writable by this user. | **Controllers PRESENT; Enforcement UNAVAILABLE:** No child cgroup was created and no limit was written or enforced. This environment cannot currently provide the planned delegated cgroup enforcement through the observed user slice. |
 | **Seccomp** | Header `/usr/include/seccomp.h` present; `libseccomp.so.2` version 2.6.0 loaded; `PR_GET_NO_NEW_PRIVS` = 1 | **Toolchain PRESENT; Enforcement INFERRED:** Seccomp development files are present, but compiling and installing an active BPF filter in the kernel was NOT verified (read-only audit). |
-| **Rootless Setup** | `/etc/subuid` and `/etc/subgid` have `zogratis:100000:65536`; `newuidmap`/`newgidmap` available | **Files PRESENT; Mapping UNAVAILABLE:** Subordinate ID files and mapping binaries are present, but cannot establish an unprivileged sandbox while `unshare(CLONE_NEWUSER)` fails with ENOSYS. |
+| **Rootless Setup** | `/etc/subuid` and `/etc/subgid` have `zogratis:100000:65536`; `newuidmap`/`newgidmap` are available; the user-namespace probe succeeds. | **Prerequisites PRESENT; Mapping INFERRED:** The preflight tool did not write UID/GID maps. Helper presence and namespace creation do not prove that mapping succeeds. |
 | **Privilege Dropping** | `nobody:nobody` account available (UID 65534, GID 65534) | **Identity PRESENT; Transition INFERRED:** Unprivileged identity exists, but executing `setuid`/`setgid` was NOT tested (read-only audit). |
 
 ---
@@ -230,7 +232,7 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
 ### Architectural Notes & Assumptions:
 1. **User Namespace Ordering:** `/proc/[pid]/uid_map` exists only after the child creates the user namespace (`unshare(CLONE_NEWUSER)`). The synchronization pipes ensure the child pauses until the parent has written the mappings using `newuidmap`/`newgidmap`.
 2. **PID Namespace Two-Process Pattern:** Because `unshare(CLONE_NEWPID)` does not place the calling process into the new namespace, an intermediate fork is required. Child 1 unshares `CLONE_NEWPID` and forks Child 2. Child 2 becomes PID 1 of the new namespace.
-3. **Environment Limitation:** In our current container execution environment, `libc.unshare(CLONE_NEWUSER)` returns `errno=38 (ENOSYS)`. This full handshake cannot be executed live in this container until unprivileged user namespaces are available.
+3. **Environment Limitation:** A prior audit recorded `libc.unshare(CLONE_NEWUSER)` returning `errno=38 (ENOSYS)`. The latest read-only audit now succeeds for that single flag, but the UID/GID mapping handshake has still not been performed. Direct probes for other namespace flags return `EPERM`; a combined setup remains unverified.
 
 ### Why This Ordering is Essential (Avoiding Classic Systems Traps):
 
@@ -255,9 +257,9 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
    * Signals delivered to a child do **not** propagate down process trees automatically. If the child process forks grandchildren or starts background processes, those grandchildren do not receive `PDEATHSIG`. When the child terminates, grandchildren are reparented to PID 1 (`init` / `systemd`) as orphaned background workloads.
    * True descendant lifecycle containment requires **PID namespaces (`CLONE_NEWPID`)** (where terminating PID 1 terminates all processes in the namespace) and **cgroups v2 (`cgroup.kill`)** (which sends `SIGKILL` to every process in the cgroup simultaneously).
 
-5. **Disambiguating unshare ENOSYS:**
-   * *Observed Evidence:* In our environment, `libc.unshare(CLONE_NEWUSER)` returned `ret=-1, errno=38 (ENOSYS)`.
-   * *Separation from Inferences:* `ENOSYS` ("Function not implemented") is recorded as observed fact. Its underlying cause remains an unverified hypothesis: it leaves open whether the running kernel lacks user namespace support (`CONFIG_USER_NS`), an outer container supervisor seccomp profile intercepts the call, an LSM policy blocks it, or container hypervisor restrictions apply. Do not assume or assert container seccomp filtering without independent proof.
+5. **Historical unshare ENOSYS observation:**
+   * *Observed Evidence:* An earlier audit recorded `libc.unshare(CLONE_NEWUSER)` as `ret=-1, errno=38 (ENOSYS)`. A later read-only probe on 2026-11-14 returned success for this single flag.
+   * *Separation from Inferences:* The earlier ENOSYS cause was never established. Do not treat it as the current result or assume the kernel, container supervisor, seccomp, or an LSM caused it. The current probe also does not prove combined namespace creation or UID/GID mapping.
 
 6. **UID/GID Mapping Routes, Supplementary Groups, and the `setgroups(2)` Contract (`credentials(7)`, `user_namespaces(7)`):**
    * *Process Identity vs Supplementary Groups (`credentials(7)`):*
@@ -275,7 +277,7 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
        1. Helper binaries (`newuidmap`, `newgidmap`) possessing setuid-root file permissions on a filesystem mounted without `nosuid`.
        2. Parent supervisor invoking helpers before setting `PR_SET_NO_NEW_PRIVS` (which would prevent setuid execution).
        3. Calling user having valid subordinate allocations in `/etc/subuid` and `/etc/subgid`.
-       4. Kernel supporting `CLONE_NEWUSER` (which currently fails with `errno=38 (ENOSYS)` on this host).
+       4. A working `CLONE_NEWUSER` path and successful UID/GID mapping (the current read-only probe establishes only the first step).
    * *Route B: Unprivileged Direct-Write Route (Rootless Fallback — Marked UNSUPPORTED):*
      - Child 1 (or parent) writes directly to `/proc/[pid]/uid_map` and `/proc/[pid]/gid_map` without setuid helpers.
      - Linux kernel rule: Writing to `/proc/[pid]/gid_map` without `CAP_SETGID` in the parent namespace *strictly requires* writing `"deny"` to `/proc/[pid]/setgroups` first! Attempting to write `gid_map` before writing `"deny"` fails with `EPERM`.
@@ -283,7 +285,7 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
      - *The Supplementary Group Inheritance Trap:* Because `setgroups` is permanently denied, Child 1 cannot clear its supplementary group list. Calling `setgid()` and `setuid()` leaves all inherited host supplementary groups (e.g. `wheel`, `sudo`, `docker`) intact, and these groups survive `execve(2)` into the target binary.
      - *Design Verdict:* Because Route B cannot drop supplementary groups and cannot map multiple IDs without host privilege, Route B is **UNSUPPORTED** for secure multi-tenant sandbox execution.
    * *Host Runtime Boundary:*
-     - On the current host, `unshare(CLONE_NEWUSER)` returns `ret=-1, errno=38 (ENOSYS)`. Neither Route A nor Route B can be executed live until functional user namespaces are supported by the environment.
+     - The earlier host probe returned `ENOSYS`; the latest probe can create a user namespace, but neither Route A nor Route B has completed a live ID-mapping handshake. Treat both routes as unverified until that full sequence is tested safely.
 
 7. **PID Namespace Lifecycle, PID 1 Semantics, and Procfs Mount Ordering (`pid_namespaces(7)`, `proc(5)`):**
    * *Why `unshare(CLONE_NEWPID)` Does Not Change the Caller's PID Namespace:*
@@ -310,7 +312,7 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
      - Unlike standard process groups where orphaned grandchildren can survive if they call `setsid()`, no process can survive in a PID namespace once PID 1 exits.
      - This guarantees clean, leak-free teardown of multi-process fork-bombs and background daemons.
    * *Host Runtime Boundary:*
-     On the current host, `unshare(CLONE_NEWPID)` returns `ret=-1, errno=38 (ENOSYS)`. Runtime verification of child PID namespace creation and procfs isolation cannot be exercised live in this environment.
+     A direct `unshare(CLONE_NEWPID)` probe from the original environment currently returns `EPERM`. Whether creating a user namespace first enables the required PID namespace setup is unverified. Runtime verification of child PID namespace creation and procfs isolation is still pending.
 
 8. **Target Arguments & Environment: Current Runner Gap & Safe Future Interface Contract:**
    * *Current Implementation Gap:*
@@ -401,7 +403,7 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
    * *Identity Route Selection Summary:*
      - **Route A (`newuidmap` / `newgidmap`):** **PROPOSED.** It permits clearing supplementary groups via `setgroups(0, NULL)` and mapping separate `root` and `nobody` IDs. Remains strictly conditional on helper permissions, `/etc/subuid` allocations, parent invocation without `PR_SET_NO_NEW_PRIVS`, and a host kernel supporting `CLONE_NEWUSER`.
      - **Route B (Unprivileged Direct-Write):** **REJECTED / UNSUPPORTED.** Cannot clear supplementary groups due to the `/proc/[pid]/setgroups` `"deny"` requirement (CVE-2014-8989), leaking host supplementary groups across `execve()`.
-     - **Host Runtime Boundary:** On this host, `unshare(CLONE_NEWUSER)` returns `ret=-1, errno=38 (ENOSYS)`. No user namespace route is runtime-safe or executable here without kernel/container support.
+     - **Host Runtime Boundary:** The latest probe can create a user namespace, while direct probes for other namespace flags return `EPERM`; UID/GID mapping and combined namespace setup are unverified. No isolation claim is justified until the complete setup and adversarial tests run successfully.
 
 ### 3. Resource Limits vs Sandbox Isolation (Defense in Depth)
 A common beginner misconception is assuming that resource limits (`RLIMIT_CPU`, `RLIMIT_AS`) constitute sandboxing.
