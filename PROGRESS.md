@@ -1123,3 +1123,23 @@
 - Linked: LOG-0061
 - Piyush prediction (optional): Clarifying that setuid does not clear the capability bounding set will ensure future seccomp and prctl filters block re-acquisition of root privileges.
 - Tutor review: pending
+
+## [LOG-0063] 2026-11-14 13:59 IST | PLAN | actor: agent
+- Reason: Plan privilege ordering correction for procfs mount and identity transition in Phase 2 isolation handshake.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before updating architecture documentation.
+  2. Audit mount(2), user_namespaces(7), and capabilities(7) regarding procfs mounting privileges:
+     - Identify fatal privilege-ordering flaw in previous diagram: dropping Child 1 to nobody before fork caused Child 2 to inherit zero capabilities, making subsequent mount("proc", ...) fail with EPERM.
+     - Redesign setup sequence: Child 1 remains root (UID 0 with CAP_SYS_ADMIN in user namespace) while preparing rootfs and forking Child 2.
+     - Child 2 is born as PID 1 with CAP_SYS_ADMIN, mounts private procfs from inside the new PID namespace, and only then initiates privilege reduction.
+     - Define trusted supervisor (Child 1) privilege-reduction path: after forking Child 2, Child 1 drops supplementary groups, sets GID/UID to nobody, and sets PR_SET_NO_NEW_PRIVS before supervising Child 2 via waitpid().
+  3. Update docs/03_SANDBOX_DEEP_DIVE.md:
+     - Revise the Phase 2 isolation handshake diagram steps.
+     - Update Section 7 to explicitly explain why Child 2 must hold CAP_SYS_ADMIN at mount time and why identity drop must happen after procfs mount.
+  4. Update LEARNING_NOTES/phase-1.md (local-only, not committed) with matching systems notes.
+  5. Run test suites to verify.
+  6. Append LOG-0064 (DONE) and commit Part 1 changes.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0062
+- Piyush prediction (optional): Mounting procfs before dropping UID 0 in Child 2 ensures mount() possesses CAP_SYS_ADMIN without failing with EPERM.
+- Tutor review: pending
