@@ -41,6 +41,14 @@ typedef struct {
 
 /*
  * Execution status classifications.
+ * Note on OK vs RUNTIME_ERROR vs SANDBOX_ERROR:
+ * In accordance with docs/02_ARCHITECTURE.md:
+ * - STATUS_OK: Target executed and terminated normally with exit code 0.
+ * - STATUS_RUNTIME_ERROR: Target terminated with a non-zero exit code (e.g. 7, 127)
+ *   or uncaught signal (e.g. SIGABRT, SIGFPE, or SIGSEGV without meeting memory heuristic).
+ * - STATUS_SETUP_ERROR: Target binary failed to exec (e.g. binary not found), reported as
+ *   SANDBOX_ERROR with diagnostic stage/errno in stderr.
+ *
  * Note on MEMORY_LIMIT vs RUNTIME_ERROR:
  * In POSIX, setrlimit(RLIMIT_AS) causes allocation failure rather than an explicit kernel
  * OOM signal. When a process terminates with SIGSEGV, the runner uses an explicit resident
