@@ -925,3 +925,26 @@
 - Linked: LOG-0051
 - Piyush prediction (optional): Documenting the setgroups "deny" requirement will prevent EPERM bugs when falling back to unprivileged single-UID mappings.
 - Tutor review: pending
+
+## [LOG-0053] 2026-11-14 13:33 IST | PLAN | actor: agent
+- Reason: Plan verification and documentation of PID namespace and procfs lifecycle ordering contracts.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before modifying architecture documentation and verification suites.
+  2. Audit pid_namespaces(7), unshare(2), clone(2), and proc(5):
+     - Document why unshare(CLONE_NEWPID) does not change caller PID namespace (PID immutability invariant).
+     - Document that the first child created via fork() after unshare becomes PID 1 of the new PID namespace, while the helper process (Child 1) supervises and reaps it from the parent namespace.
+     - Document procfs mount ordering: mounting procfs before Child 2 fork reflects the parent PID namespace (leaking host processes); mounting procfs after Child 2 fork (from within the new PID namespace) reflects only isolated processes in the container.
+     - Document that when namespace PID 1 exits, the kernel immediately sends SIGKILL to all remaining processes in that PID namespace.
+     - Mark host runtime behavior honestly: unshare(CLONE_NEWPID) probe returns ENOSYS on this host.
+  3. Update docs/03_SANDBOX_DEEP_DIVE.md:
+     - Update the handshake diagram to explicitly place procfs mounting in Child 2 (after fork) to guarantee the isolated PID view.
+     - Add detailed Section 7: "PID Namespace Lifecycle, PID 1 Semantics, and Procfs Mount Ordering (pid_namespaces(7), proc(5))".
+  4. Update scripts/test_phase2_diagnostics.py:
+     - Add structured test asserting documentation of PID immutability, PID 1 creation and supervision, procfs mount ordering after fork, and PID 1 exit SIGKILL cascade.
+  5. Update LEARNING_NOTES/phase-1.md (local-only, not committed) with matching systems concepts.
+  6. Run test suites to verify.
+  7. Append LOG-0054 (DONE) and commit Part 2 changes.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, scripts/test_phase2_diagnostics.py, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0052
+- Piyush prediction (optional): Mounting procfs after Child 2 is born will guarantee that /proc contains only sandbox processes rather than host system processes.
+- Tutor review: pending
