@@ -828,6 +828,30 @@
 - Piyush prediction (optional): Dynamic canary path injection will make future filesystem containment tests deterministic without relying on hardcoded host paths.
 - Tutor review: pending
 
+## [LOG-0049] 2026-11-14 13:03 IST | PLAN | actor: agent
+- Reason: Plan network fixture destination contract review, limits of ENETUNREACH documentation, and capability audit recheck.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before updating code and documentation.
+  2. Update sandbox-daemon/tests/evil/net_connect.c:
+     - Add support for configurable target IP and port via argv[1]/argv[2] or PES_NET_TARGET_IP/PES_NET_TARGET_PORT environment variables (with fallback to 93.184.216.34:80).
+     - Document that hardcoding public IPs creates offline/CI false dependencies; future tests will bind a local host listener outside the sandbox.
+     - Document that ECONNREFUSED proves network reachability (packets reached destination and received RST), rejecting it from isolation claims.
+     - Disambiguate policy blocks (ENETUNREACH in empty netns, EPERM/EACCES in seccomp) from ambient errors (ETIMEDOUT, ECONNREFUSED, EHOSTUNREACH).
+     - Maintain strict boundary: no live network connection attempts in this preparation task.
+  3. Update scripts/test_phase2_diagnostics.py:
+     - Add source-level checks for dynamic target IP/port support and ECONNREFUSED rejection.
+     - Add mock classification tests for ECONNREFUSED (verifying it is classified as UNEXPECTED_FAILURE / REACHABILITY_LEAK rather than policy denial).
+  4. Update docs/03_SANDBOX_DEEP_DIVE.md:
+     - Document network fixture contracts, the semantics and limits of interpreting ENETUNREACH, and host calibration requirements.
+     - Recheck and document the five capability audit categories (PRESENT, PROBE_SUCCEEDED, INFERRED, UNAVAILABLE, UNKNOWN).
+  5. Run test suites and sandbox regression tests to verify.
+  6. Append LOG-0050 (DONE) and commit Part 3 changes.
+- Files: PROGRESS.md, sandbox-daemon/tests/evil/net_connect.c, scripts/test_phase2_diagnostics.py, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0048
+- Piyush prediction (optional): Configurable network targets will allow future tests to use local listeners instead of unreliable public internet connections.
+- Tutor review: pending
+
+
 
 
 
