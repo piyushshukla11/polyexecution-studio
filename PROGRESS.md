@@ -721,6 +721,27 @@
 - Piyush prediction (optional): Diagnosable fixtures will provide deterministic classification for future Phase 2 tests without risking execution today.
 - Tutor review: pending
 
+## [LOG-0043] 2026-11-14 12:43 IST | PLAN | actor: agent
+- Reason: Plan Phase 2 dependency ordering and systems documentation corrections in docs/03_SANDBOX_DEEP_DIVE.md and LEARNING_NOTES/phase-1.md.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before editing documentation.
+  2. Update docs/03_SANDBOX_DEEP_DIVE.md:
+     - Align host capabilities table with refined preflight taxonomy (PRESENT, INFERRED, UNAVAILABLE, UNKNOWN), removing overclaimed 'Ready:' tags.
+     - Correct Phase 2 isolation sequence: split parent supervisor responsibilities (cgroup creation, attaching child PID to cgroup.procs, establishing uid_map/gid_map) from isolated child lifecycle (unsharing namespaces, pivot_root, dropping privileges, setting no_new_privs, loading seccomp, execve).
+     - Clarify that cgroup writes must happen while the caller has required permissions and before seccomp is loaded.
+     - Clarify that user namespace UID/GID mapping must be completed before dropping identity to nobody.
+     - Clarify that a naive static seccomp allowlist is insufficient for dynamic runtimes without dynamic linker (ld.so) syscall mapping, and document the two-stage rollout (audit mode -> enforcement mode).
+     - Reiterate PR_SET_PDEATHSIG direct-child limitation vs CLONE_NEWPID and cgroup.kill.
+     - Document diagnosable fixture outcomes and canary detection.
+  3. Update LEARNING_NOTES/phase-1.md (local-only) with matching systems corrections and beginner-friendly architectural walkthrough.
+  4. Verify git status and ensure LEARNING_NOTES is not staged.
+  5. Append LOG-0044 (DONE) and commit Part 3 changes.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0042
+- Piyush prediction (optional): Corrected sequencing will prevent permission denial and seccomp self-block bugs when Phase 2 implementation begins.
+- Tutor review: pending
+
+
 
 
 
