@@ -851,6 +851,27 @@
 - Piyush prediction (optional): Configurable network targets will allow future tests to use local listeners instead of unreliable public internet connections.
 - Tutor review: pending
 
+## [LOG-0050] 2026-11-14 13:03 IST | DONE | actor: agent
+- Reason: Complete network fixture destination contract review, limits of ENETUNREACH documentation, and capability audit recheck.
+- Details / Change:
+  1. Updated sandbox-daemon/tests/evil/net_connect.c:
+     - Added support for configurable target IP and port via argv[1]/argv[2] or PES_NET_TARGET_IP/PES_NET_TARGET_PORT environment variables (with fallback to 93.184.216.34:80).
+     - Documented why hardcoding external public IPs introduces false dependencies on internet connectivity, and documented that future tests will use a local host TCP listener.
+     - Documented that ECONNREFUSED is a reachability leak (proving packets reached the target host), and classified it as UNEXPECTED_FAILURE rather than policy denial.
+     - Disambiguated policy blocks (ENETUNREACH, EPERM, EACCES) from ambient network failures (ETIMEDOUT, ECONNREFUSED).
+  2. Updated scripts/test_phase2_diagnostics.py:
+     - Added source-level checks for dynamic target IP/port parsing and ECONNREFUSED handling.
+     - Added mock classification tests for ECONNREFUSED verifying it is rejected from isolation claims (12/12 tests pass in 0.481s).
+  3. Updated docs/03_SANDBOX_DEEP_DIVE.md:
+     - Added detailed section on Network Isolation Contracts & The Limits of Interpreting ENETUNREACH, explaining routing table dependence and host reachability calibration.
+  4. Updated LEARNING_NOTES/phase-1.md (local-only) with matching systems notes and sleep/wall vs CPU timing explanations.
+  5. Verified make clean && make test in sandbox-daemon/ (all 18 Phase 1 regression tests pass, 3 Phase 2 checks pending).
+- Files: PROGRESS.md, sandbox-daemon/tests/evil/net_connect.c, scripts/test_phase2_diagnostics.py, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0049
+- Piyush prediction (optional): Configurable network targets will allow future tests to use local listeners instead of unreliable public internet connections.
+- Tutor review: pending
+
+
 
 
 

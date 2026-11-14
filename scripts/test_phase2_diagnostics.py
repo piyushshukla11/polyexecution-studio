@@ -124,9 +124,17 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
         self.assertIn("return 2;", src)
 
     def test_net_connect_source_contract(self) -> None:
-        """Verify net_connect.c source structure and contracts."""
+        """Verify net_connect.c source structure, dynamic target interface, and contracts."""
         src = (EVIL_DIR / "net_connect.c").read_text()
 
+        # Must accept argc, argv
+        self.assertIn("int main(int argc, char *argv[])", src)
+        # Must support dynamic target IP via argv[1] and PES_NET_TARGET_IP
+        self.assertIn("argv[1]", src)
+        self.assertIn("PES_NET_TARGET_IP", src)
+        # Must support dynamic target port via argv[2] and PES_NET_TARGET_PORT
+        self.assertIn("argv[2]", src)
+        self.assertIn("PES_NET_TARGET_PORT", src)
         # Must emit structured DIAG tag
         self.assertIn("DIAG:", src)
         # Must distinguish expected network namespace behavior (ENETUNREACH)
@@ -134,10 +142,23 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
         # Must distinguish seccomp socket blocks (EPERM, EACCES)
         self.assertIn("EPERM", src)
         self.assertIn("EACCES", src)
+        # Must handle ECONNREFUSED as ambient reachability failure, not policy block
+        self.assertIn("ECONNREFUSED", src)
         # Must return exit codes 0 (breach), 1 (policy), 2 (unexpected)
         self.assertIn("return 0;", src)
         self.assertIn("return 1;", src)
         self.assertIn("return 2;", src)
+
+    def test_mock_classification_network_conn_refused_rejected(self) -> None:
+        """
+        Verify classifier rejects ECONNREFUSED as proof of isolation.
+        ECONNREFUSED indicates packets reached the host/port (reachable!).
+        """
+        mock_stderr = "DIAG: OP=connect TARGET=127.0.0.1:9999 STATUS=UNEXPECTED_FAILURE ERRNO=111 (Connection refused)\n"
+        res = classify_fixture_outcome(exit_code=2, stdout="", stderr=mock_stderr)
+        self.assertEqual(res["verdict"], "UNEXPECTED_FAILURE")
+        self.assertEqual(res["errno"], "111")
+        self.assertIn("ambient or system error", res["detail"])
 
     def test_fork_bomb_safety_label(self) -> None:
         """Verify fork_bomb.c contains safety warnings and verification guidance."""
