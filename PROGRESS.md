@@ -1029,3 +1029,21 @@
 - Linked: LOG-0056
 - Piyush prediction (optional): Clarifying that setgid/setuid do not clear supplementary groups will prevent subtle host privilege leaks into sandboxed processes.
 - Tutor review: pending
+
+## [LOG-0058] 2026-11-14 13:46 IST | DONE | actor: agent
+- Reason: Complete identity and supplementary-group contract correction for Phase 2 user namespace architecture.
+- Details / Change:
+  1. Updated docs/03_SANDBOX_DEEP_DIVE.md:
+     - Updated Step 11 in the isolation handshake diagram to explicitly document that Route A clears supplementary groups via setgroups(0, NULL), whereas Route B cannot clear supplementary groups and is UNSUPPORTED for containment.
+     - Updated Section 6: "UID/GID Mapping Routes, Supplementary Groups, and the setgroups(2) Contract (credentials(7), user_namespaces(7))".
+     - Documented distinction between real/effective/saved IDs and the supplementary group array (credentials(7)).
+     - Documented the setuid/setgid fallacy: setgid/setuid modify primary GID/UID only and do NOT clear or modify supplementary groups.
+     - Documented that supplementary groups survive execve(2) into the target binary.
+     - Audited Route A (newgidmap): helper holds CAP_SETGID in parent namespace; /proc/PID/setgroups remains "allow"; Child 1 holds CAP_SETGID in new user namespace; Child 1 can and must call setgroups(0, NULL) before setgid/setuid; remains conditional on helper setuid permissions, subuid/subgid mapping, parent PR_SET_NO_NEW_PRIVS ordering, and kernel CLONE_NEWUSER support.
+     - Audited Route B (direct-write fallback): writing "deny" to /proc/PID/setgroups permanently disables setgroups(2); process cannot clear supplementary groups; host supplementary groups (e.g. wheel, docker, sudo) survive into sandboxed binary across execve; explicitly marked Route B as UNSUPPORTED for secure multi-tenant execution.
+  2. Updated LEARNING_NOTES/phase-1.md (local-only, not committed) with matching systems concepts.
+  3. Verified test_phase2_diagnostics.py (16/16 tests pass).
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0057
+- Piyush prediction (optional): Clarifying that setgid/setuid do not clear supplementary groups will prevent subtle host privilege leaks into sandboxed processes.
+- Tutor review: pending

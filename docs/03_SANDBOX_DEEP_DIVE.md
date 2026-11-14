@@ -175,8 +175,10 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
 |          -> pivot_root(new_root, put_old); detach old root                        |
 +-----------------------------------------------------------------------------------+
 | Step 11: Drop Auxiliary Groups & Drop Privileges                                  |
-|          -> Route A (newgidmap): setgroups(0, NULL); setgid(nobody); setuid(nobody)|
-|          -> Route B (direct-write): setgroups denied; call setgid(); setuid() only |
+|          -> Route A (newgidmap): setgroups(0, NULL) clears supplementary groups;   |
+|             then setgid(nobody); setuid(nobody)                                    |
+|          -> Route B (direct-write): setgroups denied; cannot clear supplementary   |
+|             groups; setgid/setuid leave groups intact; UNSUPPORTED for containment |
 |          -> Uses mapped IDs established by parent in Step 7                       |
 +-----------------------------------------------------------------------------------+
 | Step 12: Fork Target Process (Child 2)                                            |
@@ -244,20 +246,29 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
    * *Observed Evidence:* In our environment, `libc.unshare(CLONE_NEWUSER)` returned `ret=-1, errno=38 (ENOSYS)`.
    * *Separation from Inferences:* `ENOSYS` ("Function not implemented") is recorded as observed fact. Its underlying cause remains an unverified hypothesis: it leaves open whether the running kernel lacks user namespace support (`CONFIG_USER_NS`), an outer container supervisor seccomp profile intercepts the call, an LSM policy blocks it, or container hypervisor restrictions apply. Do not assume or assert container seccomp filtering without independent proof.
 
-6. **UID/GID Mapping Routes and the `setgroups(2)` Contract (`user_namespaces(7)`):**
-   * *The Problem (CVE-2014-8989):* In Linux user namespaces, an unprivileged user can create a new user namespace and become UID 0 inside it. Historically, having `CAP_SETGID` inside the user namespace allowed calling `setgroups(0, NULL)` to drop supplementary groups. However, if a host resource uses negative group permissions (e.g. read permission denied to group `badusers`), dropping that supplementary group would allow unauthorized access. Linux introduced `/proc/[pid]/setgroups` to fix this security flaw.
-   * *Route A: Subordinate Helper Route (`newuidmap` / `newgidmap`):*
+6. **UID/GID Mapping Routes, Supplementary Groups, and the `setgroups(2)` Contract (`credentials(7)`, `user_namespaces(7)`):**
+   * *Process Identity vs Supplementary Groups (`credentials(7)`):*
+     In Linux, every process has real, effective, and saved UIDs/GIDs, as well as an array of supplementary group IDs (`getgroups(2)`). When the kernel checks filesystem access permissions, access is granted if the file's group matches the process's primary GID *or any of its supplementary group IDs*.
+   * *The `setuid`/`setgid` Fallacy and `execve(2)` Inheritance:*
+     A common systems misconception is assuming that calling `setgid(nobody_gid)` and `setuid(nobody_uid)` drops all group privileges. In POSIX/Linux, `setgid()` changes only the process's real, effective, and saved primary GID; it does **not** modify or clear the supplementary group list! Furthermore, `execve(2)` preserves supplementary group IDs across process execution. Unless explicitly cleared via `setgroups(0, NULL)`, any supplementary groups the process held prior to entering the sandbox survive into the executed target binary.
+   * *The Problem (CVE-2014-8989):*
+     In Linux user namespaces, an unprivileged user can create a new user namespace and become UID 0 inside it. Historically, having `CAP_SETGID` inside the user namespace allowed calling `setgroups(0, NULL)` to drop supplementary groups. However, if a host resource uses negative group permissions (e.g. read permission denied to group `badusers`), dropping that supplementary group would allow unauthorized access on the host. To fix this security vulnerability, Linux introduced `/proc/[pid]/setgroups`.
+   * *Route A: Subordinate Helper Route (`newuidmap` / `newgidmap` — Proposed Identity Route):*
      - Parent supervisor invokes setuid-root helpers `/usr/bin/newuidmap` and `/usr/bin/newgidmap` targeting Child 1 PID.
-     - Maps a range of IDs from `/etc/subuid` and `/etc/subgid` (e.g. 65536 IDs), enabling mapping both UID 0 (root inside namespace) and UID 65534 (`nobody` inside namespace).
+     - Maps a range of IDs from `/etc/subuid` and `/etc/subgid` (e.g. 65536 IDs), enabling mapping both UID 0 (root inside namespace for setup) and UID 65534 (`nobody` inside namespace for execution).
      - Because `newgidmap` runs with `CAP_SETGID` in the parent namespace, it is not required to write `"deny"` to `/proc/[pid]/setgroups`.
-     - Consequently, `/proc/[pid]/setgroups` remains `"allow"`, and Child 1 can safely call `setgroups(0, NULL)` to drop supplementary groups before dropping to `nobody`.
-     - *What Helper Presence Proves vs Does Not Prove:* The existence of `/usr/bin/newuidmap` and `/usr/bin/newgidmap` in `phase2_preflight.py` proves only that the binary files exist. It does *not* prove that setuid permissions are active, that `/usr/bin` is not mounted with `nosuid`, that the current user has subordinate ranges in `/etc/subuid`, that the caller has not set `PR_SET_NO_NEW_PRIVS` (which blocks executing setuid helpers with elevated privilege), or that the kernel permits user namespace creation.
-   * *Route B: Unprivileged Direct-Write Route (Rootless Fallback):*
+     - Consequently, `/proc/[pid]/setgroups` remains in its default `"allow"` state. Inside the new user namespace, Child 1 holds `CAP_SETGID` (scoped to the namespace) and can successfully execute `setgroups(0, NULL)`, completely emptying the supplementary group list before calling `setgid(nobody_gid)` and `setuid(nobody_uid)`.
+     - *Conditional Route A Contract (What Helper Presence Proves vs Does Not Prove):* The existence of `/usr/bin/newuidmap` and `/usr/bin/newgidmap` in `phase2_preflight.py` proves only that the binary files exist. Route A is strictly conditional on:
+       1. Helper binaries (`newuidmap`, `newgidmap`) possessing setuid-root file permissions on a filesystem mounted without `nosuid`.
+       2. Parent supervisor invoking helpers before setting `PR_SET_NO_NEW_PRIVS` (which would prevent setuid execution).
+       3. Calling user having valid subordinate allocations in `/etc/subuid` and `/etc/subgid`.
+       4. Kernel supporting `CLONE_NEWUSER` (which currently fails with `errno=38 (ENOSYS)` on this host).
+   * *Route B: Unprivileged Direct-Write Route (Rootless Fallback — Marked UNSUPPORTED):*
      - Child 1 (or parent) writes directly to `/proc/[pid]/uid_map` and `/proc/[pid]/gid_map` without setuid helpers.
-     - Linux kernel rule: Writing to `/proc/[pid]/gid_map` without `CAP_SETGID` in the parent namespace *requires* writing `"deny"` to `/proc/[pid]/setgroups` first! Attempting to write `gid_map` before writing `"deny"` fails with `EPERM`.
-     - *Permanent Invalidation of setgroups(2):* Writing `"deny"` permanently disables `setgroups(2)` for that user namespace. Any subsequent call to `setgroups(0, NULL)` in Child 1 will fail with `EPERM`.
-     - *Child Contract in Route B:* Child 1 must *skip* calling `setgroups(0, NULL)`. It may only call `setgid()` and `setuid()`.
-     - *Single-ID Mapping Limit:* Under unprivileged direct-write, only one UID and one GID can be mapped. A distinct `nobody` identity (UID 65534) cannot be mapped alongside root.
+     - Linux kernel rule: Writing to `/proc/[pid]/gid_map` without `CAP_SETGID` in the parent namespace *strictly requires* writing `"deny"` to `/proc/[pid]/setgroups` first! Attempting to write `gid_map` before writing `"deny"` fails with `EPERM`.
+     - *Permanent Invalidation of setgroups(2):* Writing `"deny"` permanently disables `setgroups(2)` in that namespace; all subsequent calls to `setgroups()` return `EPERM`.
+     - *The Supplementary Group Inheritance Trap:* Because `setgroups` is permanently denied, Child 1 cannot clear its supplementary group list. Calling `setgid()` and `setuid()` leaves all inherited host supplementary groups (e.g. `wheel`, `sudo`, `docker`) intact, and these groups survive `execve(2)` into the target binary.
+     - *Design Verdict:* Because Route B cannot drop supplementary groups and cannot map multiple IDs without host privilege, Route B is **UNSUPPORTED** for secure multi-tenant sandbox execution.
    * *Host Runtime Boundary:*
      - On the current host, `unshare(CLONE_NEWUSER)` returns `ret=-1, errno=38 (ENOSYS)`. Neither Route A nor Route B can be executed live until functional user namespaces are supported by the environment.
 
