@@ -1047,3 +1047,23 @@
 - Linked: LOG-0057
 - Piyush prediction (optional): Clarifying that setgid/setuid do not clear supplementary groups will prevent subtle host privilege leaks into sandboxed processes.
 - Tutor review: pending
+
+## [LOG-0059] 2026-11-14 13:47 IST | PLAN | actor: agent
+- Reason: Plan safe regression checks for supplementary group contract, identity rules, and capability drop status.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before updating test suites.
+  2. Update scripts/test_phase2_diagnostics.py:
+     - Add test_supplementary_group_and_identity_contract:
+       * Verify that docs/03_SANDBOX_DEEP_DIVE.md explicitly distinguishes real/effective IDs from supplementary groups (credentials(7)).
+       * Verify that the docs explicitly reject the fallacy that setgid()/setuid() clear supplementary groups.
+       * Verify that the docs note supplementary groups survive execve(2).
+       * Verify that Route B (direct-write) is marked UNSUPPORTED for secure containment due to the supplementary group inheritance trap.
+       * Verify that Route A's setgroups capability is explicitly conditional on the helper's setuid permissions and lack of parent PR_SET_NO_NEW_PRIVS.
+       * Verify that capability dropping is explicitly recorded as an open design question and not claimed as complete.
+     - Ensure existing preflight separation assertions remain active and green.
+  3. Run test suites to verify.
+  4. Append LOG-0060 (DONE) and commit Part 2 changes.
+- Files: PROGRESS.md, scripts/test_phase2_diagnostics.py
+- Linked: LOG-0058
+- Piyush prediction (optional): Automated checks against documentation contracts ensure future refactorings will not accidentally reintroduce unsafe Route B claims.
+- Tutor review: pending
