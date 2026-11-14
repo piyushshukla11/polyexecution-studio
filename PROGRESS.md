@@ -518,3 +518,28 @@
 - Linked: LOG-0033
 - Piyush prediction (optional): The regression lab will automate the verification of all 13 Phase 1 behaviors, catch regressions reliably, and ensure clean cleanup of temporary files and processes.
 - Tutor review: pending
+
+## [LOG-0035] 2026-11-14 11:47 IST | PLAN | actor: agent
+- Reason: Strengthen Phase 1 Regression Lab with documented exercises and begin Phase 2 preparation and safe fixture groundwork without modifying Tier A files or running unisolated attacks.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md on phase/1-sandbox-v1 before editing code.
+  2. Part 1 (Regression Lab Strengthening):
+     - Implement the 3 documented exercises in sandbox-daemon/tests/test_runner.py:
+       (a) test_empty_output_streams: exit0 with empty stdout and stderr.
+       (b) test_cpu_vs_wall_timeout: loop under --cpu-soft 1 --cpu-hard 2 --timeout-ms 4000 terminating via SIGXCPU well before wall deadline.
+       (c) test_stderr_cap_overflow: stderr_only under --max-output-kb 1 demonstrating symmetrical output capping.
+     - Enhance error reporting and failure categorization (differentiating runner execution errors, schema errors, contract assertion failures, and target runtime errors).
+     - Add precise handling and warnings regarding outer timeouts vs detached sessions (setsid), noting the limitation that subprocess timeout kills only the runner, not detached session descendants.
+     - Align test numbering and descriptions.
+  3. Part 2 (Phase 2 Groundwork):
+     - Create Phase 2 adversarial fixture source files in sandbox-daemon/tests/evil/: fork_bomb.c, read_etc_passwd.c, net_connect.c.
+     - Update sandbox-daemon/Makefile to compile Phase 2 fixtures without executing them through the Phase 1 runner.
+     - Add Phase 2 test scaffolding to test_runner.py, marking fork-bomb, host-file read, and network connect checks as PENDING / SKIPPED with clear architectural rationale.
+     - Document host capability audit findings and concrete Phase 2 implementation sequence in LEARNING_NOTES/phase-1.md.
+     - Note the prerequisite for Phase 2 GitHub issue creation without opening one externally.
+  4. Run make clean && make test to verify the updated Phase 1 test suite.
+  5. Append DONE entry (LOG-0036) and prepare full Change Report.
+- Files: PROGRESS.md, sandbox-daemon/tests/test_runner.py, sandbox-daemon/Makefile, sandbox-daemon/tests/evil/fork_bomb.c, sandbox-daemon/tests/evil/read_etc_passwd.c, sandbox-daemon/tests/evil/net_connect.c, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0034
+- Piyush prediction (optional): Phase 1 regression lab will pass all 17 active tests, Phase 2 fixtures will compile cleanly, and Phase 2 checks will be reported as pending without compromising host safety.
+- Tutor review: pending
