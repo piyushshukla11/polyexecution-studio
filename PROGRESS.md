@@ -790,6 +790,27 @@
 - Piyush prediction (optional): The architecture will accurately reflect Linux kernel requirements, avoiding the invalid attempt to write uid_map before the user namespace exists.
 - Tutor review: pending
 
+## [LOG-0047] 2026-11-14 13:00 IST | PLAN | actor: agent
+- Reason: Plan safe filesystem canary test contract and mock verification checks in sandbox-daemon/tests/evil/read_etc_passwd.c and scripts/test_phase2_diagnostics.py.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before modifying fixture code.
+  2. Update sandbox-daemon/tests/evil/read_etc_passwd.c:
+     - Accept dynamic unique canary file path via argv[1] or PES_CANARY_PATH env var (with fallback to /etc/pes_host_canary).
+     - Accept unique canary verification token via argv[2] or PES_CANARY_TOKEN env var.
+     - Distinguish canary content match (BREACH, exit 0), missing file (ENOENT -> BLOCKED_BY_POLICY, exit 1), permission/seccomp block (EACCES/EPERM -> BLOCKED_BY_POLICY, exit 1), and unrelated I/O or system failure (exit 2).
+     - Document that canary files must be created and destroyed dynamically by the future test harness, never committed or created during preparation.
+     - Preserve host user detection in /etc/passwd as fallback breach check.
+  3. Update scripts/test_phase2_diagnostics.py:
+     - Add source-level assertions checking for argv/env canary handling, token matching, and error code contracts.
+     - Add mock classification tests for canary missing (ENOENT), permission denied (EACCES), unrelated I/O failure (EIO), and token leak.
+     - Verify clean compilation with -Wall -Wextra -Werror without executing the fixture.
+  4. Append LOG-0048 (DONE) and commit Part 2 changes.
+- Files: PROGRESS.md, sandbox-daemon/tests/evil/read_etc_passwd.c, scripts/test_phase2_diagnostics.py
+- Linked: LOG-0046
+- Piyush prediction (optional): Dynamic canary path injection will make future filesystem containment tests deterministic without relying on hardcoded host paths.
+- Tutor review: pending
+
+
 
 
 
