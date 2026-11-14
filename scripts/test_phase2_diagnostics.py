@@ -443,24 +443,53 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
         self.assertIn("CapAmb: 0000000000000000", doc)
         self.assertIn("claiming capability drop without a defined verification method is invalid", doc)
 
-        # 5. Structural ordering validation:
-        # Verify the sequential stages appear in the correct non-inverted order.
-        idx_mount = doc.index("Stage 2 (Mount Private Procfs)")
-        idx_bnd = doc.index("Stage 3 (Prune Capability Bounding Set)")
-        idx_groups = doc.index("Stage 4 (Clear Supplementary Groups)")
-        idx_setuid = doc.index("Stage 6 (Drop Real, Effective, Saved Identity)")
-        idx_nnp = doc.index("Stage 7 (Enforce No-New-Privileges Boundary)")
-        idx_verify = doc.index("Stage 8 (Verify Capability Bitmasks)")
-        idx_seccomp = doc.index("Stage 9 (Install Seccomp-BPF Syscall Filter)")
-        idx_execve = doc.index("Stage 10 (Execute Target)")
+        # 5. Anchored structural ordering validation:
+        # Anchor checks to the canonical lifecycle subsection rather than matching whole-doc offsets.
+        start_marker = "*Exact Step-by-Step Privilege Reduction Sequence (Child 2):*"
+        end_marker = "*Status Verification Contract (`/proc/self/status`):*"
+        self.assertIn(start_marker, doc)
+        self.assertIn(end_marker, doc)
 
+        start_pos = doc.index(start_marker)
+        end_pos = doc.index(end_marker)
+        lifecycle_sec = doc[start_pos:end_pos]
+
+        # Verify all 10 stages exist in exact numerical sequence with no omissions or inversions
+        stages = re.findall(r"\*\*Stage (\d+)", lifecycle_sec)
+        self.assertEqual(
+            stages,
+            [str(i) for i in range(1, 11)],
+            f"Expected exactly Stages 1 through 10 in sequential order, got: {stages}",
+        )
+
+        idx_stage1 = lifecycle_sec.index("Stage 1 (Born as PID 1 with Setup Privileges)")
+        idx_mount = lifecycle_sec.index("Stage 2 (Mount Private Procfs)")
+        idx_bnd = lifecycle_sec.index("Stage 3 (Prune Capability Bounding Set)")
+        idx_groups = lifecycle_sec.index("Stage 4 (Clear Supplementary Groups)")
+        idx_ambient = lifecycle_sec.index("Stage 5 (Clear Ambient Capabilities)")
+        idx_setuid = lifecycle_sec.index("Stage 6 (Drop Real, Effective, Saved Identity)")
+        idx_nnp = lifecycle_sec.index("Stage 7 (Enforce No-New-Privileges Boundary)")
+        idx_verify = lifecycle_sec.index("Stage 8 (Verify Capability Bitmasks)")
+        idx_seccomp = lifecycle_sec.index("Stage 9 (Install Seccomp-BPF Syscall Filter)")
+        idx_execve = lifecycle_sec.index("Stage 10 (Execute Target)")
+
+        self.assertLess(idx_stage1, idx_mount, "Stage 1 must precede Stage 2")
         self.assertLess(idx_mount, idx_setuid, "Mount must occur before identity drop")
         self.assertLess(idx_bnd, idx_setuid, "Bounding set drop must occur before identity drop")
         self.assertLess(idx_groups, idx_setuid, "Supplementary group drop must occur before identity drop")
+        self.assertLess(idx_ambient, idx_setuid, "Ambient capability clear must occur before identity drop")
         self.assertLess(idx_setuid, idx_nnp, "Identity drop must occur before NNP")
         self.assertLess(idx_nnp, idx_verify, "NNP must occur before capability verification")
         self.assertLess(idx_verify, idx_seccomp, "Verification must occur before seccomp installation")
         self.assertLess(idx_seccomp, idx_execve, "Seccomp must occur immediately before execve")
+
+        # Explicitly prove Stage 9 is immediately before Stage 10 (no intervening stage)
+        tail_seccomp = lifecycle_sec[idx_seccomp + len("Stage 9 (Install Seccomp-BPF Syscall Filter)"):idx_execve]
+        self.assertNotIn(
+            "**Stage",
+            tail_seccomp,
+            "No intermediate stages may appear between Stage 9 (seccomp) and Stage 10 (execve)",
+        )
 
 
 if __name__ == "__main__":

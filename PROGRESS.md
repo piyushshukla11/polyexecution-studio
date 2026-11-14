@@ -1257,3 +1257,20 @@
 - Linked: LOG-0069
 - Piyush prediction (optional): Anchoring stage checks to the canonical subsection and verifying the complete 10-stage list eliminates false positive matches from other sections and mathematically proves seccomp immediately precedes execve.
 - Tutor review: pending
+
+## [LOG-0071] 2026-11-14 22:58 IST | DONE | actor: agent
+- Reason: Complete test quality enhancements for test_privilege_ordering_and_capability_contract in scripts/test_phase2_diagnostics.py addressing tutor review notes.
+- Details / Change:
+  1. Updated scripts/test_phase2_diagnostics.py:
+     - Anchored structural stage assertions specifically to the canonical lifecycle subsection between "*Exact Step-by-Step Privilege Reduction Sequence (Child 2):*" and "*Status Verification Contract (`/proc/self/status`):*".
+     - Implemented regex check asserting all 10 stages exist in exact numerical sequence: `stages == ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10']`.
+     - Validated monotonic ascending order of Stages 1 through 10 (Stage 1 init -> Stage 2 mount -> Stage 3 bounding set -> Stage 4 supplementary groups -> Stage 5 ambient caps -> Stage 6 setgid/setuid -> Stage 7 NNP -> Stage 8 status verify -> Stage 9 seccomp -> Stage 10 execve).
+     - Proved that Stage 9 (install seccomp) immediately precedes Stage 10 (execve) by asserting no intermediate `**Stage` tokens appear in the substring between Stage 9 and Stage 10.
+     - Re-verified that the test validates the documented architecture contract only and does not perform host runtime kernel validation.
+  2. Verified test_phase2_preflight.py (6/6 tests pass in 0.087s).
+  3. Verified test_phase2_diagnostics.py (18/18 tests pass in 0.530s).
+  4. Ran regression lab: make clean && make test in sandbox-daemon (18/18 tests pass, 3 Phase 2 fixtures cleanly skipped/pending).
+- Files: PROGRESS.md, scripts/test_phase2_diagnostics.py
+- Linked: LOG-0070
+- Piyush prediction (optional): Anchoring stage checks to the canonical subsection and verifying the complete 10-stage list eliminates false positive matches from other sections and mathematically proves seccomp immediately precedes execve.
+- Tutor review: pending
