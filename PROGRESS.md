@@ -1194,3 +1194,20 @@
 - Linked: LOG-0065
 - Piyush prediction (optional): Pruning bounding capabilities while CAP_SETPCAP is active prevents EPERM errors and guarantees zero residual capabilities before execve.
 - Tutor review: pending
+
+## [LOG-0067] 2026-11-14 14:06 IST | PLAN | actor: agent
+- Reason: Plan safe architecture checks in test_phase2_diagnostics.py for privilege ordering, capability drop, and /proc/self/status verification.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before modifying test suites.
+  2. In scripts/test_phase2_diagnostics.py, add a dedicated unit test method test_privilege_ordering_and_capability_contract:
+     - Catch dropping identity before privileged mount: verify that Stage 2 (mount procfs) strictly precedes Stage 6 (setgid/setuid to nobody) and that mount requires CAP_SYS_ADMIN.
+     - Catch PR_CAPBSET_DROP after CAP_SETPCAP lost: verify that Stage 3 (bounding set pruning) strictly precedes Stage 6 (setuid) and that PR_CAPBSET_DROP requires CAP_SETPCAP.
+     - Catch applying seccomp before setup complete: verify that Stage 9 (install seccomp) strictly occurs after all setup stages and immediately precedes Stage 10 (execve), documenting why early seccomp blocks setup syscalls with SIGSYS/EPERM.
+     - Catch claiming capability-drop without verification method: verify the /proc/self/status contract asserting CapInh, CapPrm, CapEff, CapBnd, CapAmb are 0000000000000000 and rejecting unverified capability claims.
+     - Document in test docstring that these tests validate the documented architectural contract only and do NOT prove runtime enforcement on the host.
+  3. Run full preflight, diagnostics, and sandbox daemon test suites.
+  4. Append LOG-0068 (DONE) and commit Part 3 changes.
+- Files: PROGRESS.md, scripts/test_phase2_diagnostics.py
+- Linked: LOG-0066
+- Piyush prediction (optional): Adding structural index-ordering checks in diagnostics ensures future document or runner updates cannot invert privilege-dropping stages without failing tests.
+- Tutor review: pending
