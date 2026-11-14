@@ -1618,3 +1618,14 @@
 - Files: docs/03_SANDBOX_DEEP_DIVE.md, PROGRESS.md.
 - Linked: LOG-0102, LOG-0091, LOG-0094.
 - Tutor review: direct-map fallback rejected; Phase 2 DoD remains open.
+
+## [LOG-0104] 2026-11-15 00:00 IST | PLAN | actor: agent
+- Reason: Add deterministic safe regression evidence for the `/proc/self/fd` fallback and seccomp startup/denial policy without executing hostile fixtures or claiming full isolation.
+- Details / Change:
+  1. Add a compile-time test-only switch that simulates `close_range` returning ENOSYS, then extend the setup/FD test to force fallback and verify a deliberately high inherited descriptor closes while the setup descriptor remains open.
+  2. Extend the safe seccomp test to run `/bin/true` after filter installation and independently verify `socket()` and `connect()` return EPERM.
+  3. Run only the strict build plus focused setup and safe seccomp test targets, diagnostic/preflight and repository hooks as needed; do not run `fork_bomb`, `read_etc_passwd`, or `net_connect`.
+  4. Append evidence and remaining host restrictions in a DONE entry; commit the test-focused change after checks, without pushing or merging.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_setup_handshake.c, sandbox-daemon/tests/test_seccomp_policy.c, sandbox-daemon/Makefile, LEARNING_NOTES/*.
+- Linked: LOG-0101, LOG-0103, LOG-0094.
+- Tutor review: pending
