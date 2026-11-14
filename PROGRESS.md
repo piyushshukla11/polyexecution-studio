@@ -1274,3 +1274,15 @@
 - Linked: LOG-0070
 - Piyush prediction (optional): Anchoring stage checks to the canonical subsection and verifying the complete 10-stage list eliminates false positive matches from other sections and mathematically proves seccomp immediately precedes execve.
 - Tutor review: pending
+
+## [LOG-0072] 2026-11-14 23:07 IST | PLAN | actor: tutor
+- Reason: Start the project learning sign-off and establish Piyush's requested rule that PES cannot be declared complete until all required interview questions and learning exercises are completed, while allowing authorized project work to continue.
+- Details / Change:
+  1. Add the project-wide learning-completion rule to AI_RULES.md, docs/06_LEARNING_RULES.md, and the final Definition of Done in docs/04_BUILD_PLAN.md.
+  2. Add a required project-completion question and exercise checklist to docs/05_INTERVIEW_PREP.md, including the architecture, Yjs/CRDT, gRPC, sandbox lifecycle, resource limits, byte encoding, capability-ordering, security-boundary, and honest-authorship questions discussed with Piyush.
+  3. Preserve phase-specific DoD and explain-back gates. The project-wide checklist does not prevent work on remaining authorized phases; it prevents declaring the whole project finished while required learning remains open.
+  4. Begin the sign-off record as OPEN. No Phase 1 learning sign-off or merge approval is granted until Piyush completes the applicable explain-back and personal exercise review.
+- Files: AI_RULES.md, docs/04_BUILD_PLAN.md, docs/05_INTERVIEW_PREP.md, docs/06_LEARNING_RULES.md, PROGRESS.md
+- Linked: LOG-0071
+- Piyush prediction (optional): Work can continue while learning exercises remain open, but PES cannot be declared complete until every required question and exercise is passed.
+- Tutor review: pending
