@@ -6,6 +6,13 @@ Tier C Utility (read-only system inspection)
 Inspects the host environment without modifying state, creating namespaces,
 writing to cgroups, or executing adversarial payloads.
 
+Distinguishes between:
+  - PRESENT: A file, header, controller, or namespace entry was observed.
+  - PROBE_SUCCEEDED: A safe capability probe actually succeeded.
+  - INFERRED: Capability seems plausible based on evidence, but was not exercised.
+  - UNAVAILABLE: The probe failed or a required component is missing.
+  - UNKNOWN: The cause or evidence is incomplete and cannot be established.
+
 Reports findings in four strictly separated categories:
   1. Directly Observed Facts
   2. What Could Not Be Verified
@@ -56,7 +63,7 @@ def _default_unshare_probe(flag: int) -> Tuple[int, int]:
                 libc = ctypes.CDLL(None, use_errno=True)
                 ret = libc.unshare(flag)
                 err = ctypes.get_errno() if ret != 0 else 0
-            except Exception as exc:
+            except Exception:
                 ret, err = -1, -999
             msg = f"{ret},{err}".encode("ascii")
             try:
@@ -200,23 +207,25 @@ def run_preflight(
         }
     observed["unshare_probe"] = unshare_probe_results
 
-    # Namespace readiness & separation of facts from inferences
+    # Namespace readiness evaluation
     user_unshare = unshare_probe_results.get("CLONE_NEWUSER", {})
-    if user_unshare.get("return_code") == 0:
+    user_unshare_ok = (user_unshare.get("return_code") == 0)
+
+    if user_unshare_ok:
         readiness["user_namespaces"] = {
-            "status": "READY",
-            "detail": "unshare(CLONE_NEWUSER) succeeded in probe without privileges",
+            "status": "PROBE_SUCCEEDED",
+            "detail": "unshare(CLONE_NEWUSER) succeeded in transient probe without privileges",
         }
     else:
         err = user_unshare.get("errno")
         readiness["user_namespaces"] = {
             "status": "UNAVAILABLE",
-            "detail": f"unshare(CLONE_NEWUSER) returned ret={user_unshare.get('return_code')}, errno={err}",
+            "detail": f"unshare(CLONE_NEWUSER) returned ret={user_unshare.get('return_code')}, errno={err}. Cause is UNKNOWN (unverified whether kernel build, container seccomp, or LSM).",
         }
         unverified.append(
             f"Exact cause of unshare(CLONE_NEWUSER) failure (errno={err}). "
             f"Observed errno={err} leaves open whether kernel lacks user namespace support, "
-            f"an outer LSM/container seccomp filter intercepts the syscall, or root privileges are strictly required."
+            f"an outer container supervisor/seccomp filter intercepts the syscall, or an LSM blocks it."
         )
         inferences.append(
             f"User namespace creation is unavailable in the current runtime environment. "
@@ -231,8 +240,8 @@ def run_preflight(
         p_res = unshare_probe_results.get(flag_name, {})
         if p_res.get("return_code") == 0:
             readiness[ns_key] = {
-                "status": "READY",
-                "detail": f"unshare({flag_name}) succeeded in probe",
+                "status": "PROBE_SUCCEEDED",
+                "detail": f"unshare({flag_name}) succeeded in transient probe",
             }
         else:
             readiness[ns_key] = {
@@ -241,7 +250,7 @@ def run_preflight(
             }
 
     # -------------------------------------------------------------------------
-    # 3. Cgroups v2 Mount and Delegation
+    # 3. Cgroups v2 Mount, Controllers, and Delegation
     # -------------------------------------------------------------------------
     sys_path = Path(sys_root)
     cgroup_root = sys_path / "fs" / "cgroup"
@@ -316,63 +325,74 @@ def run_preflight(
 
     observed["cgroup_v2"] = cgroup_info
 
-    # Cgroup readiness evaluation
+    # Cgroup evaluation: distinguish PRESENT vs INFERRED vs UNAVAILABLE
     avail_controllers = set(cgroup_info.get("user_slice_controllers", [])) | set(cgroup_info.get("current_cgroup_controllers", []))
     is_writable = cgroup_info.get("user_slice_writable") or cgroup_info.get("current_cgroup_writable")
 
     if not is_cgroup2:
-        readiness["cgroup_v2_pids_limit"] = {
+        readiness["cgroup_v2_controllers"] = {
             "status": "UNAVAILABLE",
             "detail": f"Unified cgroup v2 filesystem not mounted at {cgroup_root}",
         }
-        readiness["cgroup_v2_memory_limit"] = {
+        readiness["cgroup_v2_pids_enforcement"] = {
             "status": "UNAVAILABLE",
-            "detail": f"Unified cgroup v2 filesystem not mounted at {cgroup_root}",
+            "detail": "cgroup v2 filesystem not mounted",
         }
-    elif not is_writable:
-        readiness["cgroup_v2_pids_limit"] = {
+        readiness["cgroup_v2_memory_enforcement"] = {
             "status": "UNAVAILABLE",
-            "detail": "cgroup v2 mounted but delegation directory is not writable by current user",
-        }
-        readiness["cgroup_v2_memory_limit"] = {
-            "status": "UNAVAILABLE",
-            "detail": "cgroup v2 mounted but delegation directory is not writable by current user",
+            "detail": "cgroup v2 filesystem not mounted",
         }
     else:
-        if "pids" in avail_controllers:
-            readiness["cgroup_v2_pids_limit"] = {
-                "status": "READY",
-                "detail": f"cgroup v2 pids controller delegated and writable under {cgroup_info.get('user_slice_path') or cgroup_info.get('current_process_cgroup')}",
-            }
-        else:
-            readiness["cgroup_v2_pids_limit"] = {
-                "status": "UNAVAILABLE",
-                "detail": "pids controller not present in delegated controllers",
-            }
+        readiness["cgroup_v2_controllers"] = {
+            "status": "PRESENT",
+            "detail": f"Controllers observed in hierarchy: {' '.join(sorted(avail_controllers)) or 'none'}; delegation directory writable: {is_writable}",
+        }
 
-        if "memory" in avail_controllers:
-            readiness["cgroup_v2_memory_limit"] = {
-                "status": "READY",
-                "detail": f"cgroup v2 memory controller delegated and writable under {cgroup_info.get('user_slice_path') or cgroup_info.get('current_process_cgroup')}",
+        if not is_writable:
+            readiness["cgroup_v2_pids_enforcement"] = {
+                "status": "UNAVAILABLE",
+                "detail": "cgroup v2 mounted but delegation directory is not writable by current user",
+            }
+            readiness["cgroup_v2_memory_enforcement"] = {
+                "status": "UNAVAILABLE",
+                "detail": "cgroup v2 mounted but delegation directory is not writable by current user",
             }
         else:
-            readiness["cgroup_v2_memory_limit"] = {
-                "status": "UNAVAILABLE",
-                "detail": "memory controller not present in delegated controllers",
-            }
+            if "pids" in avail_controllers:
+                readiness["cgroup_v2_pids_enforcement"] = {
+                    "status": "INFERRED",
+                    "detail": "pids controller is PRESENT and user slice path is writable, but creating a child cgroup and successfully setting/enforcing pids.max were NOT verified (read-only audit)",
+                }
+            else:
+                readiness["cgroup_v2_pids_enforcement"] = {
+                    "status": "UNAVAILABLE",
+                    "detail": "pids controller not present in delegated controllers",
+                }
+
+            if "memory" in avail_controllers:
+                readiness["cgroup_v2_memory_enforcement"] = {
+                    "status": "INFERRED",
+                    "detail": "memory controller is PRESENT and user slice path is writable, but creating a child cgroup and successfully setting/enforcing memory.max were NOT verified (read-only audit)",
+                }
+            else:
+                readiness["cgroup_v2_memory_enforcement"] = {
+                    "status": "UNAVAILABLE",
+                    "detail": "memory controller not present in delegated controllers",
+                }
 
     if is_cgroup2 and is_writable:
-        inferences.append(
-            f"Cgroup v2 controllers ({', '.join(sorted(avail_controllers))}) are delegated to user {current_user} (UID {current_uid}). "
-            f"The sandbox can manage child cgroups and enforce memory.max and pids.max without root privileges."
-        )
-    elif is_cgroup2 and not is_writable:
         unverified.append(
-            "Cgroup v2 hierarchy is mounted on host, but user-level delegation write permissions were not observed."
+            "Child cgroup creation and resource limit enforcement: cgroup2 controllers (cpu, memory, pids) "
+            "and write permissions are observed, but creating a child cgroup directory and writing pids.max / memory.max "
+            "were not verified in read-only audit."
+        )
+        inferences.append(
+            f"Cgroup v2 controllers ({', '.join(sorted(avail_controllers))}) appear delegated to user {current_user} (UID {current_uid}) "
+            f"based on directory ownership and write permissions, suggesting the sandbox may manage child cgroups if write operations succeed at runtime."
         )
 
     # -------------------------------------------------------------------------
-    # 4. Seccomp Libraries and Prctl Controls
+    # 4. Seccomp Toolchain and Prctl Controls
     # -------------------------------------------------------------------------
     usr_path = Path(usr_root)
     seccomp_header = usr_path / "include" / "seccomp.h"
@@ -409,19 +429,31 @@ def run_preflight(
     }
 
     if seccomp_header.is_file() and seccomp_lib_name:
-        readiness["seccomp_bpf_filtering"] = {
-            "status": "READY",
-            "detail": f"libseccomp ({lib_version_str or seccomp_lib_name}) and seccomp.h are available",
+        readiness["seccomp_bpf_toolchain"] = {
+            "status": "PRESENT",
+            "detail": f"libseccomp ({lib_version_str or seccomp_lib_name}) and seccomp.h header are present on host",
         }
+        readiness["seccomp_bpf_enforcement"] = {
+            "status": "INFERRED",
+            "detail": "Toolchain is PRESENT and PR_GET_NO_NEW_PRIVS succeeded, but compiling and installing an active BPF filter in kernel was NOT verified (read-only audit)",
+        }
+        unverified.append(
+            "Seccomp BPF runtime enforcement: headers and shared libraries are observed, "
+            "but loading an active filter via seccomp(2) or libseccomp was not exercised."
+        )
     else:
         missing_parts = []
         if not seccomp_header.is_file():
             missing_parts.append("seccomp.h header missing")
         if not seccomp_lib_name:
             missing_parts.append("libseccomp library not found")
-        readiness["seccomp_bpf_filtering"] = {
+        readiness["seccomp_bpf_toolchain"] = {
             "status": "UNAVAILABLE",
             "detail": "; ".join(missing_parts),
+        }
+        readiness["seccomp_bpf_enforcement"] = {
+            "status": "UNAVAILABLE",
+            "detail": "seccomp toolchain unavailable",
         }
 
     # -------------------------------------------------------------------------
@@ -482,11 +514,21 @@ def run_preflight(
         "nobody_gid": nobody_gid,
     }
 
+    # Rootless ID mapping: subuid/newuidmap alone are NOT sufficient if user namespaces are unavailable!
     if subuid_entry and subgid_entry and newuidmap_bin and newgidmap_bin:
-        readiness["rootless_id_mapping"] = {
-            "status": "READY",
-            "detail": f"subuid ({subuid_entry}) and newuidmap/newgidmap available",
-        }
+        if user_unshare_ok:
+            readiness["rootless_id_mapping"] = {
+                "status": "PROBE_SUCCEEDED",
+                "detail": f"subuid ({subuid_entry}) and newuidmap/newgidmap present; user namespace probe succeeded",
+            }
+        else:
+            readiness["rootless_id_mapping"] = {
+                "status": "UNAVAILABLE",
+                "detail": f"/etc/subuid and newuidmap binaries are PRESENT, but unshare(CLONE_NEWUSER) returned errno={user_unshare.get('errno')}; rootless user namespace mapping cannot be established without functional user namespaces",
+            }
+            inferences.append(
+                "Rootless mapping helpers (newuidmap/newgidmap) cannot establish an unprivileged sandbox while unshare(CLONE_NEWUSER) fails with ENOSYS."
+            )
     else:
         missing = []
         if not subuid_entry:
@@ -504,9 +546,12 @@ def run_preflight(
 
     if nobody_uid is not None:
         readiness["privilege_dropping"] = {
-            "status": "READY",
-            "detail": f"Unprivileged nobody account available (UID {nobody_uid}, GID {nobody_gid})",
+            "status": "INFERRED",
+            "detail": f"Unprivileged nobody account is PRESENT (UID {nobody_uid}, GID {nobody_gid}), but runtime setuid/setgid transition was NOT executed (read-only audit)",
         }
+        unverified.append(
+            "Privilege dropping: nobody identity exists, but dropping identity via setuid/setgid was not exercised."
+        )
     else:
         readiness["privilege_dropping"] = {
             "status": "UNAVAILABLE",
@@ -610,13 +655,13 @@ def format_text_report(report: Dict[str, Any]) -> str:
     lines.append("")
 
     # Section 4: Phase 2 Readiness Status
-    lines.append("[SECTION 4: PHASE 2 READINESS STATUS]")
+    lines.append("[SECTION 4: PHASE 2 CAPABILITY READINESS STATUS]")
     readiness = report.get("readiness", {})
     for key, data in readiness.items():
         st = data.get("status", "UNKNOWN")
         det = data.get("detail", "")
         tag = f"[{st}]"
-        lines.append(f"  {tag:<14} {key:<26} -> {det}")
+        lines.append(f"  {tag:<18} {key:<28} -> {det}")
     lines.append("=" * 76)
 
     return "\n".join(lines)

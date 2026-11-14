@@ -651,5 +651,26 @@
 - Piyush prediction (optional): The preflight tool will give an honest assessment of system state without claiming readiness for unexercised features.
 - Tutor review: pending
 
+## [LOG-0040] 2026-11-14 12:40 IST | DONE | actor: agent
+- Reason: Complete preflight readiness semantic correction to strictly distinguish PRESENT, PROBE_SUCCEEDED, INFERRED, UNAVAILABLE, and UNKNOWN, removing overclaims on cgroups, seccomp, and rootless mapping.
+- Details / Change:
+  1. Updated scripts/phase2_preflight.py:
+     - Replaced binary 'READY' status with precise capability taxonomy: PRESENT, PROBE_SUCCEEDED, INFERRED, UNAVAILABLE, and UNKNOWN.
+     - Classified cgroup controllers and writeable paths as PRESENT, but actual enforcement of pids.max and memory.max as INFERRED because a read-only audit cannot create child cgroups or write limit files.
+     - Classified rootless mapping as UNAVAILABLE because unshare(CLONE_NEWUSER) returned ENOSYS, establishing that /etc/subuid and newuidmap cannot create an unprivileged sandbox without working user namespaces.
+     - Classified seccomp toolchain as PRESENT, but runtime syscall filtering as INFERRED because loading a live filter is unexercised in read-only mode.
+     - Maintained explicit UNKNOWN classification for the root cause of unshare ENOSYS.
+     - Preserved strict read-only execution with zero mutations to host configuration or cgroups.
+  2. Updated scripts/test_phase2_preflight.py:
+     - Added test_rootless_mapping_unavailable_when_unshare_fails to verify subuid+newuidmap do not produce false positive readiness when unshare fails with ENOSYS.
+     - Added test_cgroups_not_labeled_ready_in_read_only_probe to verify controllers present in read-only probe produce INFERRED rather than READY.
+     - Verified all 6 synthetic and live tests pass in 0.088s.
+  3. Ran live preflight tool and confirmed Section 4 outputs honest, nuanced statuses without overclaiming.
+- Files: PROGRESS.md, scripts/phase2_preflight.py, scripts/test_phase2_preflight.py
+- Linked: LOG-0039
+- Piyush prediction (optional): The preflight tool will give an honest assessment of system state without claiming readiness for unexercised features.
+- Tutor review: pending
+
+
 
 
