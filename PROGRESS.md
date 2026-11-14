@@ -905,3 +905,23 @@
 - Linked: LOG-0050
 - Piyush prediction (optional): Documenting the setgroups "deny" requirement will prevent EPERM bugs when falling back to unprivileged single-UID mappings.
 - Tutor review: pending
+
+## [LOG-0052] 2026-11-14 13:32 IST | DONE | actor: agent
+- Reason: Complete audit of UID/GID mapping routes and setgroups compatibility contracts for Phase 2 namespace architecture.
+- Details / Change:
+  1. Updated docs/03_SANDBOX_DEEP_DIVE.md:
+     - Clarified Step 11 in the Phase 2 isolation handshake diagram to distinguish Route A (where setgroups(0, NULL) is permitted under newgidmap) from Route B (where setgroups is denied by kernel rule).
+     - Added comprehensive Section 6: "UID/GID Mapping Routes and the setgroups(2) Contract (user_namespaces(7))".
+     - Documented CVE-2014-8989 rootless privilege dropping flaw and the /proc/[pid]/setgroups mechanism.
+     - Documented Route A (newuidmap/newgidmap): multi-ID mapping, setuid requirement, /proc/[pid]/setgroups remaining "allow", and why setgroups(0, NULL) succeeds in the child.
+     - Documented what helper presence proves (binary files exist) vs does not prove (setuid bit, subuid ranges, caller PR_SET_NO_NEW_PRIVS status, or kernel user namespace support).
+     - Documented Route B (direct-write fallback): requirement to write "deny" to /proc/[pid]/setgroups before writing gid_map, permanent EPERM for setgroups(2), and the requirement for the child to skip setgroups(0, NULL).
+     - Documented that unshare(CLONE_NEWUSER) returning ENOSYS prevents live execution of either route on the current host.
+  2. Updated scripts/test_phase2_diagnostics.py:
+     - Added test_uid_gid_mapping_and_setgroups_contract asserting structured documentation of Route A vs Route B, CVE-2014-8989, setgroups "deny" semantics, helper presence limits, and ENOSYS host status (13/13 tests pass in 0.373s).
+  3. Updated LEARNING_NOTES/phase-1.md (local-only, not committed) with detailed systems guide on user namespace mapping contracts.
+  4. Ran regression and diagnostic suites; all tests pass.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, scripts/test_phase2_diagnostics.py, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0051
+- Piyush prediction (optional): Documenting the setgroups "deny" requirement will prevent EPERM bugs when falling back to unprivileged single-UID mappings.
+- Tutor review: pending

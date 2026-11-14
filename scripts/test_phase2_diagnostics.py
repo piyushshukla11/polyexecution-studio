@@ -224,6 +224,33 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
         res = classify_fixture_outcome(exit_code=1, stdout="", stderr=mock_stderr)
         self.assertEqual(res["verdict"], "SAFE_LOCAL_RESOURCE")
 
+    def test_uid_gid_mapping_and_setgroups_contract(self) -> None:
+        """
+        Verify that architecture documentation strictly encodes the setgroups
+        and UID/GID mapping contracts (user_namespaces(7) and setgroups(2)).
+        """
+        doc = (REPO_ROOT / "docs" / "03_SANDBOX_DEEP_DIVE.md").read_text()
+
+        # Must document both Route A (newuidmap/newgidmap) and Route B (direct-write)
+        self.assertIn("Route A: Subordinate Helper Route", doc)
+        self.assertIn("Route B: Unprivileged Direct-Write Route", doc)
+
+        # Must document CVE-2014-8989 and setgroups denial requirement for direct-write
+        self.assertIn("CVE-2014-8989", doc)
+        self.assertIn("/proc/[pid]/setgroups", doc)
+        self.assertIn('"deny"', doc)
+
+        # Must document that writing "deny" permanently disables setgroups(2) -> EPERM
+        self.assertIn("permanently disables `setgroups(2)`", doc)
+        self.assertIn("EPERM", doc)
+
+        # Must document that helper presence does NOT prove capability
+        self.assertIn("What Helper Presence Proves vs Does Not Prove", doc)
+
+        # Must explicitly acknowledge the host ENOSYS runtime boundary
+        self.assertIn("unshare(CLONE_NEWUSER)", doc)
+        self.assertIn("errno=38 (ENOSYS)", doc)
+
     def test_safe_compilation_all_phase2_fixtures(self) -> None:
         """
         Safely compiles all Phase 2 evil fixtures with -Wall -Wextra -Werror.
