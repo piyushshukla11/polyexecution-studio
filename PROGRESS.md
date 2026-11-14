@@ -968,3 +968,24 @@
 - Linked: LOG-0053
 - Piyush prediction (optional): Mounting procfs after Child 2 is born will guarantee that /proc contains only sandbox processes rather than host system processes.
 - Tutor review: pending
+
+## [LOG-0055] 2026-11-14 13:36 IST | PLAN | actor: agent
+- Reason: Plan documentation of runner argument/environment gap, safe future request interface, and capability audit distinction checks.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before updating architecture docs and verification test suites.
+  2. Document the gap between current Tier A runner execve implementation and Phase 2 fixture configuration:
+     - Current runner (sandbox-daemon/sandbox.c lines 313-316) passes only { binary_path, NULL } in child_argv and { NULL } in child_envp.
+     - New Phase 2 fixtures (read_etc_passwd.c, net_connect.c) accept dynamic argv[1]/argv[2] and environment variables, but the runner cannot currently pass those values through.
+     - Propose safe future request interface: explicit argument array (size-capped), explicit environment allowlist (no host inheritance), no shell command strings (no sh -c or system), and no user-controlled PATH search (strict execve, no execvp).
+  3. Update docs/03_SANDBOX_DEEP_DIVE.md:
+     - Add Section 8: "Target Arguments & Environment: Current Runner Gap & Safe Future Interface Contract".
+  4. Update scripts/test_phase2_diagnostics.py:
+     - Add test_runner_argument_environment_gap_contract verifying that runner source and deep-dive documentation align on the execve gap and the 4 safe interface principles.
+     - Add test_capability_statuses_distinct_from_enforcement asserting that phase2_preflight.py audit categories strictly distinguish observed PRESENT files from INFERRED runtime enforcement and UNAVAILABLE features.
+  5. Update LEARNING_NOTES/phase-1.md (local-only, not committed) with matching systems concepts.
+  6. Run full verification suites: python3 scripts/test_phase2_diagnostics.py, python3 scripts/test_phase2_preflight.py, python3 scripts/phase2_preflight.py, and cd sandbox-daemon && make clean && make test.
+  7. Append LOG-0056 (DONE) and commit Part 3 changes.
+- Files: PROGRESS.md, docs/03_SANDBOX_DEEP_DIVE.md, scripts/test_phase2_diagnostics.py, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0054
+- Piyush prediction (optional): Documenting explicit argv/env contracts now will prevent insecure shell-string patterns when implementing Phase 3 gRPC.
+- Tutor review: pending
