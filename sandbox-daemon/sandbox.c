@@ -6,6 +6,7 @@
 #include "phase2_userns.h"
 #include "phase2_rootfs.h"
 #include "phase2_privilege.h"
+#include <dirent.h>
 #include <limits.h>
 #include <signal.h>
 #include <sys/syscall.h>
@@ -243,15 +244,54 @@ static int close_unrelated_fds(int preserve_fd) {
     }
     if (close_range_ok) return 0;
 #endif
-    struct rlimit nofile;
-    if (getrlimit(RLIMIT_NOFILE, &nofile) < 0) return -1;
-    rlim_t max_fd = nofile.rlim_cur;
-    if (max_fd == RLIM_INFINITY || max_fd > 1048576) max_fd = 1048576;
-    for (int fd = STDERR_FILENO + 1; (rlim_t)fd < max_fd; fd++) {
-        if (fd == preserve_fd) continue;
-        if (close(fd) < 0 && errno != EBADF) return -1;
+    DIR *directory = opendir("/proc/self/fd");
+    if (!directory) return -1;
+    int directory_fd = dirfd(directory);
+    if (directory_fd < 0) {
+        int saved_errno = errno;
+        if (closedir(directory) < 0) return -1;
+        errno = saved_errno;
+        return -1;
     }
-    return 0;
+
+    int result = 0;
+    int saved_errno = 0;
+    for (;;) {
+        errno = 0;
+        struct dirent *entry = readdir(directory);
+        if (!entry) {
+            if (errno != 0) {
+                result = -1;
+                saved_errno = errno;
+            }
+            break;
+        }
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+
+        errno = 0;
+        char *end = NULL;
+        long listed_fd = strtol(entry->d_name, &end, 10);
+        if (errno != 0 || end == entry->d_name || *end != '\0' || listed_fd < 0 || listed_fd > INT_MAX) {
+            if (result == 0) {
+                result = -1;
+                saved_errno = EPROTO;
+            }
+            continue;
+        }
+        int fd = (int)listed_fd;
+        if (fd <= STDERR_FILENO || fd == preserve_fd || fd == directory_fd) continue;
+        if (close(fd) < 0 && errno != EBADF && result == 0) {
+            result = -1;
+            saved_errno = errno;
+        }
+    }
+
+    if (closedir(directory) < 0 && result == 0) {
+        result = -1;
+        saved_errno = errno;
+    }
+    if (result < 0) errno = saved_errno;
+    return result;
 }
 
 /*

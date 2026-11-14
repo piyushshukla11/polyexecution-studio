@@ -1561,3 +1561,36 @@
 - Files: sandbox-daemon/sandbox.c, PROGRESS.md.
 - Linked: LOG-0093, LOG-0097.
 - Tutor review: pending
+
+## [LOG-0099] 2026-11-15 00:32 IST | PLAN | actor: agent
+- Reason: Prevent the descriptor-sweep fallback from reporting success when its capped loop cannot prove that every inherited descriptor was closed.
+- Details / Change:
+  1. Keep the existing finite scan limit for safe fallback operation.
+  2. If `RLIMIT_NOFILE` is infinite or above that limit, fail closed with a clear errno instead of silently truncating the scan.
+  3. Preserve the designated setup error descriptor and existing `close_range` path.
+  4. Compile under the repository's strict C flags and inspect the focused diff; do not run attack fixtures.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c.
+- Linked: LOG-0098.
+- Tutor review: pending
+
+## [LOG-0100] 2026-11-15 00:33 IST | PLAN | actor: agent
+- Reason: A finite current `RLIMIT_NOFILE` does not prove that no already-open descriptors exist above that limit, so merely failing above the old scan cap would leave some fallback cases unverifiable.
+- Details / Change:
+  1. Replace the bounded fallback loop with `/proc/self/fd` enumeration.
+  2. Preserve standard descriptors, the designated setup error descriptor, and the enumeration descriptor while closing every other listed descriptor.
+  3. Fail closed on enumeration, parsing, close, or `closedir` failures.
+  4. Keep the kernel `close_range` fast path unchanged and compile the C target under strict flags.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c.
+- Linked: LOG-0099.
+- Tutor review: pending
+
+## [LOG-0101] 2026-11-15 00:34 IST | DONE | actor: agent
+- Reason: Ensure the fallback FD cleanup proves closure across the actual inherited descriptor set instead of scanning only to a guessed bound.
+- Details / Change:
+  1. Replaced the `RLIMIT_NOFILE` capped scan with enumeration of `/proc/self/fd` when `close_range` is unavailable.
+  2. Preserved standard descriptors, the designated setup error FD, and the enumeration directory FD; closed all other listed descriptors.
+  3. Propagated directory open/read/close, descriptor parsing, descriptor close, and `closedir` errors so setup cannot proceed when closure is unproven.
+- Verification: `make clean && make all && make test-setup-protocol && make clean` passed; setup and FD inheritance regression reported 5/5. The runtime test used the normal path and did not force the `close_range` fallback. `git diff --check`, `scripts/check_progress_append_only.sh`, and `scripts/check_repo_hygiene.sh` passed. No attack fixtures were run.
+- Files: sandbox-daemon/sandbox.c, PROGRESS.md.
+- Linked: LOG-0100.
+- Tutor review: pending
