@@ -6,14 +6,16 @@
 int main(void) {
     /*
      * Phase 2 Adversarial Fixture: Network Abuse
-     * Attempt to create an outbound TCP connection.
-     * In Phase 2, this must be blocked by network namespaces (CLONE_NEWNET)
-     * and/or seccomp socket syscall filtering.
+     * Attempt to create an outbound TCP socket and connect to an external host.
+     * In Phase 2, this must be blocked by:
+     *   1. Network namespaces (CLONE_NEWNET) where loopback is down and no external
+     *      route exists, causing connect() to fail immediately with ENETUNREACH;
+     *   2. Seccomp-BPF filtering blocking the socket() or connect() syscalls.
      * DO NOT run against Phase 1 runner!
      */
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
-        /* Blocked at socket creation */
+        /* Blocked at socket creation by seccomp policy */
         return 1;
     }
 
@@ -31,6 +33,6 @@ int main(void) {
         return 0;
     }
 
-    /* Safe Phase 2 termination: connect failed */
+    /* Safe Phase 2 containment: connect failed (e.g. ENETUNREACH) */
     return 2;
 }

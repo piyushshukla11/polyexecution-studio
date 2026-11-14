@@ -600,3 +600,35 @@
 - Piyush prediction (optional): Preflight tool will accurately identify delegated cgroups v2 and seccomp while isolating unshare ENOSYS as observed fact rather than speculative cause; synthetic tests will pass 100%; Phase 1 suite will maintain 18 passing tests.
 - Tutor review: pending
 
+## [LOG-0038] 2026-11-14 12:10 IST | DONE | actor: agent
+- Reason: Complete Phase 2 preflight capability audit tool (scripts/phase2_preflight.py), synthetic verification test suite (scripts/test_phase2_preflight.py), adversarial fixture audit, and systems isolation architecture documentation.
+- Details / Change:
+  1. Implemented scripts/phase2_preflight.py using only Python standard library:
+     - Safely inspects host environment without changing state, creating namespaces, or writing to cgroups.
+     - Separates findings into four distinct sections: (1) Directly Observed Facts, (2) What Could Not Be Verified, (3) Inferences (labeled hypotheses), (4) Phase 2 Readiness Status.
+     - Uses safe fork-isolated transient child probe for libc.unshare() to ensure parent tool process never alters its namespace.
+     - Supports human-readable output and machine-readable --json.
+     - Injects paths and probe functions for deterministic unit testing.
+  2. Implemented scripts/test_phase2_preflight.py:
+     - Synthetic test fixtures verifying supported case, unavailable case (missing cgroup2, missing headers, unshare ENOSYS), and permission-denied case (read-only cgroups, unshare EPERM).
+     - Live host capability test verifying safe execution.
+     - 4/4 synthetic and live tests pass in 0.040s.
+  3. Audited Phase 2 adversarial fixtures:
+     - Audited sandbox-daemon/tests/evil/fork_bomb.c, read_etc_passwd.c, and net_connect.c.
+     - Documented attack attempted, containment failure criteria, expected Phase 2 defense, and method for distinguishing policy enforcement from unrelated errors.
+     - Refined fixture source code comments and semantics; eliminated unused variable warning in read_etc_passwd.c.
+     - Maintained strict boundary: zero execution of Phase 2 attacks through Phase 1 runner.
+  4. Updated docs/03_SANDBOX_DEEP_DIVE.md:
+     - Added Phase 2 Preflight Tool section and observed host capabilities table.
+     - Documented fixture audit matrix and Phase 2 isolation architecture with strict dependency ordering.
+     - Added Systems Correctness Notes: PR_SET_PDEATHSIG grandchild limitation, disambiguating unshare ENOSYS from unverified container hypotheses, and resource limits vs isolation controls.
+  5. Updated LEARNING_NOTES/phase-1.md (local-only):
+     - Added complete preflight tool study guide, fixture audit matrix, systems concepts, man page citations, and 3 explain-back questions for Piyush with empty answer blocks.
+  6. Verified make clean && make test: 18/18 Phase 1 regression tests pass cleanly, 3 Phase 2 groundwork checks remain pending.
+  7. Retained strict ownership boundaries: zero edits to Tier A files (sandbox.c, sandbox.h); no push, merge, or PR.
+- Files: PROGRESS.md, scripts/phase2_preflight.py, scripts/test_phase2_preflight.py, docs/03_SANDBOX_DEEP_DIVE.md, sandbox-daemon/tests/evil/fork_bomb.c, sandbox-daemon/tests/evil/read_etc_passwd.c, sandbox-daemon/tests/evil/net_connect.c, LEARNING_NOTES/phase-1.md
+- Linked: LOG-0037
+- Piyush prediction (optional): Preflight tool will accurately identify delegated cgroups v2 and seccomp while isolating unshare ENOSYS as observed fact rather than speculative cause; synthetic tests will pass 100%; Phase 1 suite will maintain 18 passing tests.
+- Tutor review: pending
+
+
