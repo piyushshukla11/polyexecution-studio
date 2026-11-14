@@ -671,6 +671,32 @@
 - Piyush prediction (optional): The preflight tool will give an honest assessment of system state without claiming readiness for unexercised features.
 - Tutor review: pending
 
+## [LOG-0041] 2026-11-14 12:41 IST | PLAN | actor: agent
+- Reason: Plan diagnosable Phase 2 fixture outcomes and safe mock verification tests to distinguish policy denial from ambient errors without executing attacks.
+- Details / Change:
+  1. Commit this PLAN entry alone to PROGRESS.md before modifying fixture code.
+  2. Update sandbox-daemon/tests/evil/read_etc_passwd.c:
+     - Add diagnostic stderr emission with structured DIAG: tags.
+     - Add host-canary check (/etc/pes_host_canary) and host-user matching in /etc/passwd to avoid treating container-internal minimal passwd files as containment breaches.
+     - Implement explicit exit codes: 0 (BREACH), 1 (BLOCKED_BY_POLICY: ENOENT, EACCES, EPERM), 2 (UNEXPECTED_FAILURE).
+  3. Update sandbox-daemon/tests/evil/net_connect.c:
+     - Add diagnostic stderr emission with structured DIAG: tags.
+     - Distinguish expected network namespace policy failure (connect returns ENETUNREACH) and seccomp policy failure (socket returns EPERM/EACCES) from unrelated ambient failures (ETIMEDOUT, EHOSTUNREACH).
+     - Implement explicit exit codes: 0 (BREACH), 1 (BLOCKED_BY_POLICY), 2 (UNEXPECTED_FAILURE).
+  4. Review sandbox-daemon/tests/evil/fork_bomb.c:
+     - Ensure fork_bomb remains unexecuted, labeled dangerous, and documents future causal verification via cgroups v2 pids.events max counter.
+  5. Create scripts/test_phase2_diagnostics.py:
+     - Source-level audit verifying diagnostic stream format, exit code contracts, and canary logic.
+     - Mock-based classifier testing policy-blocked vs ambient failure vs breach outputs.
+     - Safe compilation verification with -Wall -Wextra -Werror.
+  6. Verify make clean && make test (all 18 Phase 1 tests pass, 3 Phase 2 remain pending).
+  7. Append LOG-0042 (DONE) and commit Part 2 changes.
+- Files: PROGRESS.md, sandbox-daemon/tests/evil/read_etc_passwd.c, sandbox-daemon/tests/evil/net_connect.c, sandbox-daemon/tests/evil/fork_bomb.c, scripts/test_phase2_diagnostics.py
+- Linked: LOG-0040
+- Piyush prediction (optional): Diagnosable fixtures will provide deterministic classification for future Phase 2 tests without risking execution today.
+- Tutor review: pending
+
+
 
 
 
