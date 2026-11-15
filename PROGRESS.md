@@ -1768,3 +1768,39 @@
 - Files: PROGRESS.md, HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
 - Linked: LOG-0114.
 - Tutor review: pending
+
+## [LOG-0116] 2026-11-15 12:12 IST | PLAN | actor: agent
+- Reason: Implement a focused host-safe regression test covering fail-closed setup failure without target execution, resource or descriptor leakage, and decouple rootfs cleanup from cgroup active state.
+- Details / Change:
+  1. Fix cleanup decoupling in `sandbox-daemon/sandbox.c` (`cleanup_job_resources`) so that temporary `root_mountpoint` removal is executed unconditionally even when `cgroup` is NULL or `cgroup->active` is false.
+  2. Fix descriptor leak in `sandbox-daemon/sandbox.c` (`run_sandbox_with_config`) to close both ends of `userns_ready_pipe` if `fork()` fails.
+  3. Add a dedicated safe regression test in `sandbox-daemon/tests/test_fail_closed_gate.c` with Makefile target `test-phase2-fail-closed` verifying:
+     a) Decoupled cleanup removes the temporary rootfs mountpoint when `cgroup->active` is false or `cgroup` is NULL.
+     b) Runner fails closed with `STATUS_SETUP_ERROR` (stage `SETUP_STAGE_CGROUP_CREATE`, errno `ENOTSUP`, exit code 127) when invoked against a canary script on this unsupported host.
+     c) Canary marker file is NOT created (proving target code is never executed).
+     d) Zero leftover `/tmp/pes-root-*` mountpoints.
+     e) Zero leaked child or zombie processes.
+     f) Zero leaked open file descriptors.
+  4. Tag Tier A changes in `sandbox.c` with `AGENT-WROTE-TIER-A`.
+  5. Run strict build, focused regression, and safe test suite. Phase 2 DoD remains OPEN. No hostile attack fixtures will be executed.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_fail_closed_gate.c, sandbox-daemon/Makefile.
+- Linked: LOG-0115, LOG-0113.
+- Tutor review: pending
+
+## [LOG-0117] 2026-11-15 12:14 IST | DONE | actor: agent
+- Reason: Implement and verify the host-safe fail-closed regression test, decoupling rootfs cleanup and eliminating the fork-failure pipe leak.
+- Details / Change:
+  1. Decoupled rootfs mountpoint removal from cgroup active state in `sandbox.c` (`cleanup_job_resources`), guaranteeing that temporary directories created by `phase2_rootfs_create_mountpoint` are removed even if `cgroup` is NULL or `cgroup->active` is false.
+  2. Fixed descriptor leak in `sandbox.c` (`run_sandbox_with_config`) by closing both ends of `userns_ready_pipe` when `fork()` returns -1.
+  3. Added `sandbox-daemon/tests/test_fail_closed_gate.c` and Makefile target `test-phase2-fail-closed`.
+  4. Verified via `make test-phase2-fail-closed`:
+     - Inactive and NULL cgroup cleanup removes root mountpoint: PASS.
+     - Runner fails closed with `STATUS_SETUP_ERROR`, stage `SETUP_STAGE_CGROUP_CREATE`, errno `ENOTSUP`, exit code 127: PASS.
+     - Canary marker file was NOT created (target binary was not executed): PASS.
+     - Zero orphaned child or zombie processes: PASS.
+     - Zero open file descriptor leaks across run: PASS.
+  5. All safe suites passed: setup protocol 5/5 (normal and fallback), cgroup fake-tree 5/5, seccomp probe, fail-closed regression, diagnostics 18/18, preflight 6/6. Phase 2 DoD remains OPEN. No hostile fixtures were executed.
+- Verification: `make test-setup-protocol && make test-phase2-structural && make test-phase2-seccomp-safe && make test-phase2-fail-closed` passed under `-Wall -Wextra -Werror -O2`. Python diagnostics 18/18, preflight 6/6, git hygiene, and append-only hooks passed cleanly.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_fail_closed_gate.c, sandbox-daemon/Makefile.
+- Linked: LOG-0116.
+- Tutor review: pending

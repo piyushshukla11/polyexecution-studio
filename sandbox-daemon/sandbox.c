@@ -216,11 +216,19 @@ static int parent_read_userns_ready(int read_fd, phase2_userns_ready_t *ready, u
     return 0;
 }
 
+/* AGENT-WROTE-TIER-A: Decoupled cgroup and rootfs mountpoint cleanup */
 static int cleanup_job_resources(phase2_cgroup_t *cgroup, const char *root_mountpoint) {
-    if (!cgroup || !cgroup->active) return 0;
-    if (phase2_cgroup_kill(cgroup) < 0) return -1;
-    int result = phase2_cgroup_remove(cgroup);
-    int saved_errno = result < 0 ? errno : 0;
+    int result = 0;
+    int saved_errno = 0;
+    if (cgroup && cgroup->active) {
+        if (phase2_cgroup_kill(cgroup) < 0) {
+            result = -1;
+            saved_errno = errno;
+        } else if (phase2_cgroup_remove(cgroup) < 0) {
+            result = -1;
+            saved_errno = errno;
+        }
+    }
     if (root_mountpoint && root_mountpoint[0] != '\0' && phase2_rootfs_remove_mountpoint(root_mountpoint) < 0) {
         if (result == 0) saved_errno = errno;
         result = -1;
@@ -519,6 +527,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
     if (pid < 0) {
         int fork_errno = errno;
         (void)cleanup_job_resources(&job_cgroup, root_mountpoint);
+        close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
         close(placement_pipe[0]); close(placement_pipe[1]);
         close(gate_pipe[0]); close(gate_pipe[1]);
         close(err_pipe[0]); close(err_pipe[1]);
