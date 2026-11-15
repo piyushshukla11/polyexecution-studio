@@ -84,6 +84,13 @@ static void child_report_error_and_exit(int err_pipe_write_fd, setup_stage_t sta
     _exit(127);
 }
 
+/* AGENT-WROTE-TIER-A: Signal forwarding handler for namespace init supervisor */
+static volatile sig_atomic_t g_forward_sig = 0;
+
+static void forward_sig_handler(int sig) {
+    g_forward_sig = sig;
+}
+
 /*
  * Parent error reader:
  * Returns:
@@ -677,65 +684,211 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_ROOTFS, errno);
         }
 
+        /* AGENT-WROTE-TIER-A: Dedicated pipe for Child 2 -> Child 1 status propagation */
+        int status_pipe[2];
+        if (pipe2(status_pipe, O_CLOEXEC) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+        }
+
         pid_t target_pid = fork();
         if (target_pid < 0) {
-            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NAMESPACES, errno);
+            int fork_err = errno;
+            close(status_pipe[0]);
+            close(status_pipe[1]);
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NAMESPACES, fork_err);
         }
         if (target_pid == 0) {
+            /*
+             * --- CHILD 2: Namespace Init Supervisor (PID 1 in PID namespace) ---
+             */
+            close(status_pipe[0]);
+
             /* Child 2 is PID 1 here; its parent is outside this PID namespace, so getppid() is 0. */
             if (phase2_set_parent_death_signal(0) < 0) {
+                close(status_pipe[1]);
                 child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
             }
             if (phase2_rootfs_mount_proc() < 0) {
+                close(status_pipe[1]);
                 child_report_error_and_exit(err_pipe[1], SETUP_STAGE_PROCFS, errno);
             }
-            if (phase2_target_drop_capabilities_and_identity() < 0) {
-                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CAPABILITY_DROP, errno);
+
+            pid_t app_pid = fork();
+            if (app_pid < 0) {
+                int app_fork_err = errno;
+                close(status_pipe[1]);
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, app_fork_err);
             }
-            /* Credential changes clear PDEATHSIG; reinstall it after dropping to nobody. */
-            if (phase2_set_parent_death_signal(0) < 0) {
-                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+
+            if (app_pid == 0) {
+                /*
+                 * --- CHILD 3: Untrusted Target (PID 2 in PID namespace) ---
+                 */
+                close(status_pipe[1]);
+
+                /* Child 3's parent is Child 2 (PID 1 in this namespace). */
+                if (phase2_set_parent_death_signal(1) < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+                }
+                if (phase2_target_drop_capabilities_and_identity() < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CAPABILITY_DROP, errno);
+                }
+                /* Credential changes clear PDEATHSIG; reinstall it with expected parent PID 1. */
+                if (phase2_set_parent_death_signal(1) < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+                }
+                if (phase2_target_enable_nnp() < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NNP, errno);
+                }
+                if (phase2_target_install_seccomp() < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SECCOMP, errno);
+                }
+
+                /* Reset signal mask and restore default dispositions for standard signals */
+                sigset_t empty_mask;
+                sigemptyset(&empty_mask);
+                if (sigprocmask(SIG_SETMASK, &empty_mask, NULL) < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+                }
+                for (int s = 1; s < 32; s++) {
+                    if (s == SIGKILL || s == SIGSTOP) continue;
+                    (void)signal(s, SIG_DFL);
+                }
+
+                char *child_argv[MAX_TARGET_ARGS + 2];
+                child_argv[0] = target_path;
+                for (size_t arg_index = 0; arg_index < cfg->target_argc; arg_index++) {
+                    child_argv[arg_index + 1] = (char *)cfg->target_args[arg_index];
+                }
+                child_argv[cfg->target_argc + 1] = NULL;
+                char *const child_envp[] = { NULL };
+                execve(target_path, child_argv, child_envp);
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_EXECVE, errno);
             }
-            if (phase2_target_enable_nnp() < 0) {
-                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NNP, errno);
+
+            /*
+             * --- CHILD 2 CONTINUED (Supervisor, PID 1 in PID namespace) ---
+             */
+            close(STDOUT_FILENO);
+            close(STDERR_FILENO);
+
+            if (phase2_supervisor_drop_privileges(supervisor_last_cap) < 0) {
+                int supervisor_errno = errno;
+                (void)kill(app_pid, SIGKILL);
+                int tmp_status;
+                (void)waitpid(app_pid, &tmp_status, 0);
+                close(status_pipe[1]);
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, supervisor_errno);
             }
-            if (phase2_target_install_seccomp() < 0) {
-                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SECCOMP, errno);
+
+            /* Close error pipe: target (Child 3) is now the only writer */
+            close(err_pipe[1]);
+
+            struct sigaction sa;
+            memset(&sa, 0, sizeof(sa));
+            sa.sa_handler = forward_sig_handler;
+            sigemptyset(&sa.sa_mask);
+            sa.sa_flags = 0;
+            (void)sigaction(SIGTERM, &sa, NULL);
+            (void)sigaction(SIGINT, &sa, NULL);
+            (void)sigaction(SIGHUP, &sa, NULL);
+            (void)sigaction(SIGQUIT, &sa, NULL);
+
+            int app_status = 0;
+            bool app_reaped = false;
+
+            while (true) {
+                if (g_forward_sig != 0) {
+                    int sig_to_fwd = g_forward_sig;
+                    g_forward_sig = 0;
+                    (void)kill(-1, sig_to_fwd);
+                }
+
+                int status = 0;
+                pid_t waited = waitpid(-1, &status, 0);
+                if (waited < 0) {
+                    if (errno == EINTR) {
+                        continue;
+                    }
+                    if (errno == ECHILD) {
+                        break;
+                    }
+                    break;
+                }
+
+                if (waited == app_pid) {
+                    app_status = status;
+                    app_reaped = true;
+                    (void)kill(-1, SIGKILL);
+                }
             }
-            char *child_argv[MAX_TARGET_ARGS + 2];
-            child_argv[0] = target_path;
-            for (size_t arg_index = 0; arg_index < cfg->target_argc; arg_index++) {
-                child_argv[arg_index + 1] = (char *)cfg->target_args[arg_index];
+
+            if (app_reaped) {
+                size_t written = 0;
+                while (written < sizeof(app_status)) {
+                    ssize_t w = write(status_pipe[1], ((const char *)&app_status) + written, sizeof(app_status) - written);
+                    if (w > 0) {
+                        written += (size_t)w;
+                    } else if (w < 0 && errno == EINTR) {
+                        continue;
+                    } else {
+                        break;
+                    }
+                }
             }
-            child_argv[cfg->target_argc + 1] = NULL;
-            char *const child_envp[] = { NULL };
-            execve(target_path, child_argv, child_envp);
-            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_EXECVE, errno);
+
+            close(status_pipe[1]);
+            _exit(app_reaped ? 0 : 126);
         }
 
-        /* The trusted supervisor stays outside the PID namespace and reaps PID 1. */
+        /*
+         * --- CHILD 1 (Host-level intermediate supervisor outside PID namespace) ---
+         */
+        close(status_pipe[1]);
         close(STDOUT_FILENO);
         close(STDERR_FILENO);
+
         if (phase2_supervisor_drop_privileges(supervisor_last_cap) < 0) {
             int supervisor_errno = errno;
-            int target_status = 0;
-            struct rusage target_usage;
-            memset(&target_usage, 0, sizeof(target_usage));
+            close(status_pipe[0]);
             (void)kill(target_pid, SIGKILL);
-            (void)wait4_retry(target_pid, &target_status, &target_usage);
+            int child2_status = 0;
+            struct rusage child2_usage;
+            memset(&child2_usage, 0, sizeof(child2_usage));
+            (void)wait4_retry(target_pid, &child2_status, &child2_usage);
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, supervisor_errno);
         }
+
         close(err_pipe[1]);
 
         int target_status = 0;
+        size_t total_status_read = 0;
+        while (total_status_read < sizeof(target_status)) {
+            ssize_t n = read(status_pipe[0], ((char *)&target_status) + total_status_read, sizeof(target_status) - total_status_read);
+            if (n > 0) {
+                total_status_read += (size_t)n;
+            } else if (n == 0) {
+                break;
+            } else {
+                if (errno == EINTR) continue;
+                break;
+            }
+        }
+        close(status_pipe[0]);
+
+        int child2_status = 0;
         pid_t waited;
         do {
-            waited = waitpid(target_pid, &target_status, 0);
+            waited = waitpid(target_pid, &child2_status, 0);
         } while (waited < 0 && errno == EINTR);
-        if (waited != target_pid) _exit(126);
-        if (WIFEXITED(target_status)) _exit(WEXITSTATUS(target_status));
-        if (WIFSIGNALED(target_status)) {
-            int target_signal = WTERMSIG(target_status);
+
+        int final_status = (total_status_read == sizeof(target_status)) ? target_status : child2_status;
+
+        if (WIFEXITED(final_status)) {
+            _exit(WEXITSTATUS(final_status));
+        }
+        if (WIFSIGNALED(final_status)) {
+            int target_signal = WTERMSIG(final_status);
             (void)signal(target_signal, SIG_DFL);
             (void)raise(target_signal);
             _exit(128 + target_signal);

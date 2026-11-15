@@ -1986,3 +1986,36 @@
 - Files: `PROGRESS.md`, `sandbox-daemon/phase2_rootfs.c`.
 - Linked: LOG-0137, LOG-0136.
 - Tutor review: pending
+
+
+## [LOG-0139] 2026-11-15 21:00 IST | PLAN | actor: agent
+- Reason: Resolve the three Phase 1 regression failures under Phase 2 (SIGXCPU and SIGXFSZ ignored under PID 1 signal immunity) by making Child 2 the namespace init supervisor and executing untrusted code in Child 3 (PID 2 in the PID namespace).
+- Details / Change:
+  1. In Linux (`pid_namespaces(7)` / `kernel/signal.c` `sig_task_ignored()`), a process with PID 1 in a PID namespace has `SIGNAL_UNKILLABLE` and drops all default signal actions (`SIG_DFL`). Because Child 2 previously exec'd the untrusted target directly as PID 1, default signals like `SIGXCPU` (from `RLIMIT_CPU`) and `SIGXFSZ` (from `RLIMIT_FSIZE`) were silently dropped by the kernel, causing busy-loop targets to run until hard `SIGKILL` (signal 9) and file-writing targets to receive `EFBIG` and exit with code 2 instead of being terminated by signal 25.
+  2. In `sandbox-daemon/sandbox.c`, establish a dedicated status propagation pipe (`status_pipe`) between Child 1 and Child 2.
+  3. Inside the PID namespace, Child 2 acts as the namespace init supervisor (PID 1). Child 2 mounts procfs and detaches oldroot, then forks Child 3 (`app_pid`).
+  4. Child 3 is PID 2 in the PID namespace. Child 3 sets parent death signal to Child 2 (`phase2_set_parent_death_signal(1)`), drops capabilities and identity to nobody:nobody, enables NNP, installs seccomp, resets signal mask/dispositions to `SIG_DFL`, and executes the target binary via `execve()`. Because Child 3 is not PID 1, standard Linux default signal delivery (including `SIGXCPU` and `SIGXFSZ`) is fully enforced.
+  5. Child 2 closes stdout/stderr, closes `err_pipe[1]`, drops supervisor privileges, installs forwarding handlers for `SIGTERM`/`SIGINT`/`SIGHUP`/`SIGQUIT`, and runs a supervisory wait/reap loop. When Child 3 exits, Child 2 captures the termination status, kills any remaining descendants in the PID namespace via `kill(-1, SIGKILL)`, reaps all zombies until `ECHILD`, and writes the exact raw exit status to `status_pipe[1]`.
+  6. Child 1 reads the raw target status from `status_pipe[0]`, reaps Child 2, and accurately reflects the termination: if signaled, Child 1 raises that exact signal and terminates; if exited normally, Child 1 exits with that code. The host runner's `wait4` thus captures the exact status and signal.
+  7. Strict compile with `-Wall -Wextra -Werror -O2`, run safe tests, hygiene and append-only checks. Keep hostile fixtures unexecuted.
+- Files: `PROGRESS.md`, `sandbox-daemon/sandbox.c`.
+- Linked: LOG-0138.
+- Tutor review: pending
+
+
+## [LOG-0140] 2026-11-15 21:08 IST | DONE | actor: agent
+- Reason: Run untrusted target in child process (PID 2) of namespace init supervisor to resolve PID 1 signal immunity and fix Phase 1 regressions (SIGXCPU and SIGXFSZ).
+- Details / Change:
+  1. In `sandbox-daemon/sandbox.c`, established a dedicated `status_pipe` between Child 1 and Child 2.
+  2. In Child 2 (PID 1 in PID namespace), mounted procfs, then forked Child 3 (`app_pid`).
+  3. In Child 3 (PID 2 in PID namespace), set PDEATHSIG to Child 2 (`phase2_set_parent_death_signal(1)`), dropped capabilities and identity to nobody:nobody, reinstalled PDEATHSIG, enabled NNP, installed seccomp, cleared signal mask and set standard signals 1..31 (except 9, 19) to `SIG_DFL`, and called `execve()`.
+  4. Because Child 3 is PID 2 (not PID 1), standard Linux default signal actions are fully active: RLIMIT_CPU soft limit triggers SIGXCPU (24) termination, and RLIMIT_FSIZE triggers SIGXFSZ (25) termination.
+  5. In Child 2 (namespace init supervisor), closed stdout/stderr and `err_pipe[1]`, dropped supervisor privileges (`phase2_supervisor_drop_privileges`), installed signal forwarders for SIGTERM/SIGINT/SIGHUP/SIGQUIT, and reaped in a loop. Upon `app_pid` termination, sent `kill(-1, SIGKILL)` to eliminate rogue descendants, reaped remaining children until `ECHILD`, and wrote raw termination status into `status_pipe[1]`.
+  6. In Child 1, closed `status_pipe[1]`, dropped supervisor privileges, closed `err_pipe[1]`, read target status from `status_pipe[0]`, and reaped Child 2. Child 1 propagates the exit status: if signaled, Child 1 re-raises `target_signal` so host runner's `wait4` accurately records `WIFSIGNALED` with the exact signal; if exited, Child 1 exits with that code.
+  7. Labeled with `AGENT-WROTE-TIER-A` under AI_RULES §14 authorization.
+  8. Compiled cleanly with `-Wall -Wextra -Werror -O2`. Ran safe tests (`test-setup-protocol`, `test-phase2-structural`, `test-phase2-seccomp-safe`, `test-phase2-fail-closed`). All passed.
+  9. Safety and DoD constraints preserved: hostile fixtures (`fork_bomb.c`, `read_etc_passwd.c`, `net_connect.c`) were not executed. Phase 2 DoD remains OPEN.
+- Verification: `make clean all test-setup-protocol test-phase2-structural test-phase2-seccomp-safe test-phase2-fail-closed` passed in `sandbox-daemon`; `bash scripts/check_repo_hygiene.sh && bash scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `sandbox-daemon/sandbox.c`.
+- Linked: LOG-0139, LOG-0138.
+- Tutor review: pending
