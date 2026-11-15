@@ -1743,3 +1743,14 @@
 - Files: PROGRESS.md, HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
 - Linked: LOG-0112, LOG-0094.
 - Tutor review: pending
+
+## [LOG-0114] 2026-11-15 11:36 IST | NOTE | actor: agent
+- Reason: Record clarification on cgroup delegation requirements and end-to-end namespace handshake verification per reviewer guidance.
+- Details / Change:
+  1. Corrected VM cgroup delegation guidance: `loginctl enable-linger` only keeps user manager instances running after logout and does NOT delegate cgroups or controllers. True cgroup v2 delegation requires a host administrator to configure `Delegate=cpu memory pids` (e.g. in `/etc/systemd/system/user@.service.d/delegate.conf`), reload systemd via `systemctl daemon-reload`, and write `+cpu +memory +pids` to the parent slice's `cgroup.subtree_control`.
+  2. Noted that standalone `unshare(2)` probe passes are preliminary only; runtime verification strictly requires testing the runner's full combined execution path: Child 1 `unshare(CLONE_NEWUSER)`, parent UID/GID mapping synchronization, Child 1 combined `CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS | CLONE_NEWIPC | CLONE_NEWUTS`, rootfs preparation, private procfs mount, bounding set pruning, identity drop, NNP, seccomp installation, and execve.
+  3. Re-aligned Phases 3 through 7 strictly with the exact technical Definitions of Done in docs/04_BUILD_PLAN.md without appending acceptance criteria.
+  4. Phase 2 DoD remains strictly OPEN, hostile fixtures remain unexecuted, and branch phase/2-sandbox-hardening remains unpushed.
+- Files: PROGRESS.md, HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
+- Linked: LOG-0113.
+- Tutor review: pending
