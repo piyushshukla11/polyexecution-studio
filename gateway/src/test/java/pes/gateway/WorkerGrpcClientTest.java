@@ -130,12 +130,15 @@ class WorkerGrpcClientTest {
     }
 
     @Test
-    @DisplayName("C request with simulated 7s compile time succeeds without premature deadline expiration")
+    @DisplayName("C request with simulated 11s compile delay succeeds under new 24s deadline but would fail under old 10s deadline")
     void testExecuteAsyncCCompileBudget() throws Exception {
-        // Simulate a slow GCC compilation that takes 7 seconds
-        // Previous deadline was max(10s, wallMs + 5s) = 6s for wallMs=1000, which would fail.
-        // With compileBudget=13000ms, deadline is 13000 + 1000 + 5000 + 5000 = 24000ms.
-        simulateDelayMs = 7000L;
+        // Simulate a slow GCC compilation and execution that takes 11 seconds (11000 ms).
+        // Under the old formula: max(10000ms, wallMs + 5000ms) = max(10000ms, 6000ms) = 10000ms (10.0s).
+        // An 11s delay exceeds the old 10s deadline and would abort with DEADLINE_EXCEEDED.
+        // Under the new formula with C compile budget (13s):
+        // deadline = 13000ms + 1000ms (wall) + 5000ms (runner grace) + 5000ms (gateway margin) = 24000ms (24.0s).
+        // The 11s delay completes cleanly within the 24s deadline.
+        simulateDelayMs = 11000L;
 
         ExecuteRequest request = ExecuteRequest.newBuilder()
             .setJobId("test-c-compile-budget")
@@ -145,7 +148,7 @@ class WorkerGrpcClientTest {
             .build();
 
         CompletableFuture<ExecuteResponse> future = client.executeAsync(request);
-        ExecuteResponse response = future.get(10, TimeUnit.SECONDS);
+        ExecuteResponse response = future.get(15, TimeUnit.SECONDS);
 
         assertNotNull(response);
         assertEquals("test-c-compile-budget", response.getJobId());

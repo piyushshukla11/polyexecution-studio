@@ -2544,3 +2544,29 @@
 - Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/config/GatewayProperties.java`, `gateway/src/main/java/pes/gateway/config/WebSocketConfig.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/service/WorkerGrpcClient.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/main/resources/application.properties`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`, `gateway/src/test/java/pes/gateway/RoomManagerTest.java`, `gateway/src/test/java/pes/gateway/WorkerGrpcClientTest.java`, `gateway/tests/E2eWebSocketClient.java`.
 - Linked: LOG-0160, LOG-0159.
 - Tutor review: ready for tutor review
+
+
+## [LOG-0162] 2026-11-16 01:42 IST | PLAN | actor: agent
+- Reason: Correct arithmetic and simulated delay in `WorkerGrpcClientTest` deadline regression test per tutor review.
+- Details / Change:
+  1. In `WorkerGrpcClientTest.java`, correct the test comment and arithmetic: the previous deadline formula `Math.max(10000L, wallMs + 5000L)` yielded 10000 ms (10.0s) for `wallMs = 1000ms`, not 6s. Consequently, a 7s delay was <= 10s and did not distinguish the old code from the new code.
+  2. Increase simulated delay to 11000 ms (11.0s) and set future timeout to 15 seconds. For `wallMs = 1000ms`, the old deadline was 10.0s (which fails with `DEADLINE_EXCEEDED` on an 11s delay), while the new deadline is `13000 + 1000 + 5000 + 5000 = 24000ms` (24.0s, which passes cleanly on an 11s delay).
+  3. Run gateway tests, verify all pass, stage explicitly, commit, and push.
+- Files: `PROGRESS.md`, `gateway/src/test/java/pes/gateway/WorkerGrpcClientTest.java`.
+- Linked: LOG-0161.
+- Tutor review: pending
+
+
+## [LOG-0163] 2026-11-16 01:44 IST | DONE | actor: agent
+- Order: PLAN was LOG-0162.
+- Reason: Correct arithmetic and simulated delay in `WorkerGrpcClientTest` to distinguish old and new deadline behavior per tutor review.
+- Details / Change:
+  1. Corrected the arithmetic and explanation in `WorkerGrpcClientTest.java`: for `wallMs = 1000ms`, the old deadline was `Math.max(10000ms, wallMs + 5000ms) = 10000ms` (10.0s), not 6s.
+  2. Increased simulated delay to 11000ms (11.0s) and set future timeout to 15 seconds. An 11.0s delay exceeds the old 10.0s ceiling and would fail with `DEADLINE_EXCEEDED`, while under the new formula with C compilation budget (`13000ms + 1000ms + 5000ms + 5000ms = 24000ms`), the 11.0s delay completes cleanly in 11.008s.
+  3. Verified all 30 tests in `gateway` pass.
+- Verification:
+  - `(cd gateway && gradle test)` (30/30 passed; `testExecuteAsyncCCompileBudget` confirmed at 11.008s).
+  - `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `gateway/src/test/java/pes/gateway/WorkerGrpcClientTest.java`.
+- Linked: LOG-0162, LOG-0161.
+- Tutor review: ready for tutor review
