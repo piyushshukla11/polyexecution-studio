@@ -179,6 +179,15 @@ static int deny_socket_syscall(scmp_filter_ctx filter, int syscall_number) {
     return 0;
 }
 
+static int deny_syscall_enosys(scmp_filter_ctx filter, int syscall_number) {
+    int rc = seccomp_rule_add(filter, SCMP_ACT_ERRNO(ENOSYS), syscall_number, 0);
+    if (rc < 0) {
+        errno = -rc;
+        return -1;
+    }
+    return 0;
+}
+
 static int install_seccomp_allowlist(void) {
     scmp_filter_ctx filter = seccomp_init(SCMP_ACT_KILL_PROCESS);
     if (!filter) {
@@ -187,22 +196,29 @@ static int install_seccomp_allowlist(void) {
     }
     const int syscalls[] = {
         SCMP_SYS(read), SCMP_SYS(write), SCMP_SYS(readv), SCMP_SYS(writev), SCMP_SYS(close),
-        SCMP_SYS(fstat), SCMP_SYS(newfstatat), SCMP_SYS(lseek), SCMP_SYS(mmap), SCMP_SYS(mprotect),
-        SCMP_SYS(munmap), SCMP_SYS(mremap), SCMP_SYS(brk), SCMP_SYS(madvise),
+        SCMP_SYS(fstat), SCMP_SYS(newfstatat), SCMP_SYS(stat), SCMP_SYS(lstat), SCMP_SYS(lseek),
+        SCMP_SYS(mmap), SCMP_SYS(mprotect), SCMP_SYS(munmap), SCMP_SYS(mremap), SCMP_SYS(brk),
+        SCMP_SYS(madvise),
         SCMP_SYS(rt_sigaction), SCMP_SYS(rt_sigprocmask), SCMP_SYS(rt_sigreturn), SCMP_SYS(sigaltstack),
         SCMP_SYS(ioctl), SCMP_SYS(access), SCMP_SYS(faccessat), SCMP_SYS(faccessat2),
-        SCMP_SYS(openat), SCMP_SYS(readlink), SCMP_SYS(readlinkat), SCMP_SYS(pread64),
+        SCMP_SYS(open), SCMP_SYS(openat), SCMP_SYS(readlink), SCMP_SYS(readlinkat), SCMP_SYS(pread64),
         SCMP_SYS(getpid), SCMP_SYS(getppid), SCMP_SYS(gettid), SCMP_SYS(getuid), SCMP_SYS(geteuid),
         SCMP_SYS(getgid), SCMP_SYS(getegid), SCMP_SYS(arch_prctl), SCMP_SYS(set_tid_address),
         SCMP_SYS(set_robust_list), SCMP_SYS(prlimit64), SCMP_SYS(rseq), SCMP_SYS(futex),
         SCMP_SYS(clock_gettime), SCMP_SYS(clock_nanosleep), SCMP_SYS(nanosleep), SCMP_SYS(getrandom),
-        SCMP_SYS(uname), SCMP_SYS(exit), SCMP_SYS(exit_group), SCMP_SYS(wait4), SCMP_SYS(waitid),
+        SCMP_SYS(getrusage), SCMP_SYS(getrlimit), SCMP_SYS(times), SCMP_SYS(gettimeofday),
+        SCMP_SYS(statfs), SCMP_SYS(fstatfs), SCMP_SYS(umask),
+        SCMP_SYS(uname), SCMP_SYS(sysinfo), SCMP_SYS(capget),
+        SCMP_SYS(exit), SCMP_SYS(exit_group), SCMP_SYS(wait4), SCMP_SYS(waitid),
         SCMP_SYS(kill), SCMP_SYS(tgkill), SCMP_SYS(clone), SCMP_SYS(fork), SCMP_SYS(vfork),
         SCMP_SYS(execve), SCMP_SYS(fcntl), SCMP_SYS(dup), SCMP_SYS(dup2), SCMP_SYS(dup3),
         SCMP_SYS(pipe), SCMP_SYS(pipe2), SCMP_SYS(statx), SCMP_SYS(getcwd), SCMP_SYS(chdir),
-        SCMP_SYS(unlinkat), SCMP_SYS(mkdirat), SCMP_SYS(renameat), SCMP_SYS(renameat2),
-        SCMP_SYS(ftruncate), SCMP_SYS(fdatasync), SCMP_SYS(fsync), SCMP_SYS(getdents64),
-        SCMP_SYS(sched_yield), SCMP_SYS(poll), SCMP_SYS(ppoll),
+        SCMP_SYS(unlink), SCMP_SYS(unlinkat), SCMP_SYS(mkdir), SCMP_SYS(mkdirat),
+        SCMP_SYS(rmdir), SCMP_SYS(rename), SCMP_SYS(renameat), SCMP_SYS(renameat2),
+        SCMP_SYS(chmod), SCMP_SYS(fchmod), SCMP_SYS(fchmodat), SCMP_SYS(utimensat),
+        SCMP_SYS(truncate), SCMP_SYS(ftruncate), SCMP_SYS(fdatasync), SCMP_SYS(fsync),
+        SCMP_SYS(getdents), SCMP_SYS(getdents64),
+        SCMP_SYS(sched_yield), SCMP_SYS(sched_getaffinity), SCMP_SYS(poll), SCMP_SYS(ppoll),
         SCMP_SYS(select), SCMP_SYS(pselect6)
     };
     for (size_t i = 0; i < sizeof(syscalls) / sizeof(syscalls[0]); i++) {
@@ -223,6 +239,14 @@ static int install_seccomp_allowlist(void) {
             return -1;
         }
     }
+#ifdef __NR_clone3
+    if (deny_syscall_enosys(filter, SCMP_SYS(clone3)) < 0) {
+        int saved_errno = errno;
+        seccomp_release(filter);
+        errno = saved_errno;
+        return -1;
+    }
+#endif
     int rc = seccomp_load(filter);
     int saved_errno = rc < 0 ? -rc : 0;
     seccomp_release(filter);

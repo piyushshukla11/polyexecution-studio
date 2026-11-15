@@ -813,7 +813,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                     child_argv[arg_index + 1] = (char *)cfg->target_args[arg_index];
                 }
                 child_argv[cfg->target_argc + 1] = NULL;
-                char *const child_envp[] = { NULL };
+                char *const child_envp[] = { "PATH=/usr/bin:/bin", NULL };
                 execve(target_path, child_argv, child_envp);
                 child_report_error_and_exit(err_pipe[1], SETUP_STAGE_EXECVE, errno);
             }
@@ -1762,6 +1762,10 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "Error: no target binary specified\n");
         return 1;
     }
+    char resolved_binary[PATH_MAX];
+    if (realpath(binary_path, resolved_binary)) {
+        binary_path = resolved_binary;
+    }
 
     if (target_args_started && cfg.target_argc > MAX_TARGET_ARGS) {
         fprintf(stderr, "Error: target argument count exceeds %u\n", MAX_TARGET_ARGS);
@@ -1775,20 +1779,22 @@ int main(int argc, char *argv[]) {
     }
     char stdin_buffer[PES_MAX_STDIN_BYTES + 1U];
     size_t stdin_length = 0;
-    while (stdin_length <= PES_MAX_STDIN_BYTES) {
-        ssize_t count = read(STDIN_FILENO, stdin_buffer + stdin_length,
-                             PES_MAX_STDIN_BYTES + 1U - stdin_length);
-        if (count < 0 && errno == EINTR) continue;
-        if (count < 0) {
-            fprintf(stderr, "Error: failed to read runner stdin: %s\n", strerror(errno));
+    if (!isatty(STDIN_FILENO)) {
+        while (stdin_length <= PES_MAX_STDIN_BYTES) {
+            ssize_t count = read(STDIN_FILENO, stdin_buffer + stdin_length,
+                                 PES_MAX_STDIN_BYTES + 1U - stdin_length);
+            if (count < 0 && errno == EINTR) continue;
+            if (count < 0) {
+                fprintf(stderr, "Error: failed to read runner stdin: %s\n", strerror(errno));
+                return 1;
+            }
+            if (count == 0) break;
+            stdin_length += (size_t)count;
+        }
+        if (stdin_length > PES_MAX_STDIN_BYTES) {
+            fprintf(stderr, "Error: stdin exceeds maximum of %u bytes\n", PES_MAX_STDIN_BYTES);
             return 1;
         }
-        if (count == 0) break;
-        stdin_length += (size_t)count;
-    }
-    if (stdin_length > PES_MAX_STDIN_BYTES) {
-        fprintf(stderr, "Error: stdin exceeds maximum of %u bytes\n", PES_MAX_STDIN_BYTES);
-        return 1;
     }
     if (workspace_path) {
         if (phase2_workspace_open(workspace_path, workspace_source_name, artifact_name,

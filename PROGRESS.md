@@ -2263,3 +2263,39 @@
 - Files: `PROGRESS.md`.
 - Linked: LOG-0146.
 - Tutor review: approved for Phase 2 sign-off and merge into main
+
+
+## [LOG-0148] 2026-11-16 00:30 IST | PLAN | actor: agent
+- Reason: Rebase Phase 3 branch onto tutor-approved main (phase-2-done at 59f032d), resolve workspace handoff and status propagation integration, fix runner terminal stdin blocking, enable compiler toolchain and interpreter support in sandbox seccomp/environment, and verify live Phase 3 Definition of Done (C and Python end-to-end via grpcurl with real sandbox runner).
+- Details / Change:
+  1. Synchronize phase/3-worker-grpc onto origin/main (59f032d). Resolve PROGRESS.md chronological sequencing and sandbox.c integration between Phase 2 supervisor status propagation and Phase 3 workspace artifact extraction.
+  2. In sandbox-daemon/sandbox.c, guard stdin read with !isatty(STDIN_FILENO) so the runner does not hang on terminal input when invoked without redirected stdin.
+  3. In sandbox-daemon/phase2_privilege.c, augment seccomp allowlist for standard compiler/interpreter operations: allow open, stat, lstat, unlink, mkdir, rmdir, rename, chmod, fchmod, fchmodat, utimensat, truncate, sched_getaffinity, getrusage, getrlimit, times, gettimeofday, statfs, fstatfs, umask, sysinfo, capget, getdents; deny clone3 with ENOSYS so glibc posix_spawn/fork safely falls back to inspected clone.
+  4. In sandbox-daemon/sandbox.c, provide PATH=/usr/bin:/bin in child_envp for sandboxed executables so collect2 locates standard ld; resolve binary_path with realpath() in main() so symlinks like /usr/bin/python3 are canonically resolved before O_NOFOLLOW validation.
+  5. In worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt, supply --fsize-mb 64 in ProcessSandboxRunner.buildCommand so compiler link stages are not terminated by the default 1 MiB SIGXFSZ limit.
+  6. Run make -C sandbox-daemon test (all 22 integration tests passing). Build Kotlin worker distribution and run gradle test. Execute live verify_grpcurl.sh production-runtime validating C compile/run with stdin, Python run with stdin, and invalid C COMPILE_ERROR response.
+- Files: PROGRESS.md, sandbox-daemon/phase2_privilege.c, sandbox-daemon/sandbox.c, worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt.
+- Linked: LOG-0147, LOG-0130.
+- Tutor review: pending
+
+
+## [LOG-0149] 2026-11-16 00:35 IST | DONE | actor: agent
+- Order: PLAN was LOG-0148.
+- Reason: Satisfy Phase 3 Definition of Done with live end-to-end C and Python execution evidence through gRPC service (grpcurl) backed by real production sandbox-runner.
+- Details / Change:
+  1. Rebased phase/3-worker-grpc onto main (59f032d). Merged Phase 2 PID-namespace Child 1/2/3 supervisor and status pipe with Phase 3 /workspace artifact copy-back logic in sandbox.c.
+  2. In sandbox-daemon/sandbox.c, guarded stdin read with !isatty(STDIN_FILENO), added realpath() canonical resolution on binary_path in main(), and provided PATH=/usr/bin:/bin in child_envp.
+  3. In sandbox-daemon/phase2_privilege.c, extended seccomp allowlist for compiler/runtime syscalls (open, stat, lstat, unlink, mkdir, rmdir, rename, chmod, fchmod, fchmodat, utimensat, truncate, sched_getaffinity, getrusage, getrlimit, times, gettimeofday, statfs, fstatfs, umask, sysinfo, capget, getdents) and added explicit ENOSYS return for clone3 to trigger glibc fallback to clone.
+  4. In worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt, added --fsize-mb 64 to buildCommand.
+  5. Rebuilt sandbox-daemon and verified full test suite: safe targets (test-workspace-handoff, test-setup-protocol, test-phase2-structural, test-phase2-seccomp-safe, test-fail-closed) passed; full integration suite passed 22/22 (18 Phase 1 + 4 Phase 2). Lingering process check: 0.
+  6. Rebuilt worker distribution with gradle --offline installDist and ran gradle --offline test --rerun-tasks (11/11 tasks executed, all unit tests passed).
+  7. Executed bash worker/tests/verify_grpcurl.sh 50055 production-runtime with live gRPC server on 127.0.0.1:50055:
+     - C compile and execution: status OK, stdout "sandboxed c input\n", wall_ms 73ms, peak RSS 1772 KB.
+     - Python execution: status OK, stdout "sandboxed python input\n", wall_ms 98ms, peak RSS 9492 KB.
+     - Invalid C compile failure: status COMPILE_ERROR, exit_code 1, gcc diagnostic in stderr, zero target execution.
+     - Protocol checks: fake mode verified loopback contract; production fail-closed check verified SANDBOX_ERROR (stage 14 errno 38) when unprivileged.
+  8. Phase 3 DoD status: CLOSED pending tutor review. Branch phase/3-worker-grpc remains unmerged into main.
+- Verification: make -C sandbox-daemon test (22/22 passed); worker unit tests (all passed); verify_grpcurl.sh fake, production, and production-runtime (all passed); scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check passed cleanly.
+- Files: PROGRESS.md, sandbox-daemon/phase2_privilege.c, sandbox-daemon/sandbox.c, worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt.
+- Linked: LOG-0148, LOG-0147, LOG-0130.
+- Tutor review: ready for tutor review

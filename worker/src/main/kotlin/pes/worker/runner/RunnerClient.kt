@@ -59,7 +59,7 @@ class ProcessSandboxRunner(
             add(runnerBinary.toAbsolutePath().normalize().toString())
             addAll(listOf("--job-id", jobId, "--timeout-ms", wallMs.toString()))
             addAll(listOf("--cpu-soft", cpuSoftSec.toString(), "--cpu-hard", cpuHardSec.toString()))
-            addAll(listOf("--as-mb", memoryMb.toString(), "--max-output-kb", maxOutputKb.toString()))
+            addAll(listOf("--as-mb", memoryMb.toString(), "--fsize-mb", "64", "--max-output-kb", maxOutputKb.toString()))
             if (workspace != null) {
                 addAll(listOf("--workspace", workspace.directory.toAbsolutePath().normalize().toString()))
                 addAll(listOf("--source-file", workspace.sourceName))
