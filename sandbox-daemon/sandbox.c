@@ -1,8 +1,18 @@
 #define _GNU_SOURCE
 
+/* AGENT-WROTE-TIER-A: Phase 2 sandbox core changes are owner-authorized. */
 #include "sandbox.h"
+#include "phase2_cgroup.h"
+#include "phase2_userns.h"
+#include "phase2_rootfs.h"
+#include "phase2_privilege.h"
+#include <dirent.h>
 #include <limits.h>
 #include <signal.h>
+#include <sys/syscall.h>
+
+#define MAX_TARGET_ARGS 128U
+#define MAX_TARGET_ARG_LEN 4096U
 
 void sandbox_config_init_default(sandbox_config_t *cfg) {
     if (!cfg) return;
@@ -14,6 +24,8 @@ void sandbox_config_init_default(sandbox_config_t *cfg) {
     cfg->rlimit_fsize = 1024ULL * 1024ULL;              /* 1 MiB */
     cfg->rlimit_nofile = 64;
     cfg->max_output_bytes = 64ULL * 1024ULL;            /* 64 KiB */
+    cfg->target_args = NULL;
+    cfg->target_argc = 0;
 }
 
 void sandbox_result_cleanup(sandbox_result_t *res) {
@@ -70,6 +82,13 @@ static void child_report_error_and_exit(int err_pipe_write_fd, setup_stage_t sta
         written += n;
     }
     _exit(127);
+}
+
+/* AGENT-WROTE-TIER-A: Signal forwarding handler for namespace init supervisor */
+static volatile sig_atomic_t g_forward_sig = 0;
+
+static void forward_sig_handler(int sig) {
+    g_forward_sig = sig;
 }
 
 /*
@@ -137,6 +156,161 @@ static int terminate_and_reap_setup_child(pid_t pid, int *status, struct rusage 
     if (waited < 0 && errno == ECHILD) return 0;
     if (kill_result < 0 && kill_errno != ESRCH) return -1;
     return -1;
+}
+
+static void set_setup_failure(sandbox_result_t *res, setup_stage_t stage, int errnum) {
+    res->status = STATUS_SETUP_ERROR;
+    res->setup_err.stage = (int32_t)stage;
+    res->setup_err.errnum = (int32_t)errnum;
+    res->exit_code = 127;
+}
+
+static void set_elapsed_wall(sandbox_result_t *res, uint64_t start_ms) {
+    struct timespec now;
+    if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) return;
+    uint64_t now_ms = (uint64_t)now.tv_sec * 1000ULL + (uint64_t)now.tv_nsec / 1000000ULL;
+    res->wall_ms = (uint32_t)(now_ms - start_ms);
+}
+
+static int setup_gate_wait(int read_fd) {
+    unsigned char release = 0;
+    ssize_t n;
+    do {
+        n = read(read_fd, &release, sizeof(release));
+    } while (n < 0 && errno == EINTR);
+    if (n != 1 || release != 1) {
+        errno = n < 0 ? errno : ECANCELED;
+        return -1;
+    }
+    return 0;
+}
+
+static int setup_gate_release(int write_fd) {
+    const unsigned char release = 1;
+    ssize_t n;
+    do {
+        n = write(write_fd, &release, sizeof(release));
+    } while (n < 0 && errno == EINTR);
+    if (n != 1) {
+        errno = n < 0 ? errno : EIO;
+        return -1;
+    }
+    return 0;
+}
+
+static int parent_read_userns_ready(int read_fd, phase2_userns_ready_t *ready, uint64_t deadline_ms) {
+    size_t total = 0;
+    char *bytes = (char *)ready;
+    while (total < sizeof(*ready)) {
+        struct timespec now;
+        if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) return -1;
+        uint64_t now_ms = (uint64_t)now.tv_sec * 1000ULL + (uint64_t)now.tv_nsec / 1000000ULL;
+        if (now_ms >= deadline_ms) return -2;
+        uint64_t remaining = deadline_ms - now_ms;
+        int wait_ms = remaining > (uint64_t)INT_MAX ? INT_MAX : (int)remaining;
+        struct pollfd pfd = {.fd = read_fd, .events = POLLIN | POLLHUP, .revents = 0};
+        int poll_result = poll(&pfd, 1, wait_ms);
+        if (poll_result == 0) continue;
+        if (poll_result < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        ssize_t n = read(read_fd, bytes + total, sizeof(*ready) - total);
+        if (n > 0) total += (size_t)n;
+        else if (n == 0) return -1;
+        else if (errno != EINTR) return -1;
+    }
+    return 0;
+}
+
+/* AGENT-WROTE-TIER-A: Decoupled cgroup and rootfs mountpoint cleanup */
+static int cleanup_job_resources(phase2_cgroup_t *cgroup, const char *root_mountpoint) {
+    int result = 0;
+    int saved_errno = 0;
+    if (cgroup && cgroup->active) {
+        if (phase2_cgroup_kill(cgroup) < 0) {
+            result = -1;
+            saved_errno = errno;
+        } else if (phase2_cgroup_remove(cgroup) < 0) {
+            result = -1;
+            saved_errno = errno;
+        }
+    }
+    if (root_mountpoint && root_mountpoint[0] != '\0' && phase2_rootfs_remove_mountpoint(root_mountpoint) < 0) {
+        if (result == 0) saved_errno = errno;
+        result = -1;
+    }
+    if (result < 0) errno = saved_errno;
+    return result;
+}
+
+static int close_unrelated_fds(int preserve_fd) {
+#ifdef SYS_close_range
+#ifdef PES_TEST_FORCE_CLOSE_RANGE_FAILURE
+    /* Test-only build switch: exercise the /proc fallback deterministically. */
+#else
+    bool close_range_ok = true;
+    if (preserve_fd > STDERR_FILENO + 1 &&
+        syscall(SYS_close_range, (unsigned int)(STDERR_FILENO + 1), (unsigned int)(preserve_fd - 1), 0) < 0) {
+        if (errno != ENOSYS && errno != EINVAL) return -1;
+        close_range_ok = false;
+    }
+    if (preserve_fd < INT_MAX &&
+        syscall(SYS_close_range, (unsigned int)(preserve_fd + 1), UINT_MAX, 0) < 0) {
+        if (errno != ENOSYS && errno != EINVAL) return -1;
+        close_range_ok = false;
+    }
+    if (close_range_ok) return 0;
+#endif
+#endif
+    DIR *directory = opendir("/proc/self/fd");
+    if (!directory) return -1;
+    int directory_fd = dirfd(directory);
+    if (directory_fd < 0) {
+        int saved_errno = errno;
+        if (closedir(directory) < 0) return -1;
+        errno = saved_errno;
+        return -1;
+    }
+
+    int result = 0;
+    int saved_errno = 0;
+    for (;;) {
+        errno = 0;
+        struct dirent *entry = readdir(directory);
+        if (!entry) {
+            if (errno != 0) {
+                result = -1;
+                saved_errno = errno;
+            }
+            break;
+        }
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+
+        errno = 0;
+        char *end = NULL;
+        long listed_fd = strtol(entry->d_name, &end, 10);
+        if (errno != 0 || end == entry->d_name || *end != '\0' || listed_fd < 0 || listed_fd > INT_MAX) {
+            if (result == 0) {
+                result = -1;
+                saved_errno = EPROTO;
+            }
+            continue;
+        }
+        int fd = (int)listed_fd;
+        if (fd <= STDERR_FILENO || fd == preserve_fd || fd == directory_fd) continue;
+        if (close(fd) < 0 && errno != EBADF && result == 0) {
+            result = -1;
+            saved_errno = errno;
+        }
+    }
+
+    if (closedir(directory) < 0 && result == 0) {
+        result = -1;
+        saved_errno = errno;
+    }
+    if (result < 0) errno = saved_errno;
+    return result;
 }
 
 /*
@@ -221,11 +395,31 @@ static void drain_and_close_pipe(int pipe_fd, char **buf, size_t *len, size_t *c
     close(pipe_fd);
 }
 
+#ifdef PES_TEST_FAULT_INJECTION
+/* AGENT-WROTE-TIER-A: Test-only fault injection hooks to exercise error branches deterministically */
+static int pes_test_inject_cgroup_create_errno = 0;
+static bool pes_test_inject_cgroup_create_fake_success = false;
+static int pes_test_inject_fork_errno = 0;
+static char pes_test_last_root_mountpoint[PATH_MAX] = {0};
+#endif
+
 int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg, sandbox_result_t *res) {
     if (!binary_path || !cfg || !res) {
         return -1;
     }
     memset(res, 0, sizeof(*res));
+    if (cfg->target_argc > MAX_TARGET_ARGS || (cfg->target_argc > 0 && !cfg->target_args)) {
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+        errno = E2BIG;
+        return -1;
+    }
+    for (size_t i = 0; i < cfg->target_argc; i++) {
+        if (!cfg->target_args[i] || strnlen(cfg->target_args[i], MAX_TARGET_ARG_LEN + 1U) > MAX_TARGET_ARG_LEN) {
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
+            errno = E2BIG;
+            return -1;
+        }
+    }
 
     /* Ensure descriptors 0, 1, 2 are valid */
     if (normalize_standard_descriptors() < 0) {
@@ -268,19 +462,117 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         return -1;
     }
 
-    /* Sample start monotonic time */
-    struct timespec start_tp;
-    clock_gettime(CLOCK_MONOTONIC, &start_tp);
-    uint64_t start_ms = (uint64_t)start_tp.tv_sec * 1000ULL + (uint64_t)start_tp.tv_nsec / 1000000ULL;
-    uint64_t deadline_ms = start_ms + (uint64_t)cfg->timeout_ms;
-
-    pid_t pid = fork();
-    if (pid < 0) {
+    int gate_pipe[2];
+    if (pipe2(gate_pipe, O_CLOEXEC) < 0) {
         close(err_pipe[0]); close(err_pipe[1]);
         close(stdout_pipe[0]); close(stdout_pipe[1]);
         close(stderr_pipe[0]); close(stderr_pipe[1]);
         res->status = STATUS_RUNNER_INTERNAL_ERROR;
         return -1;
+    }
+
+    int userns_ready_pipe[2];
+    if (pipe2(userns_ready_pipe, O_CLOEXEC) < 0) {
+        close(gate_pipe[0]); close(gate_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stderr_pipe[0]); close(stderr_pipe[1]);
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+        return -1;
+    }
+
+    int placement_pipe[2];
+    if (pipe2(placement_pipe, O_CLOEXEC) < 0) {
+        close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
+        close(gate_pipe[0]); close(gate_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stderr_pipe[0]); close(stderr_pipe[1]);
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+        return -1;
+    }
+
+    phase2_cgroup_t job_cgroup;
+    memset(&job_cgroup, 0, sizeof(job_cgroup));
+    phase2_cgroup_limits_t cgroup_limits;
+    phase2_cgroup_limits_init(&cgroup_limits);
+#ifdef PES_TEST_FAULT_INJECTION
+    int cgroup_create_res = 0;
+    if (pes_test_inject_cgroup_create_errno != 0) {
+        cgroup_create_res = -1;
+        errno = pes_test_inject_cgroup_create_errno;
+    } else if (pes_test_inject_cgroup_create_fake_success) {
+        cgroup_create_res = 0;
+    } else {
+        cgroup_create_res = phase2_cgroup_create(&job_cgroup, "/sys/fs/cgroup", "/proc/self/cgroup", &cgroup_limits);
+    }
+#else
+    int cgroup_create_res = phase2_cgroup_create(&job_cgroup, "/sys/fs/cgroup", "/proc/self/cgroup", &cgroup_limits);
+#endif
+    if (cgroup_create_res < 0) {
+        int setup_errno = errno;
+        if (job_cgroup.active && cleanup_job_resources(&job_cgroup, NULL) < 0) {
+            close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
+            close(placement_pipe[0]); close(placement_pipe[1]);
+            close(gate_pipe[0]); close(gate_pipe[1]);
+            close(err_pipe[0]); close(err_pipe[1]);
+            close(stdout_pipe[0]); close(stdout_pipe[1]);
+            close(stderr_pipe[0]); close(stderr_pipe[1]);
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
+            return -1;
+        }
+        close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
+        close(placement_pipe[0]); close(placement_pipe[1]);
+        close(gate_pipe[0]); close(gate_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stderr_pipe[0]); close(stderr_pipe[1]);
+        set_setup_failure(res, SETUP_STAGE_CGROUP_CREATE, setup_errno);
+        return 0;
+    }
+
+    char root_mountpoint[PATH_MAX] = {0};
+    if (phase2_rootfs_create_mountpoint(root_mountpoint, sizeof(root_mountpoint)) < 0) {
+        int setup_errno = errno;
+        (void)cleanup_job_resources(&job_cgroup, NULL);
+        close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
+        close(placement_pipe[0]); close(placement_pipe[1]);
+        close(gate_pipe[0]); close(gate_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stderr_pipe[0]); close(stderr_pipe[1]);
+        set_setup_failure(res, SETUP_STAGE_ROOTFS, setup_errno);
+        return 0;
+    }
+#ifdef PES_TEST_FAULT_INJECTION
+    snprintf(pes_test_last_root_mountpoint, sizeof(pes_test_last_root_mountpoint), "%s", root_mountpoint);
+#endif
+
+    /* Sample start monotonic time */
+    struct timespec start_tp;
+    clock_gettime(CLOCK_MONOTONIC, &start_tp);
+    uint64_t start_ms = (uint64_t)start_tp.tv_sec * 1000ULL + (uint64_t)start_tp.tv_nsec / 1000000ULL;
+    uint64_t deadline_ms = start_ms + (uint64_t)cfg->timeout_ms;
+    pid_t runner_pid = getpid();
+
+#ifdef PES_TEST_FAULT_INJECTION
+    pid_t pid = pes_test_inject_fork_errno != 0 ?
+        (errno = pes_test_inject_fork_errno, (pid_t)-1) :
+        fork();
+#else
+    pid_t pid = fork();
+#endif
+    if (pid < 0) {
+        int fork_errno = errno;
+        (void)cleanup_job_resources(&job_cgroup, root_mountpoint);
+        close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
+        close(placement_pipe[0]); close(placement_pipe[1]);
+        close(gate_pipe[0]); close(gate_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stderr_pipe[0]); close(stderr_pipe[1]);
+        set_setup_failure(res, SETUP_STAGE_SUPERVISOR, fork_errno);
+        return 0;
     }
 
     if (pid == 0) {
@@ -290,7 +582,36 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         close(err_pipe[0]);
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
+        close(gate_pipe[1]);
+        close(userns_ready_pipe[0]);
+        close(placement_pipe[1]);
 
+        if (setup_gate_wait(placement_pipe[0]) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CGROUP_RELEASE, errno);
+        }
+        close(placement_pipe[0]);
+
+        if (phase2_set_parent_death_signal(runner_pid) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+        }
+
+        if (phase2_userns_child_start(userns_ready_pipe[1]) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_USERNS_CREATE, errno);
+        }
+        close(userns_ready_pipe[1]);
+
+        if (setup_gate_wait(gate_pipe[0]) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CGROUP_RELEASE, errno);
+        }
+        close(gate_pipe[0]);
+
+        int null_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        if (null_fd < 0 || dup2(null_fd, STDIN_FILENO) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CLOSE_FDS, errno);
+        }
+        if (null_fd != STDIN_FILENO && close(null_fd) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CLOSE_FDS, errno);
+        }
         /* 1. Establish new session / process group */
         if (setsid() < 0) {
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SETSID, errno);
@@ -307,6 +628,9 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         /* Close original write descriptors if not already 1 and 2 */
         if (stdout_pipe[1] != STDOUT_FILENO) close(stdout_pipe[1]);
         if (stderr_pipe[1] != STDERR_FILENO) close(stderr_pipe[1]);
+        if (close_unrelated_fds(err_pipe[1]) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CLOSE_FDS, errno);
+        }
 
         /* 3. Apply resource limits (rlimits) */
         struct rlimit rl;
@@ -346,14 +670,230 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SETRLIMIT_NOFILE, errno);
         }
 
-        /* 4. Execute target binary with scrubbed environment */
-        char *const child_argv[] = { (char *)binary_path, NULL };
-        char *const child_envp[] = { NULL };
+        if (phase2_child_create_namespaces() < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NAMESPACES, errno);
+        }
 
-        execve(binary_path, child_argv, child_envp);
+        int supervisor_last_cap;
+        if (phase2_privilege_read_cap_last_cap(&supervisor_last_cap) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CAPABILITY_DROP, errno);
+        }
 
-        /* If execve returns, it failed */
-        child_report_error_and_exit(err_pipe[1], SETUP_STAGE_EXECVE, errno);
+        char target_path[PATH_MAX];
+        if (phase2_rootfs_prepare(binary_path, root_mountpoint, target_path, sizeof(target_path)) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_ROOTFS, errno);
+        }
+
+        /* AGENT-WROTE-TIER-A: Dedicated pipe for Child 2 -> Child 1 status propagation */
+        int status_pipe[2];
+        if (pipe2(status_pipe, O_CLOEXEC) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+        }
+
+        pid_t target_pid = fork();
+        if (target_pid < 0) {
+            int fork_err = errno;
+            close(status_pipe[0]);
+            close(status_pipe[1]);
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NAMESPACES, fork_err);
+        }
+        if (target_pid == 0) {
+            /*
+             * --- CHILD 2: Namespace Init Supervisor (PID 1 in PID namespace) ---
+             */
+            close(status_pipe[0]);
+
+            /* Child 2 is PID 1 here; its parent is outside this PID namespace, so getppid() is 0. */
+            if (phase2_set_parent_death_signal(0) < 0) {
+                close(status_pipe[1]);
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+            }
+            if (phase2_rootfs_mount_proc() < 0) {
+                close(status_pipe[1]);
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_PROCFS, errno);
+            }
+
+            pid_t app_pid = fork();
+            if (app_pid < 0) {
+                int app_fork_err = errno;
+                close(status_pipe[1]);
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, app_fork_err);
+            }
+
+            if (app_pid == 0) {
+                /*
+                 * --- CHILD 3: Untrusted Target (PID 2 in PID namespace) ---
+                 */
+                close(status_pipe[1]);
+
+                /* Child 3's parent is Child 2 (PID 1 in this namespace). */
+                if (phase2_set_parent_death_signal(1) < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+                }
+                if (phase2_target_drop_capabilities_and_identity() < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CAPABILITY_DROP, errno);
+                }
+                /* Credential changes clear PDEATHSIG; reinstall it with expected parent PID 1. */
+                if (phase2_set_parent_death_signal(1) < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+                }
+                if (phase2_target_enable_nnp() < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NNP, errno);
+                }
+                if (phase2_target_install_seccomp() < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SECCOMP, errno);
+                }
+
+                /* Reset signal mask and restore default dispositions for standard signals */
+                sigset_t empty_mask;
+                sigemptyset(&empty_mask);
+                if (sigprocmask(SIG_SETMASK, &empty_mask, NULL) < 0) {
+                    child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
+                }
+                for (int s = 1; s < 32; s++) {
+                    if (s == SIGKILL || s == SIGSTOP) continue;
+                    (void)signal(s, SIG_DFL);
+                }
+
+                char *child_argv[MAX_TARGET_ARGS + 2];
+                child_argv[0] = target_path;
+                for (size_t arg_index = 0; arg_index < cfg->target_argc; arg_index++) {
+                    child_argv[arg_index + 1] = (char *)cfg->target_args[arg_index];
+                }
+                child_argv[cfg->target_argc + 1] = NULL;
+                char *const child_envp[] = { NULL };
+                execve(target_path, child_argv, child_envp);
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_EXECVE, errno);
+            }
+
+            /*
+             * --- CHILD 2 CONTINUED (Supervisor, PID 1 in PID namespace) ---
+             */
+            close(STDOUT_FILENO);
+            close(STDERR_FILENO);
+
+            if (phase2_supervisor_drop_privileges(supervisor_last_cap) < 0) {
+                int supervisor_errno = errno;
+                (void)kill(app_pid, SIGKILL);
+                int tmp_status;
+                (void)waitpid(app_pid, &tmp_status, 0);
+                close(status_pipe[1]);
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, supervisor_errno);
+            }
+
+            /* Close error pipe: target (Child 3) is now the only writer */
+            close(err_pipe[1]);
+
+            struct sigaction sa;
+            memset(&sa, 0, sizeof(sa));
+            sa.sa_handler = forward_sig_handler;
+            sigemptyset(&sa.sa_mask);
+            sa.sa_flags = 0;
+            (void)sigaction(SIGTERM, &sa, NULL);
+            (void)sigaction(SIGINT, &sa, NULL);
+            (void)sigaction(SIGHUP, &sa, NULL);
+            (void)sigaction(SIGQUIT, &sa, NULL);
+
+            int app_status = 0;
+            bool app_reaped = false;
+
+            while (true) {
+                if (g_forward_sig != 0) {
+                    int sig_to_fwd = g_forward_sig;
+                    g_forward_sig = 0;
+                    (void)kill(-1, sig_to_fwd);
+                }
+
+                int status = 0;
+                pid_t waited = waitpid(-1, &status, 0);
+                if (waited < 0) {
+                    if (errno == EINTR) {
+                        continue;
+                    }
+                    if (errno == ECHILD) {
+                        break;
+                    }
+                    break;
+                }
+
+                if (waited == app_pid) {
+                    app_status = status;
+                    app_reaped = true;
+                    (void)kill(-1, SIGKILL);
+                }
+            }
+
+            if (app_reaped) {
+                size_t written = 0;
+                while (written < sizeof(app_status)) {
+                    ssize_t w = write(status_pipe[1], ((const char *)&app_status) + written, sizeof(app_status) - written);
+                    if (w > 0) {
+                        written += (size_t)w;
+                    } else if (w < 0 && errno == EINTR) {
+                        continue;
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            close(status_pipe[1]);
+            _exit(app_reaped ? 0 : 126);
+        }
+
+        /*
+         * --- CHILD 1 (Host-level intermediate supervisor outside PID namespace) ---
+         */
+        close(status_pipe[1]);
+        close(STDOUT_FILENO);
+        close(STDERR_FILENO);
+
+        if (phase2_supervisor_drop_privileges(supervisor_last_cap) < 0) {
+            int supervisor_errno = errno;
+            close(status_pipe[0]);
+            (void)kill(target_pid, SIGKILL);
+            int child2_status = 0;
+            struct rusage child2_usage;
+            memset(&child2_usage, 0, sizeof(child2_usage));
+            (void)wait4_retry(target_pid, &child2_status, &child2_usage);
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, supervisor_errno);
+        }
+
+        close(err_pipe[1]);
+
+        int target_status = 0;
+        size_t total_status_read = 0;
+        while (total_status_read < sizeof(target_status)) {
+            ssize_t n = read(status_pipe[0], ((char *)&target_status) + total_status_read, sizeof(target_status) - total_status_read);
+            if (n > 0) {
+                total_status_read += (size_t)n;
+            } else if (n == 0) {
+                break;
+            } else {
+                if (errno == EINTR) continue;
+                break;
+            }
+        }
+        close(status_pipe[0]);
+
+        int child2_status = 0;
+        pid_t waited;
+        do {
+            waited = waitpid(target_pid, &child2_status, 0);
+        } while (waited < 0 && errno == EINTR);
+
+        int final_status = (total_status_read == sizeof(target_status)) ? target_status : child2_status;
+
+        if (WIFEXITED(final_status)) {
+            _exit(WEXITSTATUS(final_status));
+        }
+        if (WIFSIGNALED(final_status)) {
+            int target_signal = WTERMSIG(final_status);
+            (void)signal(target_signal, SIG_DFL);
+            (void)raise(target_signal);
+            _exit(128 + target_signal);
+        }
+        _exit(126);
     }
 
     /*
@@ -362,6 +902,105 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
     close(err_pipe[1]);
     close(stdout_pipe[1]);
     close(stderr_pipe[1]);
+    close(gate_pipe[0]);
+    close(userns_ready_pipe[1]);
+    close(placement_pipe[0]);
+
+    if (phase2_cgroup_attach(&job_cgroup, pid) < 0) {
+        int attach_errno = errno;
+        int child_status = 0;
+        struct rusage child_usage;
+        memset(&child_usage, 0, sizeof(child_usage));
+        (void)terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        close(gate_pipe[1]); close(userns_ready_pipe[0]); close(placement_pipe[1]); close(err_pipe[0]);
+        close(stdout_pipe[0]); close(stderr_pipe[0]);
+        if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
+            return -1;
+        }
+        set_setup_failure(res, SETUP_STAGE_CGROUP_ATTACH, attach_errno);
+        return 0;
+    }
+
+    if (setup_gate_release(placement_pipe[1]) < 0) {
+        int placement_errno = errno;
+        int child_status = 0;
+        struct rusage child_usage;
+        memset(&child_usage, 0, sizeof(child_usage));
+        int cleanup_result = terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        close(placement_pipe[1]); close(userns_ready_pipe[0]); close(gate_pipe[1]); close(err_pipe[0]);
+        close(stdout_pipe[0]); close(stderr_pipe[0]);
+        if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_CHILD_LOST;
+            return -1;
+        }
+        set_setup_failure(res, SETUP_STAGE_CGROUP_RELEASE, placement_errno);
+        return 0;
+    }
+    close(placement_pipe[1]);
+
+    phase2_userns_ready_t userns_ready = {0};
+    int ready_result = parent_read_userns_ready(userns_ready_pipe[0], &userns_ready, deadline_ms);
+    close(userns_ready_pipe[0]);
+    if (ready_result != 0 || userns_ready.result != 0) {
+        int child_status = 0;
+        struct rusage child_usage;
+        memset(&child_usage, 0, sizeof(child_usage));
+        int cleanup_result = terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        close(gate_pipe[1]); close(err_pipe[0]);
+        close(stdout_pipe[0]); close(stderr_pipe[0]);
+        if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_CHILD_LOST;
+            return -1;
+        }
+        if (ready_result == -2) {
+            res->status = STATUS_TIMEOUT;
+            set_elapsed_wall(res, start_ms);
+            return 0;
+        }
+        set_setup_failure(res, SETUP_STAGE_USERNS_CREATE,
+                          userns_ready.errnum != 0 ? userns_ready.errnum : EPROTO);
+        return 0;
+    }
+
+    bool gid_map_failed = false;
+    if (phase2_userns_parent_map(pid, deadline_ms, &gid_map_failed) < 0) {
+        int map_errno = errno;
+        int child_status = 0;
+        struct rusage child_usage;
+        memset(&child_usage, 0, sizeof(child_usage));
+        int cleanup_result = terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        close(gate_pipe[1]); close(err_pipe[0]);
+        close(stdout_pipe[0]); close(stderr_pipe[0]);
+        if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_CHILD_LOST;
+            return -1;
+        }
+        if (map_errno == ETIMEDOUT) {
+            res->status = STATUS_TIMEOUT;
+            set_elapsed_wall(res, start_ms);
+            return 0;
+        }
+        set_setup_failure(res, gid_map_failed ? SETUP_STAGE_GID_MAP : SETUP_STAGE_UID_MAP, map_errno);
+        return 0;
+    }
+
+    if (setup_gate_release(gate_pipe[1]) < 0) {
+        int release_errno = errno;
+        int child_status = 0;
+        struct rusage child_usage;
+        memset(&child_usage, 0, sizeof(child_usage));
+        (void)terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        close(gate_pipe[1]); close(err_pipe[0]);
+        close(stdout_pipe[0]); close(stderr_pipe[0]);
+        if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
+            return -1;
+        }
+        set_setup_failure(res, SETUP_STAGE_CGROUP_RELEASE, release_errno);
+        return 0;
+    }
+    close(gate_pipe[1]);
 
     /* Read error pipe */
     setup_error_t s_err;
@@ -379,7 +1018,13 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         close(stderr_pipe[0]);
 
         if (reap_pid != pid) {
+            (void)cleanup_job_resources(&job_cgroup, root_mountpoint);
             res->status = STATUS_RUNNER_CHILD_LOST;
+            return -1;
+        }
+
+        if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
             return -1;
         }
 
@@ -397,7 +1042,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
 
-        if (cleanup_result < 0) {
+        if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
             res->status = STATUS_RUNNER_CHILD_LOST;
             return -1;
         }
@@ -582,6 +1227,10 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             }
             if (stdout_open) { close(stdout_pipe[0]); stdout_open = false; }
             if (stderr_open) { close(stderr_pipe[0]); stderr_open = false; }
+            if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+                res->status = STATUS_RUNNER_INTERNAL_ERROR;
+                return -1;
+            }
             res->status = STATUS_RUNNER_INTERNAL_ERROR;
             return -1;
         }
@@ -695,6 +1344,11 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                 res->status = STATUS_INDETERMINATE_SETUP_STATUS;
             }
         }
+    }
+
+    if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+        return -1;
     }
 
     /* Compute elapsed wall time and CPU time */
@@ -868,6 +1522,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "  --as-mb <mb>           RLIMIT_AS limit in MiB (default: 128)\n");
         fprintf(stderr, "  --fsize-mb <mb>        RLIMIT_FSIZE limit in MiB (default: 1)\n");
         fprintf(stderr, "  --max-output-kb <kb>   Output stream cap in KiB (default: 64)\n");
+        fprintf(stderr, "  -- <binary> [args...]  Target executable and arguments (max 128, 4096 bytes each)\n");
         return 1;
     }
 
@@ -875,9 +1530,20 @@ int main(int argc, char *argv[]) {
     sandbox_config_init_default(&cfg);
 
     const char *binary_path = NULL;
+    bool target_args_started = false;
 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--job-id") == 0 && i + 1 < argc) {
+        if (strcmp(argv[i], "--") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: -- requires a target binary\n");
+                return 1;
+            }
+            binary_path = argv[++i];
+            cfg.target_args = (const char *const *)&argv[i + 1];
+            cfg.target_argc = (size_t)(argc - i - 1);
+            target_args_started = true;
+            break;
+        } else if (strcmp(argv[i], "--job-id") == 0 && i + 1 < argc) {
             cfg.job_id = argv[++i];
         } else if (strcmp(argv[i], "--timeout-ms") == 0 && i + 1 < argc) {
             cfg.timeout_ms = (uint32_t)strtoul(argv[++i], NULL, 10);
@@ -901,6 +1567,11 @@ int main(int argc, char *argv[]) {
 
     if (!binary_path) {
         fprintf(stderr, "Error: no target binary specified\n");
+        return 1;
+    }
+
+    if (target_args_started && cfg.target_argc > MAX_TARGET_ARGS) {
+        fprintf(stderr, "Error: target argument count exceeds %u\n", MAX_TARGET_ARGS);
         return 1;
     }
 

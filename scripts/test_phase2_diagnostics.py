@@ -317,26 +317,29 @@ class TestPhase2FixtureDiagnostics(unittest.TestCase):
         self.assertIn("unshare(CLONE_NEWPID)", doc)
         self.assertIn("errno=38 (ENOSYS)", doc)
 
-    def test_runner_argument_environment_gap_contract(self) -> None:
+    def test_runner_argument_environment_contract(self) -> None:
         """
-        Verify that the runner implementation gap (only passing binary_path and empty env)
-        is accurately reflected in code and architecture documentation, and that the four
-        safe future interface principles are strictly specified.
+        Verify that explicit bounded target arguments are passed with execve and that
+        the environment remains empty.
         """
         sandbox_c = (REPO_ROOT / "sandbox-daemon" / "sandbox.c").read_text()
         sandbox_h = (REPO_ROOT / "sandbox-daemon" / "sandbox.h").read_text()
         doc = (REPO_ROOT / "docs" / "03_SANDBOX_DEEP_DIVE.md").read_text()
 
-        # Check current runner C code: only binary_path in child_argv, empty child_envp
-        self.assertIn("char *const child_argv[] = { (char *)binary_path, NULL };", sandbox_c)
+        # Check current runner C code: argument vector is bounded and rooted path is argv[0].
+        self.assertIn("char *child_argv[MAX_TARGET_ARGS + 2];", sandbox_c)
+        self.assertIn("cfg->target_args[arg_index]", sandbox_c)
         self.assertIn("char *const child_envp[] = { NULL };", sandbox_c)
-        self.assertIn("execve(binary_path, child_argv, child_envp);", sandbox_c)
+        self.assertIn("execve(target_path, child_argv, child_envp);", sandbox_c)
 
-        # Check sandbox.h runner signature: only binary_path, no argv or env parameters
+        # Check sandbox.h config carries arguments, but no ambient environment.
         self.assertIn("int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg, sandbox_result_t *res);", sandbox_h)
+        self.assertIn("const char *const *target_args;", sandbox_h)
+        self.assertIn("size_t target_argc;", sandbox_h)
 
-        # Check documentation of the gap and safe interface principles
-        self.assertIn("Target Arguments & Environment: Current Runner Gap & Safe Future Interface Contract", doc)
+        # Check documentation of the implemented argument path and safe future principles.
+        self.assertIn("Target Arguments & Environment: Bounded Argument Vector and Safe Future Interface Contract", doc)
+        self.assertIn("sandbox-runner -- <binary> [args...]", doc)
         self.assertIn("Explicit Argument Array", doc)
         self.assertIn("Explicit Environment Allowlist", doc)
         self.assertIn("No Shell Command String", doc)
