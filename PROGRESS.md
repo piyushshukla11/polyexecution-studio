@@ -1725,3 +1725,21 @@
 - Linked: LOG-0111.
 - Piyush prediction (optional): Strict preflight and capability verification will identify that outer container restrictions prevent live kernel namespace creation, correctly gating Phase 2 completion.
 - Tutor review: pending
+
+## [LOG-0113] 2026-11-15 10:39 IST | BLOCKED | actor: agent
+- Reason: Phase 2 technical DoD cannot be completed or proven on this host due to kernel isolation blockers (unshare ENOSYS, incomplete cgroup v2 controller delegation, and active PR_SET_NO_NEW_PRIVS in container); Phase 2 DoD remains strictly OPEN and the branch remains unpushed.
+- Details / Change:
+  1. Performed empirical capability audit of the runtime environment:
+     - All unshare(2) operations fail: `unshare(CLONE_NEWUSER)` returns `ret=-1, errno=38` (ENOSYS), and `unshare(CLONE_NEWPID | CLONE_NEWNET | CLONE_NEWNS | CLONE_NEWIPC | CLONE_NEWUTS)` returns `ret=-1, errno=38` (ENOSYS), blocked by the outer container execution environment.
+     - Cgroup v2 controller delegation is incomplete: `/proc/self/cgroup` resolves to `/user.slice/user-1000.slice/user@1000.service/app.slice/hc-hold-7094d19d.service`. Its `cgroup.controllers` exposes only `memory pids` (missing `cpu`), and `cgroup.subtree_control` is empty. The runner's required controller check (`phase2_cgroup_create`) fails with `ENOTSUP` on the live host hierarchy.
+     - Outer container enforces `PR_SET_NO_NEW_PRIVS = 1`, blocking privilege transitions via setuid or sudo.
+     - No alternative container engine is available: Docker daemon is inactive (`/var/run/docker.sock` missing) and Podman is not installed.
+  2. Adhering to AI_RULES.md and user prompt instructions:
+     - Fake-tree and structural test passes (`test_phase2_cgroup`, `test_setup_handshake`, `test_seccomp_policy`) are recorded strictly as logic-only and seccomp-unit evidence, NOT as proof of host kernel namespace or cgroup containment.
+     - Phase 2 adversarial attack fixtures (`fork_bomb.c`, `read_etc_passwd.c`, `net_connect.c`) were NOT executed because running them without active namespaces and cgroups would execute uncontained against the host process table and filesystem.
+     - Refused to claim completion of the Phase 2 technical Definition of Done. Phase 2 DoD remains OPEN.
+     - Left branch `phase/2-sandbox-hardening` strictly UNPUSHED to GitHub, awaiting an execution environment with kernel namespace and full cgroup v2 delegation support.
+  3. Updated local-only learning notes (LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md) and tutor handoff (HANDOFF_PROMPT.md).
+- Files: PROGRESS.md, HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
+- Linked: LOG-0112, LOG-0094.
+- Tutor review: pending
