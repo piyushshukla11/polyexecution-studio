@@ -1,6 +1,6 @@
 # PolyExecution Studio (PES)
 
-PolyExecution Studio is a collaborative multi-language code execution platform under development. The planned architecture lets multiple users collaboratively edit code in a browser and submit runs through an ingress gateway to backend worker services that compile and execute user code inside a secure C sandbox.
+PolyExecution Studio is a collaborative multi-language code execution platform under development. The planned architecture lets multiple users collaboratively edit code in a browser and submit runs through an ingress gateway to backend worker services that compile and execute user code inside a C sandbox runner constrained by Linux namespaces, cgroups v2, a private tmpfs rootfs, capability dropping, and seccomp-bpf.
 
 ---
 
@@ -72,11 +72,11 @@ make -C sandbox-daemon test-workspace-handoff test-setup-protocol test-phase2-st
 
 ### 2. Build and Test the Kotlin Worker
 ```bash
-# Run worker unit tests
-cd worker && gradle test
+# Run worker unit tests (from repository root)
+(cd worker && gradle test)
 
-# Build the worker distribution
-cd worker && gradle installDist
+# Build the worker distribution (from repository root)
+(cd worker && gradle installDist)
 ```
 
 ### 3. End-to-End gRPC Verification via `grpcurl`

@@ -2360,3 +2360,27 @@
 - Files: `PROGRESS.md`, `README.md`.
 - Linked: LOG-0152, LOG-0149.
 - Tutor review: ready for tutor review
+
+
+## [LOG-0154] 2026-11-16 00:49 IST | PLAN | actor: agent
+- Reason: Resolve tutor review findings on `README.md`: eliminate "secure C sandbox" claim in favor of specific Linux isolation mechanisms per `AI_RULES.md` §6, and fix consecutive `cd worker` shell commands to run safely from the repository root.
+- Details / Change:
+  1. In `README.md`, line 3, replace "secure C sandbox" with an explicit description of the isolation controls: Linux namespaces, cgroups v2, private tmpfs rootfs, capability dropping, and seccomp-bpf.
+  2. In `README.md`, lines 73-80, encapsulate worker build commands in subshells `(cd worker && gradle test)` and `(cd worker && gradle installDist)` so sequential execution from repository root does not fail on directory persistence.
+  3. Run repository hygiene and append-only checks. Stage explicitly by name, commit, and push `phase/3-worker-grpc`.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0153.
+- Tutor review: pending
+
+
+## [LOG-0155] 2026-11-16 00:50 IST | DONE | actor: agent
+- Order: PLAN was LOG-0154.
+- Reason: Complete README corrections addressing tutor review findings before final Phase 3 merge sign-off.
+- Details / Change:
+  1. In `README.md`, replaced the "secure C sandbox" phrase with an accurate, mechanism-specific summary: "a C sandbox runner constrained by Linux namespaces, cgroups v2, a private tmpfs rootfs, capability dropping, and seccomp-bpf" conforming strictly to `AI_RULES.md` §6.
+  2. In `README.md`, updated worker commands to use subshell execution `(cd worker && gradle test)` and `(cd worker && gradle installDist)` so running them sequentially from the repository root functions correctly without leaving the shell in a nested directory.
+  3. Verified repository hygiene, clean diff, and append-only progression.
+- Verification: `scripts/check_repo_hygiene.sh` passed; `scripts/check_progress_append_only.sh` passed; `git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0154, LOG-0153.
+- Tutor review: ready for tutor review
