@@ -1754,3 +1754,17 @@
 - Files: PROGRESS.md, HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
 - Linked: LOG-0113.
 - Tutor review: pending
+
+## [LOG-0115] 2026-11-15 11:43 IST | CORRECTION | actor: agent
+- Reason: Record corrections to LOG-0114 regarding systemd cgroup delegation unit types and the Child 1 vs Child 2 procfs mounting sequence.
+- Details / Change:
+  1. Systemd cgroup delegation unit correction: Per systemd's cgroup delegation guide, `Delegate=` must be configured on a service or scope unit, not a slice unit. Slice units do not manage processes directly and cannot delegate. Delegation is configured on a service (e.g. `/etc/systemd/system/user@.service.d/delegate.conf` for the user service) or via a dedicated scope (e.g. `systemd-run --user --scope`).
+  2. Subtree enablement and live verification: Setting `Delegate=cpu memory pids` makes those controllers available in `cgroup.controllers`; the delegated subtree root must also explicitly enable them by writing `+cpu +memory +pids` to `cgroup.subtree_control`. Writable controller files and live create/configure/attach/kill/cleanup must be verified from the runner's actual cgroup.
+  3. Procfs lifecycle sequence code alignment: Corrected the sequence description to match `sandbox-daemon/sandbox.c` lines 626–658:
+     - Child 1 (helper/supervisor) creates combined namespaces and prepares the rootfs, then forks Child 2.
+     - Child 2 (target init, PID 1 in the new PID namespace) mounts private procfs while holding setup privileges (`CAP_SYS_ADMIN`), then drops capability bounding sets, supplementary groups, and identity to `nobody`, enables `PR_SET_NO_NEW_PRIVS`, verifies `/proc/self/status` capability bitmasks are strictly zero, installs seccomp-bpf, and executes the target with `execve`.
+     - Child 1 drops supervisor privileges and supervises/reaps Child 2.
+  4. Status: Phase 2 DoD remains strictly OPEN, hostile attack fixtures remain unexecuted, and branch phase/2-sandbox-hardening remains unpushed.
+- Files: PROGRESS.md, HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
+- Linked: LOG-0114.
+- Tutor review: pending
