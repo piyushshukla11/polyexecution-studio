@@ -2329,3 +2329,34 @@
 - Files: `PROGRESS.md`, `docs/05_INTERVIEW_PREP.md`.
 - Linked: LOG-0150, LOG-0149.
 - Tutor review: ready for tutor review
+
+
+## [LOG-0152] 2026-11-16 00:46 IST | PLAN | actor: agent
+- Reason: Update `README.md` to document Phase 3 functionality, architecture, quickstart verification, and honest limitations per `AI_RULES.md` §11, resolving the tutor review blocker for Phase 3 merge readiness.
+- Details / Change:
+  1. Rewrite `README.md` from initial bootstrap text into a concise, honest project README covering Phase 3 implementation.
+  2. Document the implemented architecture: Phase 1 low-level runner, Phase 2 Linux isolation controls (cgroup v2, user/mount/pid/net namespaces, pivot_root, seccomp allowlist), and Phase 3 Kotlin worker with loopback gRPC service and sandboxed C compilation / Python execution.
+  3. Include Roadmap table distinguishing completed phases (0, 1, 2, 3) from planned work (4, 5, 6, 7).
+  4. Document honest limitations: loopback-only binding (`127.0.0.1`), single final response in `ExecuteStream` (line streaming planned for Phase 4), supported languages (C and Python only), kernel requirements (cgroups v2 delegation, unprivileged user namespaces), and container/process isolation rather than microVM.
+  5. Provide verifiable commands for sandbox regression suite, worker unit tests, and end-to-end `verify_grpcurl.sh` checks.
+  6. Verify repository hygiene and append-only rules via `scripts/check_repo_hygiene.sh` and `scripts/check_progress_append_only.sh`.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0151, LOG-0149.
+- Tutor review: pending
+
+
+## [LOG-0153] 2026-11-16 00:47 IST | DONE | actor: agent
+- Order: PLAN was LOG-0152.
+- Reason: Update `README.md` to reflect Phase 3 implementation, architecture, quickstart verification, and honest limitations resolving tutor review merge blocker.
+- Details / Change:
+  1. Updated `README.md` to document Phase 3 functionality:
+     - Documented C sandbox runner capabilities (Phase 1 process lifecycle & rlimits; Phase 2 cgroup v2, namespaces, tmpfs rootfs, pivot_root, seccomp-bpf allowlist, fail-closed isolation).
+     - Documented Kotlin gRPC worker service (`pes.execution.v1.ExecutionService`), bounded request validation, ephemeral workspace lifecycle (`/tmp/pes-job-<id>-*`, mode 0700), sandboxed compilation via `/usr/bin/gcc`, sandboxed execution for C and Python with standard input forwarding, and typed protobuf status mapping.
+     - Provided Roadmap table with accurate phase statuses (Phases 0-3 complete/implemented; Phases 4-7 marked planned).
+     - Documented honest limitations per `AI_RULES.md` §11: loopback binding (`127.0.0.1`), single final response in `ExecuteStream`, supported runtimes (C and Python), Linux host kernel prerequisites (cgroup v2 delegation and unprivileged user namespaces), and container process isolation rather than hypervisor microVMs.
+     - Documented quickstart build and test commands for sandbox runner, worker unit tests, and live `grpcurl` verification.
+  2. Verified repository markdown hygiene: no disallowed markdown files added or tracked; `HANDOFF_PROMPT.md` and `LEARNING_NOTES/` remain local-only.
+- Verification: `scripts/check_repo_hygiene.sh` passed; `scripts/check_progress_append_only.sh` passed; `git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0152, LOG-0149.
+- Tutor review: ready for tutor review
