@@ -2114,3 +2114,22 @@
 - Files: `PROGRESS.md`, `sandbox-daemon/tests/test_runner.py`.
 - Linked: LOG-0145, LOG-0144.
 - Tutor review: ready for tutor review
+
+
+## [LOG-0147] 2026-11-15 23:46 IST | DECISION | actor: Piyush + tutor
+- Reason: Formally record tutor review approval and sign-off for Phase 2 sandbox hardening, close Phase 2 Definition of Done, and authorize non-fast-forward merge into `main` with tag `phase-2-done`.
+- Details / Change:
+  1. The tutor reviewed the hardened watchdog failure-path cleanup, guaranteed `populated 0` wait before directory removal, error propagation, tri-fold lingering process detection, and the bounded watchdog cleanup regression test (LOG-0146). The tutor approved the Phase 2 implementation.
+  2. Phase 2 Definition of Done in `docs/04_BUILD_PLAN.md` ("Fork bomb, file read, network attempt all fail safely; stray-process check clean") is fully satisfied with live runtime evidence on native Omarchy host:
+     - Fork bomb contained via cgroup v2 `pids.max = 32`, thousands of live kernel fork rejections (`pids.events max > 5000`), peak `pids.current <= 34` (steady-state <= 32), status TIMEOUT, and clean cgroup removal.
+     - Filesystem snooping denied via mount namespace, tmpfs rootfs, read-only runtime mounts, and `pivot_root` (`/etc/passwd` and host canary inaccessible with ENOENT, exit_code 1 BLOCKED_BY_POLICY).
+     - Network connect denied via `CLONE_NEWNET` (verified distinct network namespace inode from host) and seccomp filter denying `socket()` with EPERM.
+     - Stray-process check clean: 0 lingering runner, target (`/run/target`), or zombie processes detected.
+     - Watchdog failure teardown verified under bounded test P2-04 with confirmed `populated 0` before directory removal and abort on unconfirmed state.
+  3. Total test suite status: 22/22 tests passing (18/18 Phase 1 regression tests + 4/4 Phase 2 integration checks). Safe unit and structural targets passed.
+  4. Phase 2 DoD status is marked CLOSED and APPROVED.
+  5. Action authorized: Merge `phase/2-sandbox-hardening` into `main` using `git merge --no-ff` and tag `phase-2-done` per AI_RULES.md §10.
+- Verification: `make test` passed 22/22; `scripts/check_repo_hygiene.sh` and `scripts/check_progress_append_only.sh` passed.
+- Files: `PROGRESS.md`.
+- Linked: LOG-0146.
+- Tutor review: approved for Phase 2 sign-off and merge into main
