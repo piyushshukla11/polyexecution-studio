@@ -2570,3 +2570,28 @@
 - Files: `PROGRESS.md`, `gateway/src/test/java/pes/gateway/WorkerGrpcClientTest.java`.
 - Linked: LOG-0162, LOG-0161.
 - Tutor review: ready for tutor review
+
+
+## [LOG-0164] 2026-11-16 01:47 IST | DECISION | actor: Piyush + tutor
+- Reason: Formally record tutor review approval and sign-off for Phase 4 Java Gateway, WebSocket rooms, and execution status events, close Phase 4 Definition of Done, and authorize non-fast-forward merge into `main` with tag `phase-4-done`.
+- Details / Change:
+  1. Tutor reviewed the Phase 4 implementation, test evidence, origin allowlist enforcement, room reservation lifecycle, atomic concurrency guard, and corrected 11-second deadline regression test. The tutor officially signed off on Phase 4 and approved merging `phase/4-gateway` into `main` via the project's normal process.
+  2. Phase 4 Definition of Done in `docs/04_BUILD_PLAN.md` ("Java gateway + WebSocket + rooms — Test WebSocket client triggers a run and receives status events") is fully satisfied with live runtime evidence:
+     - WebSocket connectivity and rooms: client connects to `/ws` on loopback `127.0.0.1:8080`, joins rooms, receives membership updates, and events remain strictly isolated between rooms.
+     - Origin enforcement: development origin allowlist enforced during WebSocket handshake; unapproved origins rejected with HTTP 403 Forbidden.
+     - Run governance: 1 active run per room policy and global execution slot ceiling (16 max) enforced atomically via synchronized room manager. In-flight disconnects preserve room reservations without dropping slots or leaking state.
+     - gRPC client: typed protobuf dispatch to Kotlin worker on `127.0.0.1:50055`, deadline budget incorporating 13s C compilation ceiling, and fail-closed error mapping.
+     - Real end-to-end WebSocket to sandbox execution: verified against live `sandbox-runner` on Omarchy host for valid C (`OK`), invalid C (`COMPILE_ERROR`), and Python (`OK`).
+  3. All suites verified:
+     - `gateway`: 30/30 unit and integration tests passed.
+     - `worker`: 11/11 unit tests passed.
+     - `sandbox-daemon`: 22/22 integration tests passed (18 Phase 1 + 4 Phase 2).
+     - Safe and structural tests: all passed.
+     - Live E2E WebSocket verification script: passed cleanly.
+     - Process cleanup: 0 lingering processes.
+  4. Phase 4 DoD status is marked CLOSED and APPROVED.
+  5. Action authorized: Merge `phase/4-gateway` into `main` using `git merge --no-ff` and tag `phase-4-done` per AI_RULES.md §10.
+- Verification: `(cd gateway && gradle test)` (30/30 passed); `(cd worker && gradle test)` (11/11 passed); `make -C sandbox-daemon test` (22/22 passed); `bash gateway/tests/verify_e2e_websocket.sh 8080 50055` (passed); `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`.
+- Linked: LOG-0163, LOG-0161, LOG-0159.
+- Tutor review: approved for Phase 4 sign-off and merge into main
