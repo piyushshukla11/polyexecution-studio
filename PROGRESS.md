@@ -1958,3 +1958,31 @@
 - Files: `PROGRESS.md`, `sandbox-daemon/sandbox.c`.
 - Linked: LOG-0135, LOG-0134.
 - Tutor review: pending
+
+
+## [LOG-0137] 2026-11-15 20:33 IST | PLAN | actor: agent
+- Reason: Resolve the procfs private mount failure (stage=19 errno=1 EPERM, VFS: Mount too revealing) by deferring oldroot unmounting until Child 2 mounts /proc.
+- Details / Change:
+  1. In `sandbox-daemon/phase2_rootfs.c`, keep `/.oldroot` mounted across `pivot_root` during `phase2_rootfs_prepare()` so that an existing instance of `procfs` (`/.oldroot/proc`) remains present in the mount namespace when Child 2 is forked.
+  2. In `phase2_rootfs_mount_proc()`, Child 2 executes `mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL)`. Under unprivileged user namespaces, the Linux kernel Virtual Filesystem (`fs/namespace.c` `mount_too_revealing()` -> `mnt_already_visible()`) permits mounting pseudo-filesystems marked `SB_I_USERNS_VISIBLE` only when an instance of that filesystem type is already visible in the caller's mount namespace.
+  3. Once `/proc` is mounted by Child 2 for its new PID namespace, Child 2 detaches `/.oldroot` via `umount2("/.oldroot", MNT_DETACH)`, removes the temporary `/.oldroot` directory via `rmdir("/.oldroot")`, and switches working directory to `/tmp` via `chdir("/tmp")`.
+  4. Build under strict compiler flags (`-Wall -Wextra -Werror -O2`) and run all existing safe regression tests (setup handshake protocol, close_range fallback, cgroup fake-tree selection, seccomp policy runtime probe, and fail-closed gate).
+  5. Keep hostile fixtures (`fork_bomb.c`, `read_etc_passwd.c`, `net_connect.c`) unexecuted. Phase 2 DoD remains OPEN until live runner execution succeeds on a capable environment.
+- Files: `PROGRESS.md`, `sandbox-daemon/phase2_rootfs.c`.
+- Linked: LOG-0136.
+- Tutor review: pending
+
+
+## [LOG-0138] 2026-11-15 20:34 IST | DONE | actor: agent
+- Reason: Defer unmounting and removing /.oldroot until Child 2 mounts /proc, satisfying the Linux kernel's mount_too_revealing() visibility requirement in unprivileged user namespaces.
+- Details / Change:
+  1. In `sandbox-daemon/phase2_rootfs.c`, removed immediate detachment of `/.oldroot` from `phase2_rootfs_prepare()`. This keeps the inherited host filesystem and its existing procfs instance (`/.oldroot/proc`) present in the mount namespace across `pivot_root`.
+  2. In `phase2_rootfs_mount_proc()`, Child 2 mounts a new private procfs on `/proc` with `MS_NOSUID | MS_NODEV | MS_NOEXEC`. Because `/.oldroot/proc` is still visible, the kernel's `mnt_already_visible()` check succeeds and no longer triggers `VFS: Mount too revealing` (`EPERM`).
+  3. Immediately after `mount("proc", ...)` succeeds, Child 2 calls `umount2("/.oldroot", MNT_DETACH)`, removes `/.oldroot` via `rmdir("/.oldroot")`, and changes working directory to `/tmp` (`chdir("/tmp")`) before dropping capabilities.
+  4. Labeled as `AGENT-WROTE-TIER-A` in accordance with the project-wide Tier A implementation authorization in AI_RULES §14.
+  5. Built cleanly under `-Wall -Wextra -Werror -O2`; all safe regression suites passed (setup protocol 5/5, close_range fallback 5/5, cgroup fake-tree selection 5/5, seccomp policy probe, and fail-closed gate).
+  6. Phase 2 DoD remains OPEN. Hostile fixtures (`fork_bomb.c`, `read_etc_passwd.c`, `net_connect.c`) were not executed.
+- Verification: `make clean all test-setup-protocol test-phase2-structural test-phase2-seccomp-safe test-phase2-fail-closed` passed in `sandbox-daemon`; `bash scripts/check_repo_hygiene.sh && bash scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `sandbox-daemon/phase2_rootfs.c`.
+- Linked: LOG-0137, LOG-0136.
+- Tutor review: pending

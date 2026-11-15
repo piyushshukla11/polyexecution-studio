@@ -157,13 +157,13 @@ int phase2_rootfs_prepare(const char *host_binary, const char *root, char *targe
     if (chdir(root) < 0) return -1;
     if (syscall(SYS_pivot_root, ".", ".oldroot") < 0) return -1;
     if (chdir("/") < 0) return -1;
-    if (umount2("/.oldroot", MNT_DETACH) < 0) return -1;
-    if (rmdir("/.oldroot") < 0) return -1;
-    if (chdir("/tmp") < 0) return -1;
     return 0;
 }
 
 int phase2_rootfs_mount_proc(void) {
     if (mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) < 0) return -1;
+    if (umount2("/.oldroot", MNT_DETACH) < 0) return -1;
+    if (rmdir("/.oldroot") < 0) return -1;
+    if (chdir("/tmp") < 0) return -1;
     return 0;
 }
