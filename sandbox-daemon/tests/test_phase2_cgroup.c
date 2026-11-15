@@ -109,26 +109,57 @@ int main(void) {
     if (!root) return 1;
 
     char parent[4096];
+    char intermediate[4096];
+    char current[4096];
     char proc_file[4096];
     char path[4096];
     int result = 0;
     int parent_created = 0;
+    int intermediate_created = 0;
+    int current_created = 0;
     int proc_created = 0;
     int job_created = 0;
     phase2_cgroup_t cgroup = {0};
-    const char *parent_files[] = {"cgroup.controllers", "cgroup.subtree_control"};
+    const char *parent_files[] = {"cgroup.controllers", "cgroup.subtree_control", "cgroup.procs"};
+    const char *ancestor_files[] = {"cgroup.controllers", "cgroup.subtree_control", "cgroup.procs"};
 
     if (fixture_path_join(parent, sizeof(parent), root, "delegated") < 0 || mkdir(parent, 0700) < 0) {
         result = 2;
         goto cleanup;
     }
     parent_created = 1;
+    if (fixture_path_join(intermediate, sizeof(intermediate), parent, "app.slice") < 0 ||
+        mkdir(intermediate, 0700) < 0) {
+        result = 24;
+        goto cleanup;
+    }
+    intermediate_created = 1;
+    if (fixture_path_join(current, sizeof(current), intermediate, "terminal.scope") < 0 ||
+        mkdir(current, 0700) < 0) {
+        result = 25;
+        goto cleanup;
+    }
+    current_created = 1;
     if (fixture_path_join(path, sizeof(path), parent, "cgroup.controllers") < 0 ||
         write_text(path, "cpu memory pids\n") < 0 ||
         fixture_path_join(path, sizeof(path), parent, "cgroup.subtree_control") < 0 ||
         write_text(path, "cpu memory pids\n") < 0 ||
+        fixture_path_join(path, sizeof(path), parent, "cgroup.procs") < 0 ||
+        write_text(path, "") < 0 ||
+        fixture_path_join(path, sizeof(path), intermediate, "cgroup.controllers") < 0 ||
+        write_text(path, "cpu memory pids\n") < 0 ||
+        fixture_path_join(path, sizeof(path), intermediate, "cgroup.subtree_control") < 0 ||
+        write_text(path, "memory pids\n") < 0 ||
+        fixture_path_join(path, sizeof(path), intermediate, "cgroup.procs") < 0 ||
+        write_text(path, "") < 0 ||
+        fixture_path_join(path, sizeof(path), current, "cgroup.controllers") < 0 ||
+        write_text(path, "memory pids\n") < 0 ||
+        fixture_path_join(path, sizeof(path), current, "cgroup.subtree_control") < 0 ||
+        write_text(path, "") < 0 ||
+        fixture_path_join(path, sizeof(path), current, "cgroup.procs") < 0 ||
+        write_text(path, "4242\n") < 0 ||
         fixture_path_join(proc_file, sizeof(proc_file), root, "proc-cgroup") < 0 ||
-        write_text(proc_file, "0::/delegated\n") < 0) {
+        write_text(proc_file, "0::/delegated/app.slice/terminal.scope\n") < 0) {
         result = 3;
         goto cleanup;
     }
@@ -182,7 +213,7 @@ int main(void) {
         goto cleanup;
     }
     job_created = 0;
-    puts("fake-tree logic only: valid path, controllers, exact limits, child PID attach, cgroup.kill, populated=0, cleanup: PASS");
+    puts("fake-tree logic only: nearest empty delegated ancestor selected; exact limits, child PID attach, cgroup.kill, populated=0, cleanup: PASS");
 
     if (fixture_path_join(path, sizeof(path), parent, "cgroup.subtree_control") < 0 ||
         write_text(path, "memory pids\n") < 0) {
@@ -225,7 +256,7 @@ int main(void) {
     }
     puts("fake-tree logic only: malformed cgroup path rejected before job creation: PASS");
 
-    if (write_text(proc_file, "0::/delegated\n") < 0) {
+    if (write_text(proc_file, "0::/delegated/app.slice/terminal.scope\n") < 0) {
         result = 14;
         goto cleanup;
     }
@@ -243,6 +274,18 @@ cleanup:
         if (phase2_cgroup_remove(&cgroup) < 0) result = result ? result : 17;
     }
     if (proc_created && unlink(proc_file) < 0) result = result ? result : 18;
+    if (current_created) {
+        for (size_t i = 0; i < sizeof(ancestor_files) / sizeof(ancestor_files[0]); i++) {
+            if (fixture_path_join(path, sizeof(path), current, ancestor_files[i]) < 0 || unlink(path) < 0) result = result ? result : 26;
+        }
+        if (rmdir(current) < 0) result = result ? result : 27;
+    }
+    if (intermediate_created) {
+        for (size_t i = 0; i < sizeof(ancestor_files) / sizeof(ancestor_files[0]); i++) {
+            if (fixture_path_join(path, sizeof(path), intermediate, ancestor_files[i]) < 0 || unlink(path) < 0) result = result ? result : 28;
+        }
+        if (rmdir(intermediate) < 0) result = result ? result : 29;
+    }
     if (parent_created) {
         for (size_t i = 0; i < sizeof(parent_files) / sizeof(parent_files[0]); i++) {
             if (fixture_path_join(path, sizeof(path), parent, parent_files[i]) < 0 || unlink(path) < 0) result = result ? result : 19;

@@ -101,6 +101,65 @@ static int get_current_cgroup(const char *proc_file, char *relative, size_t rela
     return result;
 }
 
+static bool has_required_controllers(const char *controllers, const char *subtree) {
+    static const char *const required[] = {"cpu", "memory", "pids"};
+    for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
+        if (!has_word(controllers, required[i]) || !has_word(subtree, required[i])) return false;
+    }
+    return true;
+}
+
+/*
+ * Domain controllers may only be distributed by an empty non-root cgroup.
+ * A desktop terminal scope is commonly populated and may not have cpu
+ * delegated, even while an empty ancestor service cgroup is delegated.
+ */
+static int is_delegated_parent(const char *directory) {
+    char controllers_path[PATH_MAX];
+    char subtree_path[PATH_MAX];
+    char processes_path[PATH_MAX];
+    char controllers[1024];
+    char subtree[1024];
+    char processes[2];
+    if (path_join(controllers_path, sizeof(controllers_path), directory, "cgroup.controllers") < 0 ||
+        path_join(subtree_path, sizeof(subtree_path), directory, "cgroup.subtree_control") < 0 ||
+        path_join(processes_path, sizeof(processes_path), directory, "cgroup.procs") < 0) return 0;
+    if (read_file(controllers_path, controllers, sizeof(controllers)) < 0 ||
+        read_file(subtree_path, subtree, sizeof(subtree)) < 0 ||
+        read_file(processes_path, processes, sizeof(processes)) < 0) return 0;
+    if (!has_required_controllers(controllers, subtree) || processes[0] != '\0') return 0;
+    if (access(directory, W_OK | X_OK) < 0) return 0;
+    return 1;
+}
+
+static int find_delegated_parent(const char *cgroup_root, const char *relative,
+                                 char *parent_out, size_t parent_out_size) {
+    char candidate[PATH_MAX];
+    int n = snprintf(candidate, sizeof(candidate), "%s%s", cgroup_root, relative);
+    if (n < 0 || (size_t)n >= sizeof(candidate)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    size_t root_length = strlen(cgroup_root);
+    while (strncmp(candidate, cgroup_root, root_length) == 0 &&
+           (candidate[root_length] == '/' || candidate[root_length] == '\0')) {
+        if (is_delegated_parent(candidate)) {
+            n = snprintf(parent_out, parent_out_size, "%s", candidate);
+            if (n < 0 || (size_t)n >= parent_out_size) {
+                errno = ENAMETOOLONG;
+                return -1;
+            }
+            return 0;
+        }
+        if (strcmp(candidate, cgroup_root) == 0) break;
+        char *separator = strrchr(candidate, '/');
+        if (!separator || (size_t)(separator - candidate) < root_length) break;
+        *separator = '\0';
+    }
+    errno = ENOTSUP;
+    return -1;
+}
+
 void phase2_cgroup_limits_init(phase2_cgroup_limits_t *limits) {
     if (!limits) return;
     limits->memory_max_bytes = 128ULL * 1024ULL * 1024ULL;
@@ -124,33 +183,12 @@ int phase2_cgroup_create(phase2_cgroup_t *cgroup,
     char relative[PATH_MAX];
     if (get_current_cgroup(proc_cgroup_file, relative, sizeof(relative)) < 0) return -1;
     char parent[PATH_MAX];
-    int n = snprintf(parent, sizeof(parent), "%s%s", cgroup_root, relative);
-    if (n < 0 || (size_t)n >= sizeof(parent)) {
-        errno = ENAMETOOLONG;
-        return -1;
-    }
-
-    char controllers_path[PATH_MAX];
-    char subtree_path[PATH_MAX];
-    char controllers[1024];
-    char subtree[1024];
-    if (path_join(controllers_path, sizeof(controllers_path), parent, "cgroup.controllers") < 0 ||
-        path_join(subtree_path, sizeof(subtree_path), parent, "cgroup.subtree_control") < 0 ||
-        read_file(controllers_path, controllers, sizeof(controllers)) < 0 ||
-        read_file(subtree_path, subtree, sizeof(subtree)) < 0) return -1;
-
-    const char *required[] = {"cpu", "memory", "pids"};
-    for (size_t i = 0; i < sizeof(required) / sizeof(required[0]); i++) {
-        if (!has_word(controllers, required[i]) || !has_word(subtree, required[i])) {
-            errno = ENOTSUP;
-            return -1;
-        }
-    }
+    if (find_delegated_parent(cgroup_root, relative, parent, sizeof(parent)) < 0) return -1;
 
     struct timespec now;
     if (clock_gettime(CLOCK_MONOTONIC, &now) < 0) return -1;
-    n = snprintf(cgroup->path, sizeof(cgroup->path), "%s/pes-%ld-%lld",
-                 parent, (long)getpid(), (long long)now.tv_nsec);
+    int n = snprintf(cgroup->path, sizeof(cgroup->path), "%s/pes-%ld-%lld",
+                     parent, (long)getpid(), (long long)now.tv_nsec);
     if (n < 0 || (size_t)n >= sizeof(cgroup->path)) {
         errno = ENAMETOOLONG;
         return -1;

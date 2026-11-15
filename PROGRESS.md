@@ -1884,3 +1884,27 @@
 - Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_fail_closed_gate.c.
 - Linked: LOG-0122, LOG-0121.
 - Tutor review: pending
+
+## [LOG-0131] 2026-11-15 19:39 IST | PLAN | actor: agent
+- Reason: Use the nearest writable, empty cgroup ancestor that exposes and enables cpu, memory, and pids, instead of assuming the terminal's populated leaf cgroup is the delegated job parent.
+- Details / Change:
+  1. Preserve fail-closed behavior when no suitable delegated cgroup ancestor exists.
+  2. Walk upward from the current process cgroup and choose the nearest ancestor whose `cgroup.controllers` and `cgroup.subtree_control` both contain cpu, memory, and pids, whose direct `cgroup.procs` is empty, and whose directory is writable/searchable.
+  3. Add fake-tree regression coverage modeling the observed Omarchy hierarchy: a populated terminal scope with only memory/pids, an intermediate slice missing cpu delegation, and an empty delegated service ancestor with all required controllers enabled.
+  4. Run only safe build and logic/regression tests. Do not execute Phase 2 attack fixtures. Keep the Phase 2 technical DoD OPEN until live runner and adversarial containment evidence passes.
+- Files: `PROGRESS.md`, `sandbox-daemon/phase2_cgroup.c`, `sandbox-daemon/tests/test_phase2_cgroup.c`.
+- Linked: LOG-0123.
+- Tutor review: pending
+
+## [LOG-0132] 2026-11-15 19:40 IST | DONE | actor: agent
+- Reason: Fix cgroup parent selection to respect the live delegated hierarchy observed on Omarchy while preserving fail-closed behavior.
+- Details / Change:
+  1. `phase2_cgroup_create()` now walks upward from `/proc/self/cgroup` and selects the nearest ancestor that has cpu, memory, and pids in both `cgroup.controllers` and `cgroup.subtree_control`, has no processes directly in `cgroup.procs`, and is writable/searchable.
+  2. Added fake-tree coverage modeling the observed Omarchy layout: the terminal scope contains processes and has only memory/pids; an intermediate slice lacks cpu subtree enablement; the empty delegated user service ancestor has all required controllers enabled. The test confirms the job cgroup is created under that eligible ancestor.
+  3. Strict build and safe regressions passed: setup protocol 5/5 plus fallback 5/5, cgroup fake-tree 5/5, seccomp probe, fail-closed cleanup regression.
+  4. A `/bin/true` runner attempt in this Codex execution environment still fails closed at cgroup creation with `stage=11 errno=95`; this environment does not expose the user's Omarchy delegated hierarchy, so no live runner execution is claimed.
+  5. Phase 2 DoD remains OPEN. No adversarial Phase 2 fixture was executed.
+- Verification: `make -C sandbox-daemon clean all test-setup-protocol test-phase2-structural test-phase2-seccomp-safe test-phase2-fail-closed` passed under `-Wall -Wextra -Werror -O2`; `git diff --check`, append-only validation, and repository hygiene checks passed.
+- Files: `PROGRESS.md`, `sandbox-daemon/phase2_cgroup.c`, `sandbox-daemon/tests/test_phase2_cgroup.c`.
+- Linked: LOG-0131, LOG-0123.
+- Tutor review: pending
