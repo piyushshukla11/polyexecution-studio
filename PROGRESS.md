@@ -1714,3 +1714,14 @@
 - Files: sandbox-daemon/Makefile, sandbox-daemon/tests/test_phase2_cgroup.c, PROGRESS.md; private notes and handoff are local-only and never staged.
 - Linked: LOG-0111 PLAN.
 - Tutor review: pending
+
+## [LOG-0112] 2026-11-15 10:38 IST | PLAN | actor: agent
+- Reason: Audit host environment and probe kernel isolation prerequisites for Phase 2 technical DoD completion without substituting fake-tree evidence for runtime kernel enforcement.
+- Details / Change:
+  1. Commit this PLAN entry to PROGRESS.md before running environment probes.
+  2. Perform empirical capability probe of the runtime environment: check unshare(2) for CLONE_NEWUSER, CLONE_NEWPID, CLONE_NEWNET, CLONE_NEWNS, CLONE_NEWIPC, CLONE_NEWUTS; check cgroup v2 controller delegation (cpu, memory, pids) in current cgroup slice; check seccomp and prctl status (PR_GET_NO_NEW_PRIVS); and check availability of local container engines.
+  3. If required kernel isolation prerequisites cannot be proven on the host, record exact blockers in LOG-0113, refuse to execute uncontained attack fixtures, keep Phase 2 technical DoD OPEN, update tutor handoff and local study notes, and leave branch unpushed.
+- Files: PROGRESS.md, HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
+- Linked: LOG-0111.
+- Piyush prediction (optional): Strict preflight and capability verification will identify that outer container restrictions prevent live kernel namespace creation, correctly gating Phase 2 completion.
+- Tutor review: pending
