@@ -393,6 +393,7 @@ static void drain_and_close_pipe(int pipe_fd, char **buf, size_t *len, size_t *c
 static int pes_test_inject_cgroup_create_errno = 0;
 static bool pes_test_inject_cgroup_create_fake_success = false;
 static int pes_test_inject_fork_errno = 0;
+static char pes_test_last_root_mountpoint[PATH_MAX] = {0};
 #endif
 
 int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg, sandbox_result_t *res) {
@@ -485,6 +486,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
     }
 
     phase2_cgroup_t job_cgroup;
+    memset(&job_cgroup, 0, sizeof(job_cgroup));
     phase2_cgroup_limits_t cgroup_limits;
     phase2_cgroup_limits_init(&cgroup_limits);
 #ifdef PES_TEST_FAULT_INJECTION
@@ -493,7 +495,6 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         cgroup_create_res = -1;
         errno = pes_test_inject_cgroup_create_errno;
     } else if (pes_test_inject_cgroup_create_fake_success) {
-        memset(&job_cgroup, 0, sizeof(job_cgroup));
         cgroup_create_res = 0;
     } else {
         cgroup_create_res = phase2_cgroup_create(&job_cgroup, "/sys/fs/cgroup", "/proc/self/cgroup", &cgroup_limits);
@@ -536,6 +537,9 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         set_setup_failure(res, SETUP_STAGE_ROOTFS, setup_errno);
         return 0;
     }
+#ifdef PES_TEST_FAULT_INJECTION
+    snprintf(pes_test_last_root_mountpoint, sizeof(pes_test_last_root_mountpoint), "%s", root_mountpoint);
+#endif
 
     /* Sample start monotonic time */
     struct timespec start_tp;
@@ -560,7 +564,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         close(err_pipe[0]); close(err_pipe[1]);
         close(stdout_pipe[0]); close(stdout_pipe[1]);
         close(stderr_pipe[0]); close(stderr_pipe[1]);
-        set_setup_failure(res, SETUP_STAGE_CGROUP_CREATE, fork_errno);
+        set_setup_failure(res, SETUP_STAGE_SUPERVISOR, fork_errno);
         return 0;
     }
 

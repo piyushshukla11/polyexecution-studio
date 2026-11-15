@@ -252,6 +252,7 @@ static int test_fail_closed_runner_on_fork_failure(void) {
     memset(&res, 0, sizeof(res));
 
     /* Bypass cgroup creation failure so runner reaches fork(), then inject fork failure */
+    pes_test_last_root_mountpoint[0] = '\0';
     pes_test_inject_cgroup_create_fake_success = true;
     pes_test_inject_fork_errno = ENOMEM;
     int ret = run_sandbox_with_config(canary_script, &cfg, &res);
@@ -280,7 +281,15 @@ static int test_fail_closed_runner_on_fork_failure(void) {
         return 1;
     }
 
-    /* 3. Errno must report the injected ENOMEM */
+    /* 3. Setup stage must report SETUP_STAGE_SUPERVISOR */
+    if (res.setup_err.stage != SETUP_STAGE_SUPERVISOR) {
+        fprintf(stderr, "FAIL: res.setup_err.stage is %d on fork failure, expected SETUP_STAGE_SUPERVISOR (%d)\n",
+                res.setup_err.stage, SETUP_STAGE_SUPERVISOR);
+        unlink(canary_script);
+        return 1;
+    }
+
+    /* 4. Errno must report the injected ENOMEM */
     if (res.setup_err.errnum != ENOMEM) {
         fprintf(stderr, "FAIL: res.setup_err.errnum is %d, expected ENOMEM (%d)\n",
                 res.setup_err.errnum, ENOMEM);
@@ -288,20 +297,40 @@ static int test_fail_closed_runner_on_fork_failure(void) {
         return 1;
     }
 
-    /* 4. Target token must NOT be in stdout */
+    /* 5. Target token must NOT be in stdout */
     if (res.stdout_len > 0 || (res.stdout_buf && strstr(res.stdout_buf, CANARY_TOKEN) != NULL)) {
         fprintf(stderr, "FAIL: canary token observed in stdout on fork failure!\n");
         unlink(canary_script);
         return 1;
     }
 
-    /* 5. Child process verification */
+    /* 6. Directly verify that the allocated rootfs mountpoint was removed on disk */
+    if (pes_test_last_root_mountpoint[0] == '\0') {
+        fprintf(stderr, "FAIL: root mountpoint was not recorded during fork failure test\n");
+        unlink(canary_script);
+        return 1;
+    }
+    if (access(pes_test_last_root_mountpoint, F_OK) == 0) {
+        fprintf(stderr, "FAIL: root mountpoint %s was NOT removed on fork failure!\n",
+                pes_test_last_root_mountpoint);
+        (void)rmdir(pes_test_last_root_mountpoint);
+        unlink(canary_script);
+        return 1;
+    }
+    if (errno != ENOENT) {
+        fprintf(stderr, "FAIL: unexpected errno checking root mountpoint: %s (errno=%d)\n",
+                strerror(errno), errno);
+        unlink(canary_script);
+        return 1;
+    }
+
+    /* 7. Child process verification */
     if (verify_no_child_processes() < 0) {
         unlink(canary_script);
         return 1;
     }
 
-    /* 6. Descriptor leak check (specifically verifies userns_ready_pipe and setup pipes cleanup) */
+    /* 8. Descriptor leak check (specifically verifies userns_ready_pipe and setup pipes cleanup) */
     if (fds_before != fds_after) {
         fprintf(stderr, "FAIL: descriptor leak detected on fork failure: before=%d, after=%d\n",
                 fds_before, fds_after);
@@ -317,6 +346,6 @@ int main(void) {
     if (test_cleanup_job_resources_decoupled() != 0) return 1;
     if (test_fail_closed_runner_on_cgroup_failure() != 0) return 2;
     if (test_fail_closed_runner_on_fork_failure() != 0) return 3;
-    puts("fail-closed gate regression: decoupled rootfs cleanup PASS, injected cgroup-failure token absence/zero FD leak PASS, injected fork-failure pipe cleanup/zero FD leak PASS");
+    puts("fail-closed gate regression: decoupled rootfs cleanup PASS, injected cgroup-failure token absence/zero FD leak PASS, injected fork-failure rootfs cleanup/pipe cleanup/zero FD leak PASS");
     return 0;
 }

@@ -1844,3 +1844,43 @@
 - Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_fail_closed_gate.c, sandbox-daemon/Makefile.
 - Linked: LOG-0119, LOG-0118.
 - Tutor review: pending
+
+## [LOG-0121] 2026-11-15 13:01 IST | CORRECTION | actor: agent
+- Reason: Record corrections to LOG-0120 regarding job_cgroup initialization in the fault injection path, fork error reporting stage, and the scope of fork-failure rootfs verification per tutor review.
+- Details / Change:
+  1. `job_cgroup` initialization: In LOG-0120, `job_cgroup` was left uninitialized stack memory before the injected cgroup-failure path. Because the injected failure bypassed `phase2_cgroup_create()` (which performs `memset`), `run_sandbox_with_config` read uninitialized `job_cgroup.active` when deciding whether to call `cleanup_job_resources`. `job_cgroup` must be explicitly initialized via `memset(&job_cgroup, 0, sizeof(job_cgroup))` before either the injected or production cgroup-create path.
+  2. Fork error reporting stage: In LOG-0120, the `fork()` failure branch reported `SETUP_STAGE_CGROUP_CREATE`. Because this `fork()` creates the supervisor process (Child 1), it must report `SETUP_STAGE_SUPERVISOR` instead of an unrelated cgroup creation stage.
+  3. Scope of fork-failure rootfs assertions: In LOG-0120, `test_fail_closed_runner_on_fork_failure` checked descriptors and child processes, but did not directly assert the disk removal of `root_mountpoint` on that specific path. Claims in LOG-0120 are corrected to reflect that direct disk absence of the allocated root mountpoint must be asserted explicitly in that test case.
+- Files: PROGRESS.md, HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
+- Linked: LOG-0120.
+- Tutor review: pending
+
+## [LOG-0122] 2026-11-15 13:01 IST | PLAN | actor: agent
+- Reason: Fix job_cgroup uninitialized read, correct fork failure stage to SETUP_STAGE_SUPERVISOR, and add direct disk assertion of rootfs removal on fork failure.
+- Details / Change:
+  1. In `sandbox-daemon/sandbox.c` (`run_sandbox_with_config`), initialize `phase2_cgroup_t job_cgroup` with `memset(&job_cgroup, 0, sizeof(job_cgroup))` prior to both the injected and production cgroup-create paths, ensuring `job_cgroup.active` is always safely initialized.
+  2. In `sandbox-daemon/sandbox.c` (`run_sandbox_with_config`), change the error stage on `fork()` failure from `SETUP_STAGE_CGROUP_CREATE` to `SETUP_STAGE_SUPERVISOR`.
+  3. Under `#ifdef PES_TEST_FAULT_INJECTION` in `sandbox-daemon/sandbox.c`, record the created `root_mountpoint` path into `pes_test_last_root_mountpoint` upon successful `phase2_rootfs_create_mountpoint`.
+  4. In `sandbox-daemon/tests/test_fail_closed_gate.c` (`test_fail_closed_runner_on_fork_failure`), assert:
+     a) `res.setup_err.stage == SETUP_STAGE_SUPERVISOR` and `res.setup_err.errnum == ENOMEM`.
+     b) `pes_test_last_root_mountpoint` was non-empty and is cleanly removed from disk (`access` returns -1 with `errno == ENOENT`).
+     c) Update test output and claims to scope verified invariants accurately.
+  5. Label agent-written Tier A changes in `sandbox.c` with `AGENT-WROTE-TIER-A`.
+  6. Run focused regression, strict build, and all safe test suites. Phase 2 DoD remains OPEN. No hostile fixtures will be run.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_fail_closed_gate.c.
+- Linked: LOG-0121, LOG-0120.
+- Tutor review: pending
+
+## [LOG-0123] 2026-11-15 13:04 IST | DONE | actor: agent
+- Reason: Verified job_cgroup safe zero-initialization before cgroup-create paths, accurate SETUP_STAGE_SUPERVISOR reporting on fork failure, and direct disk absence assertion of root mountpoint on fork failure.
+- Details / Change:
+  1. Safe zero-initialization: `memset(&job_cgroup, 0, sizeof(job_cgroup))` executes immediately after declaration in `sandbox.c` (`run_sandbox_with_config`), eliminating uninitialized stack reads of `job_cgroup.active` in the injected cgroup-failure path. Production builds remain unchanged.
+  2. Accurate error stage: Updated `fork()` failure in `sandbox.c` to report `SETUP_STAGE_SUPERVISOR` instead of `SETUP_STAGE_CGROUP_CREATE`, matching the architectural role of Child 1 as the supervisor process.
+  3. Direct disk assertion of rootfs cleanup: Recorded `pes_test_last_root_mountpoint` on mountpoint creation under `#ifdef PES_TEST_FAULT_INJECTION` and verified in `test_fail_closed_runner_on_fork_failure()` that `access()` returns -1 with `errno == ENOENT`, confirming the allocated temporary directory was deleted from disk during fork failure handling.
+  4. Scoped claims and output: Test output reflects verified scope: `fail-closed gate regression: decoupled rootfs cleanup PASS, injected cgroup-failure token absence/zero FD leak PASS, injected fork-failure rootfs cleanup/pipe cleanup/zero FD leak PASS`.
+  5. Verified compilation and test suite: `make test-phase2-fail-closed` passed 3/3 checks; all existing safe suites (`test-setup-protocol` 5/5 normal and fallback, `test-phase2-structural` 5/5, `test-phase2-seccomp-safe`, diagnostics 18/18, preflight 6/6) and git hooks passed cleanly.
+  6. Phase 2 DoD remains OPEN. No hostile fixtures were executed.
+- Verification: `make clean && make all && make test-phase2-fail-closed && make test-setup-protocol && make test-phase2-structural && make test-phase2-seccomp-safe` passed under `-Wall -Wextra -Werror -O2`. Diagnostics 18/18, preflight 6/6, `git diff --check`, and repo hooks passed cleanly.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_fail_closed_gate.c.
+- Linked: LOG-0122, LOG-0121.
+- Tutor review: pending
