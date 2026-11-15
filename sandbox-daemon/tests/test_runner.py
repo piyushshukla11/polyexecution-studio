@@ -167,41 +167,108 @@ def validate_json_schema(parsed):
     return True, ""
 
 
-def find_lingering_processes():
+def find_lingering_processes(tracked_pids=None, cgroup_name=None):
     """
-    Search for processes owned by current user running runner or evil binaries.
+    Search for processes owned by current user running runner, evil binaries, or sandboxed target (/run/target).
+    Also detects lingering processes via cgroup membership (any /proc/<pid>/cgroup matching cgroup_name or /pes-)
+    and any explicitly tracked host PIDs that remain alive.
     Read-only inspection: strictly reports processes without killing anything.
     """
     lingering = []
+    my_pid = os.getpid()
     uid = os.getuid()
     proc_root = Path("/proc")
     if not proc_root.exists():
         return lingering
 
+    seen_pids = set()
+
     for p in proc_root.iterdir():
         if not p.is_dir() or not p.name.isdigit():
             continue
         try:
-            stat_file = p / "stat"
-            if not stat_file.exists():
+            pid = int(p.name)
+            if pid == my_pid:
                 continue
-            with open(stat_file, "r", errors="ignore") as f:
-                content = f.read()
             if p.stat().st_uid != uid:
                 continue
 
             cmdline_file = p / "cmdline"
-            if not cmdline_file.exists():
-                continue
-            with open(cmdline_file, "rb") as f:
-                cmd = f.read().replace(b"\x00", b" ").decode("latin1", errors="replace").strip()
+            cmd = ""
+            if cmdline_file.exists():
+                try:
+                    with open(cmdline_file, "rb") as f:
+                        cmd = f.read().replace(b"\x00", b" ").decode("latin1", errors="replace").strip()
+                except OSError:
+                    pass
 
-            if "tests/evil/bin" in cmd or "sandbox-runner" in cmd:
-                # Exclude self if cmdline contains test_runner.py
-                if "test_runner.py" not in cmd:
-                    lingering.append((int(p.name), cmd))
+            # Exclude self if cmdline contains test_runner.py
+            if "test_runner.py" in cmd:
+                continue
+
+            # Check cgroup membership
+            in_pes_cgroup = False
+            cgroup_file = p / "cgroup"
+            if cgroup_file.exists():
+                try:
+                    cgroup_content = cgroup_file.read_text()
+                    if cgroup_name and cgroup_name in cgroup_content:
+                        in_pes_cgroup = True
+                    elif "/pes-" in cgroup_content:
+                        in_pes_cgroup = True
+                except OSError:
+                    pass
+
+            # Check comm
+            comm = ""
+            comm_file = p / "comm"
+            if comm_file.exists():
+                try:
+                    comm = comm_file.read_text().strip()
+                except OSError:
+                    pass
+
+            is_lingering = False
+            reasons = []
+
+            if "tests/evil/bin" in cmd:
+                is_lingering = True
+                reasons.append("evil_bin")
+            if "sandbox-runner" in cmd:
+                is_lingering = True
+                reasons.append("sandbox_runner")
+            if "/run/target" in cmd or comm == "target":
+                is_lingering = True
+                reasons.append("sandboxed_target")
+            if in_pes_cgroup:
+                is_lingering = True
+                reasons.append("pes_cgroup")
+
+            if is_lingering:
+                seen_pids.add(pid)
+                desc = cmd if cmd else comm
+                lingering.append((pid, f"[{','.join(reasons)}] {desc}"))
         except (OSError, PermissionError):
             continue
+
+    # Also audit explicitly tracked host PIDs
+    if tracked_pids:
+        for t_pid in tracked_pids:
+            if t_pid == my_pid or t_pid in seen_pids:
+                continue
+            try:
+                os.kill(t_pid, 0)
+                cmd = "unknown"
+                try:
+                    with open(f"/proc/{t_pid}/cmdline", "rb") as f:
+                        cmd = f.read().replace(b"\x00", b" ").decode("latin1", errors="replace").strip()
+                except OSError:
+                    pass
+                seen_pids.add(t_pid)
+                lingering.append((t_pid, f"[tracked_pid_alive] {cmd}"))
+            except OSError:
+                pass
+
     return lingering
 
 
@@ -1021,15 +1088,109 @@ def find_delegated_cgroup_parent():
     return None
 
 
+def cgroup_kill_and_wait_populated_zero(cgroup_path, poll_timeout=2.0):
+    """
+    Guaranteed cgroup cleanup:
+    1. Writes '1' to cgroup.kill.
+    2. Polls cgroup.events for confirmed 'populated 0'.
+    3. If populated 0 is NOT observed before poll_timeout:
+       - Attempts to identify and SIGKILL surviving PIDs in cgroup.procs.
+       - Re-polls briefly.
+       - If still not populated 0: strictly ABORTS removal (does NOT call rmdir) and returns an explicit error.
+    4. Only upon confirmed 'populated 0': calls os.rmdir(cgroup_path).
+    5. Returns None on success, or an explicit error string describing the failure.
+    """
+    if not cgroup_path or not cgroup_path.exists():
+        return None
+
+    kill_file = cgroup_path / "cgroup.kill"
+    if kill_file.exists():
+        try:
+            kill_file.write_text("1")
+        except OSError as exc:
+            return f"Failed to write '1' to {kill_file}: {exc}"
+    else:
+        procs_file = cgroup_path / "cgroup.procs"
+        if procs_file.exists():
+            try:
+                for line in procs_file.read_text().splitlines():
+                    if line.strip():
+                        try:
+                            os.kill(int(line.strip()), signal.SIGKILL)
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+
+    poll_start = time.time()
+    populated_zero = False
+    events_file = cgroup_path / "cgroup.events"
+
+    while time.time() - poll_start < poll_timeout:
+        if not cgroup_path.exists():
+            return None
+        if events_file.exists():
+            try:
+                if "populated 0" in events_file.read_text():
+                    populated_zero = True
+                    break
+            except OSError:
+                pass
+        time.sleep(0.01)
+
+    if not populated_zero and cgroup_path.exists():
+        procs_file = cgroup_path / "cgroup.procs"
+        if procs_file.exists():
+            try:
+                surviving_pids = [int(line.strip()) for line in procs_file.read_text().splitlines() if line.strip()]
+                for p in surviving_pids:
+                    try:
+                        os.kill(p, signal.SIGKILL)
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+        retry_start = time.time()
+        while time.time() - retry_start < 0.2:
+            if events_file.exists():
+                try:
+                    if "populated 0" in events_file.read_text():
+                        populated_zero = True
+                        break
+                except OSError:
+                    pass
+            time.sleep(0.01)
+
+    if not populated_zero and cgroup_path.exists():
+        procs_file = cgroup_path / "cgroup.procs"
+        surviving = []
+        if procs_file.exists():
+            try:
+                surviving = procs_file.read_text().split()
+            except OSError:
+                pass
+        return (
+            f"cgroup {cgroup_path} failed to reach confirmed 'populated 0' after {poll_timeout}s "
+            f"(surviving PIDs: {surviving}); aborted removal to avoid leaking hidden state"
+        )
+
+    try:
+        os.rmdir(cgroup_path)
+    except OSError as exc:
+        return f"os.rmdir({cgroup_path}) failed after confirmed populated 0: {exc}"
+
+    return None
+
+
 def run_runner_with_watchdog(cmd, outer_timeout=5.0, cgroup_sampler=None, target_binary_name=None):
     """
     Execute sandbox-runner under an independent safety watchdog with guaranteed failure cleanup.
 
     If an outer timeout or unhandled exception occurs:
     1. Locates any created job cgroup under the delegated parent.
-    2. Writes '1' to cgroup.kill, polls cgroup.events for 'populated 0', and deletes the cgroup via rmdir.
+    2. Writes '1' to cgroup.kill, waits for confirmed 'populated 0' before removing the cgroup via rmdir.
     3. Sends SIGKILL to the runner process group and reaps the runner process to prevent zombies.
-    4. Audits the host process table for lingering test descendants.
+    4. Audits the host process table for lingering test descendants via tracked PIDs, cgroup membership, and /run/target cmdlines.
     5. Returns cleanup errors explicitly; never leaves orphaned tasks or cgroups.
 
     Returns: (stdout, stderr, returncode, timed_out_bool, cgroup_path, cleanup_err, lingering)
@@ -1049,6 +1210,8 @@ def run_runner_with_watchdog(cmd, outer_timeout=5.0, cgroup_sampler=None, target
     cgroup_path = None
     timed_out = False
     cleanup_err = None
+    tracked_pids = set()
+    tracked_pids.add(proc.pid)
 
     try:
         while True:
@@ -1062,91 +1225,106 @@ def run_runner_with_watchdog(cmd, outer_timeout=5.0, cgroup_sampler=None, target
                     cgroup_path = cand
                     break
 
-            if cgroup_sampler and cgroup_path and cgroup_path.exists():
-                try:
-                    cgroup_sampler(cgroup_path)
-                except Exception:
-                    pass
+            if cgroup_path and cgroup_path.exists():
+                procs_file = cgroup_path / "cgroup.procs"
+                if procs_file.exists():
+                    try:
+                        for line in procs_file.read_text().splitlines():
+                            if line.strip():
+                                tracked_pids.add(int(line.strip()))
+                    except OSError:
+                        pass
+
+                if cgroup_sampler:
+                    try:
+                        cgroup_sampler(cgroup_path)
+                    except Exception:
+                        pass
 
             if proc.poll() is not None:
                 break
             time.sleep(0.01)
 
         if timed_out:
-            # 1. Terminate all remaining tasks in the job cgroup if found
+            # 1. Terminate all remaining tasks in the job cgroup, waiting for confirmed populated 0
             if cgroup_path and cgroup_path.exists():
-                try:
-                    kill_file = cgroup_path / "cgroup.kill"
-                    if kill_file.exists():
-                        kill_file.write_text("1")
-                    poll_start = time.time()
-                    while time.time() - poll_start < 1.0:
-                        ev_file = cgroup_path / "cgroup.events"
-                        if ev_file.exists() and "populated 0" in ev_file.read_text():
-                            break
-                        time.sleep(0.01)
-                    os.rmdir(cgroup_path)
-                except Exception as exc:
-                    cleanup_err = f"Failed to clean up job cgroup {cgroup_path} on timeout: {exc}"
+                err = cgroup_kill_and_wait_populated_zero(cgroup_path, poll_timeout=2.0)
+                if err:
+                    cleanup_err = err
 
             # 2. Terminate runner process group on host
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
+            except OSError as exc:
+                if exc.errno != errno.ESRCH:
+                    err_msg = f"os.killpg({proc.pid}) failed: {exc}"
+                    cleanup_err = f"{cleanup_err}; {err_msg}" if cleanup_err else err_msg
 
             # 3. Reap runner process to guarantee no zombie process remains
             try:
-                stdout, stderr = proc.communicate(timeout=1.0)
-            except Exception:
+                stdout, stderr = proc.communicate(timeout=2.0)
+            except Exception as exc:
                 stdout, stderr = "", ""
+                err_msg = f"Failed to reap runner process {proc.pid}: {exc}"
+                cleanup_err = f"{cleanup_err}; {err_msg}" if cleanup_err else err_msg
 
             # 4. Check for surviving test descendants
-            time.sleep(0.1)
-            lingering = find_lingering_processes()
+            time.sleep(0.05)
+            lingering = find_lingering_processes(
+                tracked_pids=tracked_pids,
+                cgroup_name=cgroup_path.name if cgroup_path else None,
+            )
             if target_binary_name:
-                lingering = [p for p in lingering if target_binary_name in p[1]]
+                lingering = [p for p in lingering if target_binary_name in p[1] or "target" in p[1] or "tracked_pid" in p[1] or "pes_cgroup" in p[1]]
 
             return stdout, stderr, proc.returncode, True, cgroup_path, cleanup_err, lingering
 
         # Runner completed within watchdog timeout: reap process
-        stdout, stderr = proc.communicate(timeout=2.0)
+        try:
+            stdout, stderr = proc.communicate(timeout=2.0)
+        except Exception as exc:
+            stdout, stderr = "", ""
+            cleanup_err = f"Failed to reap completed runner process: {exc}"
 
         # Audit that the runner removed its job cgroup
         if cgroup_path and cgroup_path.exists():
             cleanup_err = f"Job cgroup directory {cgroup_path} was not removed after runner exit"
-            try:
-                kill_file = cgroup_path / "cgroup.kill"
-                if kill_file.exists():
-                    kill_file.write_text("1")
-                os.rmdir(cgroup_path)
-            except Exception:
-                pass
+            err = cgroup_kill_and_wait_populated_zero(cgroup_path, poll_timeout=2.0)
+            if err:
+                cleanup_err = f"{cleanup_err}; cleanup failed: {err}"
 
         time.sleep(0.05)
-        lingering = find_lingering_processes()
+        lingering = find_lingering_processes(
+            tracked_pids=tracked_pids,
+            cgroup_name=cgroup_path.name if cgroup_path else None,
+        )
         if target_binary_name:
-            lingering = [p for p in lingering if target_binary_name in p[1]]
+            lingering = [p for p in lingering if target_binary_name in p[1] or "target" in p[1] or "tracked_pid" in p[1] or "pes_cgroup" in p[1]]
 
         return stdout, stderr, proc.returncode, False, cgroup_path, cleanup_err, lingering
 
     except Exception as exc:
+        cleanup_failures = []
         if cgroup_path and cgroup_path.exists():
-            try:
-                kill_file = cgroup_path / "cgroup.kill"
-                if kill_file.exists():
-                    kill_file.write_text("1")
-                os.rmdir(cgroup_path)
-            except Exception:
-                pass
+            err = cgroup_kill_and_wait_populated_zero(cgroup_path, poll_timeout=2.0)
+            if err:
+                cleanup_failures.append(err)
+
         try:
             os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
+        except OSError as e:
+            if e.errno != errno.ESRCH:
+                cleanup_failures.append(f"killpg({proc.pid}) failed: {e}")
+
         try:
-            proc.communicate(timeout=1.0)
-        except Exception:
-            pass
+            proc.communicate(timeout=2.0)
+        except Exception as e:
+            cleanup_failures.append(f"reap runner({proc.pid}) failed: {e}")
+
+        if cleanup_failures:
+            raise RuntimeError(
+                f"Exception during watchdog execution ({exc}) WITH CLEANUP FAILURES: {'; '.join(cleanup_failures)}"
+            ) from exc
         raise exc
 
 
@@ -1495,6 +1673,84 @@ def test_phase2_net_connect(tc):
     )
 
 
+def test_phase2_watchdog_cleanup(tc):
+    """Phase 2 Check 04: Watchdog failure-path teardown, confirmed populated 0 check, and lingering detection."""
+    # 1. Test unit-level abort when populated 0 is absent
+    test_dummy = tempfile.mkdtemp(prefix="pes_cgroup_dummy_")
+    try:
+        dummy_path = Path(test_dummy)
+        err = cgroup_kill_and_wait_populated_zero(dummy_path, poll_timeout=0.05)
+        if not err or "failed to reach confirmed 'populated 0'" not in err:
+            tc.status = "FAILED"
+            tc.failure_category = "CONTRACT_VIOLATION"
+            tc.detail = f"Expected cgroup_kill_and_wait_populated_zero to abort without populated 0; got err={err!r}"
+            return
+        if not dummy_path.exists():
+            tc.status = "FAILED"
+            tc.failure_category = "CONTRACT_VIOLATION"
+            tc.detail = "cgroup_kill_and_wait_populated_zero removed directory even though populated 0 was never observed!"
+            return
+    finally:
+        try:
+            os.rmdir(test_dummy)
+        except OSError:
+            pass
+
+    # 2. Test live watchdog timeout cleanup on a long-running process
+    delegated_parent = find_delegated_cgroup_parent()
+    if not delegated_parent:
+        tc.status = "FAILED"
+        tc.failure_category = "SYSTEM_ENVIRONMENT_ERROR"
+        tc.detail = "No writable delegated cgroup parent found"
+        return
+
+    # Run sleeper with 10s runner timeout, but enforce a 0.3s outer watchdog timeout
+    cmd = [str(RUNNER_BIN), "--timeout-ms", "10000", "tests/evil/bin/sleeper"]
+    tc.command = cmd
+
+    out, err, ret, timed_out, cgroup_path, cleanup_err, lingering = run_runner_with_watchdog(
+        cmd, outer_timeout=0.3, target_binary_name="sleeper"
+    )
+    tc.raw_stdout, tc.raw_stderr = out, err
+
+    if not timed_out:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Expected watchdog outer timeout (0.3s); completed early with ret={ret}"
+        return
+
+    if cleanup_err:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Watchdog cleanup failed: {cleanup_err}"
+        return
+
+    if not cgroup_path:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = "Watchdog failed to locate the job cgroup path during execution"
+        return
+
+    if cgroup_path.exists():
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Job cgroup directory {cgroup_path} still exists on host after watchdog cleanup"
+        return
+
+    if lingering:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Detected lingering process(es) after watchdog timeout cleanup: {lingering}"
+        return
+
+    tc.status = "PASSED"
+    tc.detail = (
+        f"Watchdog confirmed populated 0 before rmdir; cgroup {cgroup_path.name} removed; "
+        f"runner reaped; 0 lingering processes (cgroup membership, cmdline /run/target, and tracked PIDs clean); "
+        f"unconfirmed populated 0 abort verified"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Test Runner Orchestration
 # ---------------------------------------------------------------------------
@@ -1524,6 +1780,7 @@ PHASE2_CHECKS = [
     ("test_phase2_fork_bomb", "Fork bomb containment (Phase 2)", test_phase2_fork_bomb),
     ("test_phase2_read_etc_passwd", "Host filesystem snooping defense (Phase 2)", test_phase2_read_etc_passwd),
     ("test_phase2_net_connect", "Outbound network connect defense (Phase 2)", test_phase2_net_connect),
+    ("test_phase2_watchdog_cleanup", "Watchdog failure cleanup & target detection (Phase 2)", test_phase2_watchdog_cleanup),
 ]
 
 

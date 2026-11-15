@@ -2079,3 +2079,38 @@
 - Files: `PROGRESS.md`, `sandbox-daemon/tests/evil/net_connect.c`, `sandbox-daemon/tests/test_runner.py`.
 - Linked: LOG-0143, LOG-0142.
 - Tutor review: ready for tutor review
+
+
+## [LOG-0145] 2026-11-15 23:31 IST | PLAN | actor: agent
+- Reason: Address tutor review findings on watchdog failure-path cleanup (guarantee wait for confirmed `populated 0` before cgroup removal, preserve and report all cleanup/reap failures, detect surviving targets via cgroup membership, tracked host PIDs, and `/run/target` command lines, and add a bounded watchdog cleanup regression test).
+- Details / Change:
+  1. In `sandbox-daemon/tests/test_runner.py`, implement `cgroup_kill_and_wait_populated_zero()`: writes `1` to `cgroup.kill`, polls for confirmed `populated 0`, aborts `rmdir` if `populated 0` was not confirmed within the deadline to prevent leaking hidden state, and returns explicit descriptive errors without swallowing them.
+  2. In `sandbox-daemon/tests/test_runner.py`, update `run_runner_with_watchdog()`:
+     - Continuously tracks all PIDs attached to `cgroup.procs` and the runner PID.
+     - On timeout, invokes `cgroup_kill_and_wait_populated_zero()` ensuring confirmed `populated 0` before directory removal, kills runner process group (`SIGKILL`), reaps runner process via `proc.communicate()`, and preserves/reports any cleanup failure.
+     - In the exception handler (`except Exception as exc:`), invokes `cgroup_kill_and_wait_populated_zero()`, kills process group, reaps runner process, and raises `RuntimeError` chaining cleanup failures with the original exception if cleanup fails.
+  3. In `sandbox-daemon/tests/test_runner.py`, upgrade `find_lingering_processes()`:
+     - Detects command lines containing `/run/target` or process comm `target`.
+     - Detects cgroup membership via `/proc/<pid>/cgroup` matching `cgroup_name` or `pes-*`.
+     - Detects surviving processes across explicitly tracked host PIDs.
+  4. In `sandbox-daemon/tests/test_runner.py`, add `test_phase2_watchdog_cleanup` (P2-04): a bounded regression test that triggers an outer watchdog timeout on a long-running process, asserts clean teardown (`timed_out=True`, `cleanup_err=None`, cgroup removed, runner reaped, 0 lingering processes), and asserts that `cgroup_kill_and_wait_populated_zero` aborts removal and returns an explicit error when `populated 0` is not confirmed.
+  5. Run full test suite on Omarchy (`make -C sandbox-daemon test`). Verify 18/18 Phase 1 tests pass and 4/4 Phase 2 checks pass.
+- Files: `PROGRESS.md`, `sandbox-daemon/tests/test_runner.py`.
+- Linked: LOG-0144.
+- Tutor review: pending
+
+
+## [LOG-0146] 2026-11-15 23:35 IST | DONE | actor: agent
+- Order: PLAN was LOG-0145.
+- Reason: Complete watchdog failure cleanup hardening, target detection, and regression test in `test_runner.py` resolving tutor review blocking items.
+- Details / Change:
+  1. In `sandbox-daemon/tests/test_runner.py`, implemented `cgroup_kill_and_wait_populated_zero()`: writes `1` to `cgroup.kill` (with direct PID SIGKILL fallback), polls for confirmed `populated 0` in `cgroup.events`, strictly aborts directory removal if `populated 0` is not confirmed within deadline (returning an explicit error listing surviving PIDs), and only invokes `os.rmdir()` once `populated 0` is verified.
+  2. In `sandbox-daemon/tests/test_runner.py`, updated `run_runner_with_watchdog()`: continuously accumulates all PIDs from `cgroup.procs` and the runner PID; uses `cgroup_kill_and_wait_populated_zero()` on timeout/exit; terminates runner process group via `os.killpg(proc.pid, signal.SIGKILL)`; reaps the runner via `proc.communicate(timeout=2.0)`; preserves all cleanup errors in `cleanup_err`; and in the exception handler chains any cleanup failures into a descriptive `RuntimeError` rather than swallowing them.
+  3. In `sandbox-daemon/tests/test_runner.py`, upgraded `find_lingering_processes()` to detect sandboxed targets executed as `/run/target` (or comm `target`), detect cgroup membership via `/proc/<pid>/cgroup` containing `/pes-` or matching `cgroup_name`, and audit explicitly tracked host PIDs.
+  4. In `sandbox-daemon/tests/test_runner.py`, added `test_phase2_watchdog_cleanup` (P2-04): validates that `cgroup_kill_and_wait_populated_zero` aborts removal and returns an error when `populated 0` is missing, and validates live outer-watchdog timeout on `sleeper` achieves guaranteed teardown with verified `populated 0`, cgroup removal, runner reaping, and 0 lingering processes.
+  5. Verification: Safe targets (`test-setup-protocol`, `test-phase2-structural`, `test-phase2-seccomp-safe`, `test-phase2-fail-closed`) passed. Full suite passed 22/22 (18/18 Phase 1 + 4/4 Phase 2). Repository hygiene and append-only checks clean.
+  6. Phase 2 DoD remaining status: Phase 2 runtime DoD remains OPEN pending tutor approval. Branch `phase/2-sandbox-hardening` remains unmerged into `main`. Main Phase 3 worktree in `/home/zogratis/Projects/Personal Projects/polyexecution-studio` remains completely untouched.
+- Verification: `make clean all evil && make test` passed (18 Phase 1 + 4 Phase 2 = 22 passed, 0 failed); `make test-setup-protocol test-phase2-structural test-phase2-seccomp-safe test-phase2-fail-closed` passed; `bash scripts/check_repo_hygiene.sh && bash scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `sandbox-daemon/tests/test_runner.py`.
+- Linked: LOG-0145, LOG-0144.
+- Tutor review: ready for tutor review
