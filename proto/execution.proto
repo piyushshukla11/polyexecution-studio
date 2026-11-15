@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package pes.execution.v1;
+
+option java_multiple_files = true;
+option java_package = "pes.execution.v1";
+option java_outer_classname = "ExecutionProto";
+
+enum Language {
+  LANGUAGE_UNSPECIFIED = 0;
+  LANGUAGE_C = 1;
+  LANGUAGE_PYTHON = 2;
+}
+
+enum ExecutionStatus {
+  STATUS_UNSPECIFIED = 0;
+  OK = 1;
+  COMPILE_ERROR = 2;
+  RUNTIME_ERROR = 3;
+  TIMEOUT = 4;
+  MEMORY_LIMIT = 5;
+  OUTPUT_LIMIT = 6;
+  SANDBOX_ERROR = 7;
+}
+
+message ResourceLimits {
+  int64 cpu_ms = 1;
+  int64 wall_ms = 2;
+  int64 memory_mb = 3;
+  int64 max_output_kb = 4;
+}
+
+message ExecuteRequest {
+  string job_id = 1;
+  Language language = 2;
+  string source_code = 3;
+  string stdin = 4;
+  ResourceLimits limits = 5;
+}
+
+message ExecuteResponse {
+  string job_id = 1;
+  ExecutionStatus status = 2;
+  string stdout = 3;
+  string stderr = 4;
+  int32 exit_code = 5;
+  int32 signal = 6;
+  int64 wall_ms = 7;
+  int64 cpu_ms = 8;
+  int64 peak_memory_kb = 9;
+}
+
+service ExecutionService {
+  rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+  rpc ExecuteStream(ExecuteRequest) returns (stream ExecuteResponse);
+}
