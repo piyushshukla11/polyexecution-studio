@@ -83,6 +83,14 @@ int main(int argc, char *argv[]) {
     char target_str[64];
     snprintf(target_str, sizeof(target_str), "%s:%d", target_ip, target_port);
 
+    /* Record network namespace inode for direct isolation verification */
+    char netns[64] = {0};
+    ssize_t ns_len = readlink("/proc/self/ns/net", netns, sizeof(netns) - 1);
+    if (ns_len > 0) {
+        netns[ns_len] = '\0';
+        emit_diag("netns", netns, "OBSERVED", 0);
+    }
+
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
         int err = errno;

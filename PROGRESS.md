@@ -2049,3 +2049,33 @@
 - Files: `PROGRESS.md`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/tests/test_runner.py`.
 - Linked: LOG-0141, LOG-0140.
 - Tutor review: pending
+
+
+## [LOG-0143] 2026-11-15 23:11 IST | PLAN | actor: agent
+- Reason: Audit and harden Phase 2 integration harness evidence accuracy and failure-path cleanup (address tutor review findings on cgroup teardown observation, netns direct isolation probe, failure cleanup with cgroup kill/reap, and RLIMIT_NPROC scope).
+- Details / Change:
+  1. In `sandbox-daemon/tests/evil/net_connect.c`, inspect `/proc/self/ns/net` via `readlink` at initialization and emit `DIAG: OP=netns TARGET=%s STATUS=OBSERVED` on stderr. This leverages seccomp-allowed `readlink` and mounted procfs to provide direct runtime evidence of `CLONE_NEWNET` establishing a distinct network namespace from the host.
+  2. In `sandbox-daemon/tests/test_runner.py`, implement `run_runner_with_watchdog()` to supervise all runner executions. On timeout or exception, it issues `cgroup.kill = 1`, polls `cgroup.events` for `populated 0`, removes the cgroup via `os.rmdir()`, terminates the runner process group (`SIGKILL`), reaps the runner process to prevent zombies, checks for lingering descendants, and reports any cleanup failure explicitly.
+  3. In `sandbox-daemon/tests/test_runner.py`, update `test_phase2_fork_bomb`: clarify in evidence reporting that direct harness observations are `pids.max == 32`, live `pids.events max > 0`, `pids.current <= 32`, and post-reap cgroup removal (`not cgroup_path.exists()`), while `populated 0` is verified in the runner's code-path in `phase2_cgroup_kill()` prior to `rmdir()`.
+  4. In `sandbox-daemon/tests/test_runner.py`, update `test_phase2_net_connect`: remove the claim that the local endpoint was tested/unreachable. Compare target's emitted `net:[<inode>]` against host `os.readlink('/proc/self/ns/net')` to directly prove `CLONE_NEWNET` isolation, while proving seccomp policy denial via `socket()` returning `EPERM`.
+  5. In `sandbox-daemon/tests/test_runner.py`, update `test_phase2_read_etc_passwd` to use `run_runner_with_watchdog()` with guaranteed canary removal and explicit cleanup assertions.
+  6. Rebuild binaries, run safe checks, and run full test suite on Omarchy (`make test`). Ensure 21/21 tests pass with strict failure-safe cleanup.
+- Files: `PROGRESS.md`, `sandbox-daemon/tests/evil/net_connect.c`, `sandbox-daemon/tests/test_runner.py`.
+- Linked: LOG-0142.
+- Tutor review: pending
+
+
+## [LOG-0144] 2026-11-15 23:20 IST | DONE | actor: agent
+- Order: PLAN was LOG-0143.
+- Reason: Complete Phase 2 evidence audit and harness hardening in `/tmp/pes-phase2` on `phase/2-sandbox-hardening` to resolve all four tutor review findings before submission.
+- Details / Change:
+  1. Cgroup teardown evidence: Clarified direct harness observations vs code-path assertions. Harness directly samples and verifies `pids.max == 32`, records thousands of kernel fork rejections (`pids.events max > 5000`), samples peak `pids.current` (asserted <= 34 accounting for the Linux kernel `kernel/cgroup/pids.c` `pids_can_fork()` `atomic64_inc_return` transient counter increment during concurrent fork attempts before immediate `atomic64_dec`, steady-state <= 32), and verifies post-reap cgroup directory removal (`not cgroup_path.exists()`). Documented that `populated 0` is verified by the runner's production code path in `phase2_cgroup_kill()` before calling `rmdir()`.
+  2. Network namespace isolation evidence: In `sandbox-daemon/tests/evil/net_connect.c`, added direct netns inode probe via `readlink("/proc/self/ns/net")` emitting `DIAG: OP=netns TARGET=%s STATUS=OBSERVED` on stderr. In `test_phase2_net_connect()`, compared target's namespace inode against host (`os.readlink('/proc/self/ns/net')`) and asserted `target_netns != host_netns` (`net:[4026532998] != net:[4026531833]`). Removed unverified claim of local endpoint unreachability. Separately verified causal seccomp denial via `socket()` returning `EPERM` (errno 1, `BLOCKED_BY_POLICY`).
+  3. Failure cleanup and watchdog: Implemented `run_runner_with_watchdog()` in `sandbox-daemon/tests/test_runner.py` wrapping all runner executions. On outer timeout or unhandled exception, it discovers the active job cgroup `pes-<pid>-*`, issues `cgroup.kill = 1`, polls `cgroup.events` for `populated 0`, removes the cgroup via `os.rmdir()`, sends `SIGKILL` to the runner's process group (`os.killpg`), and reaps the runner process via `proc.communicate()` to prevent zombie processes. In `test_phase2_read_etc_passwd()`, wrapped test execution in `try...finally` to guarantee canary file unlinking.
+  4. RLIMIT_NPROC adjustment rationale: Documented that `RLIMIT_NPROC = 64` in `phase2_target_drop_capabilities_and_identity()` acts as an essential secondary safety net without shadowing or preempting cgroup v2 `pids.max = 32`. In Linux `copy_process()`, rlimits are checked before `cgroup_can_fork()`. Setting `RLIMIT_NPROC = 64` allows the 33rd fork attempt to reach `cgroup_can_fork()`, where cgroup v2 `pids.max = 32` denies the fork, increments `pids.events` `max` (observed > 5,000 times), and enforces the primary containment ceiling.
+  5. Verification: Safe test targets (`test-setup-protocol`, `test-phase2-structural`, `test-phase2-seccomp-safe`, `test-phase2-fail-closed`) passed. Full integration suite passed 21/21 (18/18 Phase 1 + 3/3 Phase 2). Repository hygiene and append-only checks passed cleanly.
+  6. Phase 2 DoD remaining status: Phase 2 runtime DoD remains OPEN pending tutor review and sign-off. Branch `phase/2-sandbox-hardening` remains unmerged into `main`. Main Phase 3 worktree in `/home/zogratis/Projects/Personal Projects/polyexecution-studio` remains completely untouched.
+- Verification: `make clean all evil && make test` passed (18 Phase 1 + 3 Phase 2 = 21 passed, 0 failed); `make test-setup-protocol test-phase2-structural test-phase2-seccomp-safe test-phase2-fail-closed` passed; `bash scripts/check_repo_hygiene.sh && bash scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `sandbox-daemon/tests/evil/net_connect.c`, `sandbox-daemon/tests/test_runner.py`.
+- Linked: LOG-0143, LOG-0142.
+- Tutor review: ready for tutor review
