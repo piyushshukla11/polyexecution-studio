@@ -32,7 +32,7 @@ int phase2_set_parent_death_signal(pid_t expected_parent) {
     return 0;
 }
 
-static int read_cap_last_cap(int *last_cap) {
+int phase2_privilege_read_cap_last_cap(int *last_cap) {
     FILE *file = fopen("/proc/sys/kernel/cap_last_cap", "re");
     if (!file) return -1;
     int value = -1;
@@ -50,9 +50,7 @@ static int read_cap_last_cap(int *last_cap) {
     return 0;
 }
 
-static int prune_capability_bounding_set(void) {
-    int last_cap;
-    if (read_cap_last_cap(&last_cap) < 0) return -1;
+static int prune_capability_bounding_set(int last_cap) {
     for (int cap = 0; cap <= last_cap; cap++) {
         if (cap == CAP_SETPCAP) continue;
         if (prctl(PR_CAPBSET_DROP, cap, 0, 0, 0) < 0) return -1;
@@ -120,6 +118,36 @@ static int verify_zero_capability_masks(void) {
     }
     if (result < 0) errno = saved_errno ? saved_errno : EPERM;
     return result;
+}
+
+static int verify_zero_capability_state(int last_cap) {
+    struct __user_cap_header_struct header = {
+        .version = _LINUX_CAPABILITY_VERSION_3,
+        .pid = 0
+    };
+    struct __user_cap_data_struct data[2] = {{0}};
+    if (syscall(SYS_capget, &header, data) < 0) return -1;
+    for (size_t i = 0; i < 2; i++) {
+        if (data[i].inheritable != 0 || data[i].permitted != 0 || data[i].effective != 0) {
+            errno = EPERM;
+            return -1;
+        }
+    }
+    for (int cap = 0; cap <= last_cap; cap++) {
+        int bounding = prctl(PR_CAPBSET_READ, cap, 0, 0, 0);
+        if (bounding < 0) return -1;
+        if (bounding != 0) {
+            errno = EPERM;
+            return -1;
+        }
+        int ambient = prctl(PR_CAP_AMBIENT, PR_CAP_AMBIENT_IS_SET, cap, 0, 0);
+        if (ambient < 0) return -1;
+        if (ambient != 0) {
+            errno = EPERM;
+            return -1;
+        }
+    }
+    return 0;
 }
 
 static int allow_syscall(scmp_filter_ctx filter, int syscall_number) {
@@ -205,19 +233,21 @@ static int install_seccomp_allowlist(void) {
     return 0;
 }
 
-static int drop_base_privileges(void) {
-    if (prune_capability_bounding_set() < 0) return -1;
+static int drop_base_privileges(int last_cap, bool proc_available) {
+    if (prune_capability_bounding_set(last_cap) < 0) return -1;
     if (clear_supplementary_groups() < 0) return -1;
     if (clear_ambient_capabilities() < 0) return -1;
     if (set_unprivileged_identity() < 0) return -1;
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) return -1;
     if (prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) < 0) return -1;
-    if (verify_zero_capability_masks() < 0) return -1;
+    if ((proc_available ? verify_zero_capability_masks() : verify_zero_capability_state(last_cap)) < 0) return -1;
     return 0;
 }
 
 int phase2_target_drop_capabilities_and_identity(void) {
-    if (prune_capability_bounding_set() < 0) return -1;
+    int last_cap;
+    if (phase2_privilege_read_cap_last_cap(&last_cap) < 0 ||
+        prune_capability_bounding_set(last_cap) < 0) return -1;
     if (clear_supplementary_groups() < 0) return -1;
     if (clear_ambient_capabilities() < 0) return -1;
     if (set_unprivileged_identity() < 0) return -1;
@@ -240,7 +270,11 @@ int phase2_target_install_seccomp(void) {
     return install_seccomp_allowlist();
 }
 
-int phase2_supervisor_drop_privileges(void) {
-    if (drop_base_privileges() < 0) return -1;
+int phase2_supervisor_drop_privileges(int last_cap) {
+    if (last_cap < 0 || last_cap > 4096) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (drop_base_privileges(last_cap, false) < 0) return -1;
     return 0;
 }

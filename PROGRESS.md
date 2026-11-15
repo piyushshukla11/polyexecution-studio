@@ -1908,3 +1908,28 @@
 - Files: `PROGRESS.md`, `sandbox-daemon/phase2_cgroup.c`, `sandbox-daemon/tests/test_phase2_cgroup.c`.
 - Linked: LOG-0131, LOG-0123.
 - Tutor review: pending
+
+## [LOG-0133] 2026-11-15 19:48 IST | PLAN | actor: agent
+- Reason: Fix the supervisor privilege-drop failure observed after the live runner passed cgroup setup and returned `stage=23 errno=2`.
+- Details / Change:
+  1. Capture `/proc/sys/kernel/cap_last_cap` before `pivot_root`, while the supervisor can still access the host proc mount.
+  2. Pass the captured capability limit into the supervisor privilege-drop path instead of reopening `/proc` after pivoting into the minimal rootfs.
+  3. Verify the supervisor's zero capability state with `capget` and `prctl` for effective/permitted/inheritable, bounding, and ambient capabilities, because the supervisor intentionally has no procfs mount.
+  4. Keep the target's existing post-procfs `/proc/self/status` verification unchanged.
+  5. Run strict build and safe regression suites only; do not run Phase 2 attack fixtures. Keep Phase 2 DoD OPEN until live runtime evidence passes.
+- Files: `PROGRESS.md`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/phase2_privilege.h`, `sandbox-daemon/sandbox.c`.
+- Linked: LOG-0132.
+- Tutor review: pending
+
+## [LOG-0134] 2026-11-15 19:48 IST | DONE | actor: agent
+- Reason: Prevent supervisor privilege dropping from reading procfs after the private-root pivot, and verify the supervisor's zero capability state through kernel interfaces.
+- Details / Change:
+  1. Exported `phase2_privilege_read_cap_last_cap()` and call it after combined namespace creation but before rootfs preparation/pivot.
+  2. Pass the captured limit into `phase2_supervisor_drop_privileges()`. Supervisor privilege dropping now checks capability state via `capget`, `PR_CAPBSET_READ`, and `PR_CAP_AMBIENT_IS_SET`; it no longer depends on `/proc` being mounted in the supervisor rootfs.
+  3. The target child still mounts procfs before privilege dropping and retains its strict `/proc/self/status` zero-mask verification.
+  4. Strict build and safe regressions passed: setup protocol 5/5 plus fallback 5/5, cgroup fake-tree 5/5, seccomp probe, fail-closed cleanup regression. No hostile Phase 2 fixture was executed.
+  5. Phase 2 DoD remains OPEN. The Codex execution environment still cannot reach the native Omarchy delegated cgroup, so only Piyush's native terminal can validate the next runner stage.
+- Verification: `make -C sandbox-daemon clean all test-setup-protocol test-phase2-structural test-phase2-seccomp-safe test-phase2-fail-closed` passed under `-Wall -Wextra -Werror -O2`; `git diff --check`, append-only validation, and hygiene checks passed.
+- Files: `PROGRESS.md`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/phase2_privilege.h`, `sandbox-daemon/sandbox.c`.
+- Linked: LOG-0133, LOG-0132.
+- Tutor review: pending

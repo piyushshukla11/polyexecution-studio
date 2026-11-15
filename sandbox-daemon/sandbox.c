@@ -667,6 +667,11 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NAMESPACES, errno);
         }
 
+        int supervisor_last_cap;
+        if (phase2_privilege_read_cap_last_cap(&supervisor_last_cap) < 0) {
+            child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CAPABILITY_DROP, errno);
+        }
+
         char target_path[PATH_MAX];
         if (phase2_rootfs_prepare(binary_path, root_mountpoint, target_path, sizeof(target_path)) < 0) {
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_ROOTFS, errno);
@@ -707,7 +712,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         /* The trusted supervisor stays outside the PID namespace and reaps PID 1. */
         close(STDOUT_FILENO);
         close(STDERR_FILENO);
-        if (phase2_supervisor_drop_privileges() < 0) {
+        if (phase2_supervisor_drop_privileges(supervisor_last_cap) < 0) {
             int supervisor_errno = errno;
             int target_status = 0;
             struct rusage target_usage;
