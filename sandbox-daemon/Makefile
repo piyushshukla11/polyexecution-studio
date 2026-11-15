@@ -72,4 +72,9 @@ test-phase2-fail-closed: all
 	$(CC) $(CFLAGS) -DPES_TEST_FAULT_INJECTION -o $(EVIL_BIN_DIR)/test_fail_closed_gate tests/test_fail_closed_gate.c phase2_cgroup.c phase2_userns.c phase2_rootfs.c phase2_privilege.c $(LDLIBS)
 	$(EVIL_BIN_DIR)/test_fail_closed_gate
 
-.PHONY: all clean evil test test-setup-protocol test-phase2-structural probe-userns-mapping test-phase2-seccomp-safe test-phase2-fail-closed phase2-evil
+test-workspace-handoff: all
+	mkdir -p $(EVIL_BIN_DIR)
+	$(CC) $(CFLAGS) -o $(EVIL_BIN_DIR)/test_workspace_handoff tests/test_workspace_handoff.c phase2_rootfs.c
+	$(EVIL_BIN_DIR)/test_workspace_handoff
+
+.PHONY: all clean evil test test-setup-protocol test-phase2-structural probe-userns-mapping test-phase2-seccomp-safe test-phase2-fail-closed test-workspace-handoff phase2-evil

@@ -17,6 +17,7 @@
 - Linked: (LOG ids)
 - Piyush prediction (optional):
 - Tutor review: pending
+
 ```
 
 ---
@@ -1885,6 +1886,135 @@
 - Linked: LOG-0122, LOG-0121.
 - Tutor review: pending
 
+## [LOG-0124] 2026-11-15 13:21 IST | DECISION | actor: agent
+- Reason: Record owner-directed parallel-work exception authorizing Phase 3 implementation while Phase 2 runtime DoD remains open and unmerged.
+- Details / Change:
+  1. Owner authorization: Piyush explicitly authorized beginning Phase 3 implementation (Kotlin worker, gRPC execution service, sandboxed compile/run pipeline) in parallel while Phase 2's runtime DoD remains open.
+  2. Status of Phase 2: Phase 2 runtime DoD remains strictly OPEN because the current container blocks namespace creation (`unshare(2)` returning `ENOSYS`) and lacks delegated cgroup v2 controllers (`cpu` missing from `cgroup.controllers`, empty `cgroup.subtree_control`). The branch `phase/2-sandbox-hardening` remains unmerged and unpushed at commit `c1c476e`. Hostile attack fixtures (`fork_bomb.c`, `read_etc_passwd.c`, `net_connect.c`) remain unexecuted in this container.
+  3. Branch relationship: Branch `phase/3-worker-grpc` was created from `c1c476e` (HEAD of `phase/2-sandbox-hardening`) to allow Phase 3 to build on top of the in-progress Phase 2 runner. Both branches remain local (no push, no merge).
+  4. Definition of Done integrity: Neither Phase 2 nor Phase 3 DoD is rewritten, weakened, or bypassed. Phase 3 cannot be signed off or merged into `main` until Phase 2 is validated on a capable Linux VM with tutor approval and merged, and Phase 3 passes its own complete technical DoD.
+- Files: PROGRESS.md.
+- Linked: LOG-0123, LOG-0115, LOG-0113.
+- Tutor review: pending
+
+## [LOG-0125] 2026-11-15 13:21 IST | PLAN | actor: agent
+- Reason: Plan Phase 3 implementation: protobuf data contract, Kotlin gRPC worker service, sandboxed compile and run pipeline adapter, test suite, and grpcurl verification.
+- Details / Change:
+  1. Protocol Contract (`proto/execution.proto`):
+     - Single source of truth per `docs/02_ARCHITECTURE.md`.
+     - Define `ExecutionService` with unary `Execute` and server-streaming `ExecuteStream`.
+     - Define `ExecuteRequest` (job_id, language enum C/PYTHON, source_code, stdin, limits: cpu_ms, wall_ms, memory_mb, max_output_kb).
+     - Define `ExecuteResponse` (job_id, status enum OK/COMPILE_ERROR/RUNTIME_ERROR/TIMEOUT/MEMORY_LIMIT/OUTPUT_LIMIT/SANDBOX_ERROR, stdout, stderr, exit_code, signal, wall_ms, cpu_ms, peak_memory_kb).
+  2. Kotlin Worker Gradle Project (`worker/`):
+     - Scaffolding under `worker/` with `build.gradle.kts` and `settings.gradle.kts`.
+     - Dependencies: gRPC Netty, gRPC Protobuf, Protobuf Kotlin, Kotlin Coroutines, JUnit 5.
+     - Gradle protobuf plugin generating Kotlin/Java stubs from `proto/execution.proto`.
+  3. Sandboxed Compile and Run Pipeline Adapter (`worker/src/main/kotlin/pes/worker/`):
+     - `SandboxRunnerAdapter`: Invokes `sandbox-daemon/sandbox-runner` with explicit argument lists (never shell strings).
+     - Request validation: checks required fields, bounds on limits, non-empty source code.
+     - Sandboxed C compilation: routes `gcc` through the sandbox runner with bounded limits; captures compiler stderr on failure, producing `COMPILE_ERROR`.
+     - Sandboxed execution: passes compiled C binary or routes `python3` through the sandbox runner with requested resource limits.
+     - Ephemeral workspace management: creates unique `/tmp/pes-worker-job-<id>` workspace directory and cleans it up in a `finally` block.
+     - Runner abstraction: `RunnerClient` interface allowing production execution against `sandbox-daemon/sandbox-runner` (and configurable test runner for simulation testing in container environments lacking Phase 2 capabilities).
+  4. Tests and Verification:
+     - Unit tests verifying request validation, language dispatch, status mapping, argument safety, and workspace cleanup.
+     - Integration test with `grpcurl` commands testing C (valid, compile error, runtime error, timeout) and Python (valid, runtime error, timeout).
+  5. Governance and Hygiene:
+     - No `.jar`, `.class`, or build artifacts tracked in git.
+     - Stage tracked files explicitly by name (no `git add .`).
+     - Update local-only `LEARNING_NOTES/` and `HANDOFF_PROMPT.md` without staging.
+- Files: PROGRESS.md, proto/execution.proto, worker/build.gradle.kts, worker/settings.gradle.kts, worker/src/**.
+- Linked: LOG-0124.
+- Tutor review: pending
+
+
+## [LOG-0126] 2026-11-15 13:34 IST | DONE | actor: agent
+- Reason: Implemented and verified Phase 3 minimal vertical slice: gRPC data contract, Kotlin worker service with sandboxed compile/run pipeline, test suite, and end-to-end grpcurl verification.
+- Details / Change:
+  1. Data Contract (`proto/execution.proto`): Defined protobuf schema `pes.execution.v1` with `ExecutionService` (`Execute`, `ExecuteStream`), enums `Language` (C, PYTHON) and `ExecutionStatus` (OK, COMPILE_ERROR, RUNTIME_ERROR, TIMEOUT, MEMORY_LIMIT, OUTPUT_LIMIT, SANDBOX_ERROR), messages `ResourceLimits`, `ExecuteRequest`, and `ExecuteResponse` matching `docs/02_ARCHITECTURE.md`.
+  2. Kotlin Worker Gradle Project (`worker/`): Configured Kotlin JVM 2.0.21, Java 21 toolchain, gRPC Netty Shaded 1.68.1, gRPC Kotlin stub 1.4.1, Protobuf Kotlin 3.25.5, Coroutines 1.9.0, and Gson 2.11.0. Enabled gRPC reflection service for dynamic discovery.
+  3. Sandboxed Compile and Run Pipeline Adapter (`worker/src/main/kotlin/pes/worker/`):
+     - `ExecutionPipeline`: Validates requests (job_id format, non-empty source, language bounds), manages ephemeral job workspaces (`/tmp/pes-job-<id>-`), and guarantees clean deletion in `finally` blocks.
+     - Sandboxed C compilation: Routes `gcc -O2 -o <workspace>/target <workspace>/source.c` through the sandbox runner with bounded limits; captures compiler diagnostics, mapping non-zero exit codes to `COMPILE_ERROR`.
+     - Sandboxed C execution: Invokes the compiled `<workspace>/target` binary through the sandbox runner with requested resource limits.
+     - Sandboxed Python execution: Routes `/usr/bin/python3 <workspace>/source.py` directly through the sandbox runner with requested resource limits (no compilation step).
+     - Argument safety: `ProcessSandboxRunner` uses typed argument vectors via `ProcessBuilder` (never shell strings).
+     - Simulation runner: `SimulationSandboxRunner` supports non-isolated host execution for testing in environments lacking Phase 2 kernel capabilities.
+  4. Test Suite (`worker/src/test/kotlin/`): Added 8 unit tests in `ExecutionPipelineTest` and `StatusMappingTest` covering request validation, limit normalization, C compilation error handling, C successful compile and run, Python execution, workspace deletion, and status enum parsing (8/8 passed).
+  5. End-to-end Verification (`worker/tests/verify_grpcurl.sh`): Verified all 10 scenarios with `grpcurl`:
+     - Service reflection and descriptor inspection: PASS.
+     - Production mode fail-closed verification against `sandbox-daemon/sandbox-runner`: fails closed with `SANDBOX_ERROR` (`setup error: stage=11 errno=95 (Operation not supported)`) without executing target or host gcc: PASS.
+     - Simulation mode C valid execution (`status: OK`, exit code 0): PASS.
+     - Simulation mode C compile error (`status: COMPILE_ERROR`, gcc diagnostics): PASS.
+     - Simulation mode C runtime error (`status: RUNTIME_ERROR`, exit code 7): PASS.
+     - Simulation mode C timeout (`status: TIMEOUT`, wall_ms ~1000): PASS.
+     - Simulation mode Python valid execution (`status: OK`): PASS.
+     - Simulation mode Python runtime error (`status: RUNTIME_ERROR`, traceback): PASS.
+     - Simulation mode Python timeout (`status: TIMEOUT`): PASS.
+     - Simulation mode streaming RPC `ExecuteStream`: PASS.
+  6. Phase Boundaries: Phase 2 runtime DoD remains strictly OPEN; branch `phase/2-sandbox-hardening` remains local and unmerged; branch `phase/3-worker-grpc` remains local and unpushed. Hostile attack fixtures remain unexecuted in this container.
+- Verification: `cd worker && gradle --offline test --rerun-tasks` passed 8/8 unit tests. `bash worker/tests/verify_grpcurl.sh 50055 simulation` and `bash worker/tests/verify_grpcurl.sh 50056 production` passed all scenarios. Git repo hygiene and append-only hooks passed cleanly.
+- Files: PROGRESS.md, proto/execution.proto, worker/build.gradle.kts, worker/settings.gradle.kts, worker/src/**, worker/tests/**.
+- Linked: LOG-0125, LOG-0124.
+- Tutor review: pending
+
+## [LOG-0127] 2026-11-15 17:54 IST | PLAN | actor: agent
+- Reason: Close Phase 3 implementation gaps without executing submitted code outside the Phase 2 sandbox or weakening Phase 2 gates.
+- Details / Change:
+  1. Replace host-executing `SimulationSandboxRunner` with a deterministic `FakeRunnerClient` for tests/protocol demonstrations; bind all worker gRPC listeners to loopback and label grpcurl modes as fake protocol checks versus production fail-closed checks.
+  2. Implement bounded source/artifact handoff: validate the worker's private job directory and named regular source file, copy only that source into a private `/workspace` in the sandbox rootfs, and return a bounded compiler artifact through a pre-opened descriptor; keep the target identity at its existing mapped unprivileged UID/GID and verify ownership from the user namespace map.
+  3. Implement bounded request stdin from gRPC through Kotlin, runner stdin, and target stdin; start Kotlin output drainers and deadline before writing; have the C runner poll target stdin writes alongside stdout/stderr and enforce the same deadline.
+  4. Add focused unit/protocol/helper tests for fake gRPC responses, typed production arguments/fail-closed behavior, workspace path/permission/copy/cleanup behavior, stdin limits/forwarding/deadlines, compile failure short-circuit, language dispatch, status mapping, and the one-final-response `ExecuteStream` contract.
+  5. Preserve `proto/execution.proto` as source of truth, append a dependency DECISION for the existing Kotlin/gRPC/protobuf/Gson stack, correct stream documentation, update the grpcurl script labels, and update local-only learning notes and tutor handoff.
+  6. Run Gradle tests, safe C/protocol checks, the fake grpcurl protocol check, and the production fail-closed grpcurl check. Do not run Phase 2 hostile fixtures. Keep both phase branches local and unmerged; Phase 2 DoD remains OPEN and Phase 3 DoD remains OPEN absent capable-host runtime evidence.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/phase2_rootfs.c, sandbox-daemon/phase2_rootfs.h, sandbox-daemon/Makefile, worker/src/**, worker/tests/verify_grpcurl.sh, docs/02_ARCHITECTURE.md, docs/03_SANDBOX_DEEP_DIVE.md, HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
+- Linked: LOG-0126, LOG-0124.
+- Tutor review: pending
+
+## [LOG-0128] 2026-11-15 17:54 IST | DECISION | actor: agent
+- Reason: Choose a bounded workspace handoff that preserves the current mapped unprivileged identity and does not expose host `/tmp` or assume host UID 1000 maps to namespace UID 65534.
+- Details / Change: The worker owns a mode-0700 job directory and source file. The C runner opens and validates only that directory and the fixed source leaf with no-follow semantics and ownership/mode/size checks. During rootfs setup, the sandbox creates a private tmpfs `/workspace`, assigns it to the already-verified namespace UID/GID 65534, and copies in only the current job's source. Compiler output is created inside that tmpfs and copied out through a separately pre-opened, bounded, exclusive-create artifact descriptor held only by the trusted setup/supervisor path; the target process does not inherit that descriptor. This is chosen over a writable bind mount because the existing map makes host-owned worker files namespace UID 0, not UID/GID 65534, while changing that identity mapping or granting a host ACL would alter the approved identity assumptions. The handoff adds no dependency and leaves namespace, cgroup, privilege, seccomp, rootfs, and fail-closed behavior unchanged.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/phase2_rootfs.c, worker/src/**.
+- Linked: LOG-0127.
+- Tutor review: pending
+
+## [LOG-0129] 2026-11-15 17:54 IST | DECISION | actor: agent
+- Reason: Explain the purpose, alternatives, runtime/build footprint, and maintenance cost of the dependencies already present in the Phase 3 worker.
+- Details / Change:
+  1. Kotlin JVM Gradle plugin and protobuf Gradle plugin: compile the worker and generate Java/Kotlin types from the single `proto/execution.proto` contract. Alternatives were handwritten protocol types or manually maintained generated sources; both risk contract drift. Build-only cost is extra Gradle/plugin resolution and generated code; versions remain pinned and should be updated together with compatibility tests.
+  2. gRPC Java/Kotlin, protobuf, reflection, and shaded Netty: implement the typed RPC, coroutine service stubs, wire serialization, client discovery, and transport. Alternatives were REST/JSON (which would abandon the selected gRPC contract) or unshaded Netty (which adds runtime classpath conflict risk). This is the largest runtime footprint because shaded Netty and generated RPC code add transitive JARs; keep the version family pinned and upgrade deliberately with grpcurl and Gradle checks.
+  3. Kotlin coroutines: provide suspend/Flow service APIs and structured async work. Alternatives were blocking gRPC service implementations or callbacks; those add thread-management complexity. Runtime cost is the coroutine library and dispatcher threads; avoid blocking a dispatcher and keep the dependency version aligned with gRPC Kotlin.
+  4. Gson: map the sandbox runner's existing JSON result to typed Kotlin data classes. Alternatives were a new JSON library or a custom parser; a custom parser is error-prone and another library adds more transitive maintenance. Gson is a small runtime dependency used only at the C-runner boundary.
+  5. JUnit 5, Kotlin test, grpc-testing, grpc-inprocess, and coroutines-test are test-only dependencies for unit and in-process protocol tests; they are absent from the worker runtime. They add test resolution time and should track the Gradle/JUnit/gRPC versions. `io.grpc:grpc-inprocess` was added to `testImplementation` to enable in-process gRPC testing without network socket bindings.
+  6. No runtime dependency is added by this plan.
+- Files: PROGRESS.md, worker/build.gradle.kts.
+- Linked: LOG-0127.
+- Tutor review: pending
+
+## [LOG-0130] 2026-11-15 19:20 IST | DONE | actor: agent
+- Reason: Complete the authorized Phase 3 safety and worker implementation work while preserving the approved parallel Phase 2 decision and both open DoDs.
+- Details / Change:
+  1. Removed `SimulationSandboxRunner` and host execution entry points. The replacement `FakeRunnerClient` returns conspicuous canned responses and a canned artifact without starting any process. `--simulation` is rejected. Worker gRPC binds explicitly to `127.0.0.1`; production routes only through `ProcessSandboxRunner`.
+  2. Added a fixed-path workspace copy-in/copy-back design. The C runner validates `/tmp/pes-job-*`, source leaf, no-follow behavior, owner, exact private modes, links, size, and directory entries. In `main()`, `cfg.workspace_source_name` is explicitly assigned, and `artifact_status_pipe` is closed across all setup error paths. The rootfs creates a private `/workspace`, verifies mapped UID/GID 65534 ownership, copies source as mode 0400, and returns bounded C compiler output through a pre-opened descriptor. Source and artifact descriptors are explicitly retained through trusted setup only; close-on-exec and the target supervisor's descriptor cleanup keep them out of the target.
+  3. Added a 64 KiB stdin maximum. Kotlin concurrently drains outputs, writes stdin, and applies a runner process deadline. The C runner reads no more than the limit plus one byte, rejects oversize input before sandbox setup, forwards target input nonblockingly in the output/deadline poll loop, and closes the pipe for empty input and cleanup.
+  4. Added focused fake gRPC, pipeline, production adapter, C workspace helper, and protocol tests. `ExecuteStream` remains one final response and documentation now says so. `io.grpc:grpc-inprocess` is added to `testImplementation` in `worker/build.gradle.kts` (recorded in LOG-0129); no runtime dependencies were added. `proto/execution.proto` was not changed.
+  5. Added `production-runtime` to `worker/tests/verify_grpcurl.sh`. On a capable VM it requests C compile/run that consumes stdin, Python that consumes stdin, and a C compiler error; expected evidence is C/Python `OK` with matching output and `COMPILE_ERROR` for invalid C. Fake mode is explicitly protocol-only; production setup-error mode is explicitly not execution evidence.
+- Verification:
+  - `cd sandbox-daemon && make clean && make all && make test-workspace-handoff && make test-setup-protocol && make test-phase2-structural && make test-phase2-seccomp-safe && make test-phase2-fail-closed`: PASS under `-Wall -Wextra -Werror -O2`. Workspace helper covered private/mapped permissions, source bytes, symlink/traversal/size/mode/extra-entry rejection, artifact symlink rejection and copy-back, and teardown. Setup protocol passed 5/5 plus forced fallback 5/5. Structural fake-tree checks, seccomp probe, and fail-closed descriptor/cleanup regressions passed.
+  - `python3 scripts/test_phase2_preflight.py` (6/6 pass) and `python3 scripts/test_phase2_diagnostics.py` (18/18 pass).
+  - `bash -n worker/tests/verify_grpcurl.sh`: PASS.
+  - `cd worker && gradle --offline test --rerun-tasks`: PASS (11 actionable tasks executed). All 16 unit tests passed: `StatusMappingTest` (3/3), `ProcessSandboxRunnerTest` (4/4), `ExecutionPipelineTest` (8/8), `FakeRunnerGrpcTest` (1/1).
+  - `cd worker && gradle --offline installDist`: PASS (distribution installed to `worker/build/install/pes-worker/`).
+  - `bash worker/tests/verify_grpcurl.sh 50055 fake`: PASS (verified reflection, unary C fake protocol, unary Python fake protocol, and ExecuteStream single-response contract on loopback 127.0.0.1).
+  - `bash worker/tests/verify_grpcurl.sh 50056 production`: PASS (verified fail-closed behavior against real sandbox-runner: returned status `SANDBOX_ERROR`, exit_code 127, and diagnostic `setup error: stage=11 errno=95 (Operation not supported)` in stderr; no target or host gcc was executed).
+  - `git diff --check`, `bash scripts/check_progress_append_only.sh`, and `bash scripts/check_repo_hygiene.sh`: PASS.
+- Phase boundaries: Phase 2 DoD remains OPEN; Phase 3 DoD remains OPEN because this host did not run real C/Python requests through the production sandbox, including sandboxed C compilation. No Phase 2 hostile fixtures were run. Both branches remain local, unmerged, and unpushed.
+- Remaining VM verification command: `cd "/home/zogratis/Projects/Personal Projects/polyexecution-studio" && make -C sandbox-daemon clean all && cd worker && gradle --offline test installDist && ./tests/verify_grpcurl.sh 50055 production-runtime`. Expected evidence: real production worker startup, C request `OK` with echoed stdin after sandboxed compile and execution, Python request `OK` with echoed stdin, invalid C `COMPILE_ERROR`, and captured grpcurl responses. Do not close Phase 3 until all three scenarios pass through the real runner on a capable Linux VM.
+- Files: PROGRESS.md, docs/02_ARCHITECTURE.md, docs/03_SANDBOX_DEEP_DIVE.md, sandbox-daemon/Makefile, sandbox-daemon/phase2_rootfs.c, sandbox-daemon/phase2_rootfs.h, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/tests/test_fail_closed_gate.c, sandbox-daemon/tests/test_setup_handshake.c, sandbox-daemon/tests/test_workspace_handoff.c, worker/build.gradle.kts, worker/src/main/kotlin/pes/worker/WorkerServer.kt, worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt, worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt, worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt, worker/src/test/kotlin/pes/worker/runner/ProcessSandboxRunnerTest.kt, worker/src/test/kotlin/pes/worker/service/FakeRunnerGrpcTest.kt, worker/tests/verify_grpcurl.sh. Local-only files updated: HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md (excluded from staging).
+- Linked: LOG-0127, LOG-0128, LOG-0129, LOG-0124.
+- Tutor review: pending
+
+
 ## [LOG-0131] 2026-11-15 19:39 IST | PLAN | actor: agent
 - Reason: Use the nearest writable, empty cgroup ancestor that exposes and enables cpu, memory, and pids, instead of assuming the terminal's populated leaf cgroup is the delegated job parent.
 - Details / Change:
@@ -2133,3 +2263,148 @@
 - Files: `PROGRESS.md`.
 - Linked: LOG-0146.
 - Tutor review: approved for Phase 2 sign-off and merge into main
+
+
+## [LOG-0148] 2026-11-16 00:30 IST | PLAN | actor: agent
+- Reason: Rebase Phase 3 branch onto tutor-approved main (phase-2-done at 59f032d), resolve workspace handoff and status propagation integration, fix runner terminal stdin blocking, enable compiler toolchain and interpreter support in sandbox seccomp/environment, and verify live Phase 3 Definition of Done (C and Python end-to-end via grpcurl with real sandbox runner).
+- Details / Change:
+  1. Synchronize phase/3-worker-grpc onto origin/main (59f032d). Resolve PROGRESS.md chronological sequencing and sandbox.c integration between Phase 2 supervisor status propagation and Phase 3 workspace artifact extraction.
+  2. In sandbox-daemon/sandbox.c, guard stdin read with !isatty(STDIN_FILENO) so the runner does not hang on terminal input when invoked without redirected stdin.
+  3. In sandbox-daemon/phase2_privilege.c, augment seccomp allowlist for standard compiler/interpreter operations: allow open, stat, lstat, unlink, mkdir, rmdir, rename, chmod, fchmod, fchmodat, utimensat, truncate, sched_getaffinity, getrusage, getrlimit, times, gettimeofday, statfs, fstatfs, umask, sysinfo, capget, getdents; deny clone3 with ENOSYS so glibc posix_spawn/fork safely falls back to inspected clone.
+  4. In sandbox-daemon/sandbox.c, provide PATH=/usr/bin:/bin in child_envp for sandboxed executables so collect2 locates standard ld; resolve binary_path with realpath() in main() so symlinks like /usr/bin/python3 are canonically resolved before O_NOFOLLOW validation.
+  5. In worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt, supply --fsize-mb 64 in ProcessSandboxRunner.buildCommand so compiler link stages are not terminated by the default 1 MiB SIGXFSZ limit.
+  6. Run make -C sandbox-daemon test (all 22 integration tests passing). Build Kotlin worker distribution and run gradle test. Execute live verify_grpcurl.sh production-runtime validating C compile/run with stdin, Python run with stdin, and invalid C COMPILE_ERROR response.
+- Files: PROGRESS.md, sandbox-daemon/phase2_privilege.c, sandbox-daemon/sandbox.c, worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt.
+- Linked: LOG-0147, LOG-0130.
+- Tutor review: pending
+
+
+## [LOG-0149] 2026-11-16 00:35 IST | DONE | actor: agent
+- Order: PLAN was LOG-0148.
+- Reason: Satisfy Phase 3 Definition of Done with live end-to-end C and Python execution evidence through gRPC service (grpcurl) backed by real production sandbox-runner.
+- Details / Change:
+  1. Rebased phase/3-worker-grpc onto main (59f032d). Merged Phase 2 PID-namespace Child 1/2/3 supervisor and status pipe with Phase 3 /workspace artifact copy-back logic in sandbox.c.
+  2. In sandbox-daemon/sandbox.c, guarded stdin read with !isatty(STDIN_FILENO), added realpath() canonical resolution on binary_path in main(), and provided PATH=/usr/bin:/bin in child_envp.
+  3. In sandbox-daemon/phase2_privilege.c, extended seccomp allowlist for compiler/runtime syscalls (open, stat, lstat, unlink, mkdir, rmdir, rename, chmod, fchmod, fchmodat, utimensat, truncate, sched_getaffinity, getrusage, getrlimit, times, gettimeofday, statfs, fstatfs, umask, sysinfo, capget, getdents) and added explicit ENOSYS return for clone3 to trigger glibc fallback to clone.
+  4. In worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt, added --fsize-mb 64 to buildCommand.
+  5. Rebuilt sandbox-daemon and verified full test suite: safe targets (test-workspace-handoff, test-setup-protocol, test-phase2-structural, test-phase2-seccomp-safe, test-fail-closed) passed; full integration suite passed 22/22 (18 Phase 1 + 4 Phase 2). Lingering process check: 0.
+  6. Rebuilt worker distribution with gradle --offline installDist and ran gradle --offline test --rerun-tasks (11/11 tasks executed, all unit tests passed).
+  7. Executed bash worker/tests/verify_grpcurl.sh 50055 production-runtime with live gRPC server on 127.0.0.1:50055:
+     - C compile and execution: status OK, stdout "sandboxed c input\n", wall_ms 73ms, peak RSS 1772 KB.
+     - Python execution: status OK, stdout "sandboxed python input\n", wall_ms 98ms, peak RSS 9492 KB.
+     - Invalid C compile failure: status COMPILE_ERROR, exit_code 1, gcc diagnostic in stderr, zero target execution.
+     - Protocol checks: fake mode verified loopback contract; production fail-closed check verified SANDBOX_ERROR (stage 14 errno 38) when unprivileged.
+  8. Phase 3 DoD status: CLOSED pending tutor review. Branch phase/3-worker-grpc remains unmerged into main.
+- Verification: make -C sandbox-daemon test (22/22 passed); worker unit tests (all passed); verify_grpcurl.sh fake, production, and production-runtime (all passed); scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check passed cleanly.
+- Files: PROGRESS.md, sandbox-daemon/phase2_privilege.c, sandbox-daemon/sandbox.c, worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt.
+- Linked: LOG-0148, LOG-0147, LOG-0130.
+- Tutor review: ready for tutor review
+
+
+## [LOG-0150] 2026-11-16 00:37 IST | PLAN | actor: agent
+- Reason: Add Phase 3 interview and explain-back questions to `docs/05_INTERVIEW_PREP.md` required checklist per `AI_RULES.md` §14, covering compiler sandboxing requirements, gRPC streaming architecture, and workspace handoff isolation.
+- Details / Change:
+  1. In `docs/05_INTERVIEW_PREP.md`, under `### Required explain-back questions`, append three required checkboxes:
+     - Compiler sandboxing: Why must C compilation run inside the sandbox, and what compiler subprocesses and files must be available for GCC to work?
+     - gRPC streaming: What does `ExecuteStream` return today, and what would need to change to deliver stdout and stderr incrementally?
+     - Workspace isolation: How does the worker safely hand source files and the compiled artifact between its private workspace and the sandbox?
+  2. Verify repository markdown hygiene and append-only rules via `scripts/check_repo_hygiene.sh` and `scripts/check_progress_append_only.sh`.
+  3. Ensure ignored files (`HANDOFF_PROMPT.md`, `LEARNING_NOTES/`) remain untracked and unstaged.
+- Files: `PROGRESS.md`, `docs/05_INTERVIEW_PREP.md`.
+- Linked: LOG-0149.
+- Tutor review: pending
+
+
+## [LOG-0151] 2026-11-16 00:38 IST | DONE | actor: agent
+- Order: PLAN was LOG-0150.
+- Reason: Record Phase 3 interview and explain-back questions into `docs/05_INTERVIEW_PREP.md` required explain-back checklist per `AI_RULES.md` §14 while maintaining repository markdown hygiene.
+- Details / Change:
+  1. In `docs/05_INTERVIEW_PREP.md`, appended three required explain-back items:
+     - `Compiler sandboxing`: Why must C compilation run inside the sandbox, and what compiler subprocesses and files must be available for GCC to work?
+     - `gRPC streaming`: What does `ExecuteStream` return today, and what would need to change to deliver stdout and stderr incrementally?
+     - `Workspace isolation`: How does the worker safely hand source files and the compiled artifact between its private workspace and the sandbox?
+  2. Preserved all existing interview questions and checklist items unchanged.
+  3. Verified repository markdown hygiene: no disallowed markdown files added or tracked; `HANDOFF_PROMPT.md` and `LEARNING_NOTES/` remain untracked and unstaged.
+- Verification: `scripts/check_repo_hygiene.sh` passed; `scripts/check_progress_append_only.sh` passed; `git diff --check` passed.
+- Files: `PROGRESS.md`, `docs/05_INTERVIEW_PREP.md`.
+- Linked: LOG-0150, LOG-0149.
+- Tutor review: ready for tutor review
+
+
+## [LOG-0152] 2026-11-16 00:46 IST | PLAN | actor: agent
+- Reason: Update `README.md` to document Phase 3 functionality, architecture, quickstart verification, and honest limitations per `AI_RULES.md` §11, resolving the tutor review blocker for Phase 3 merge readiness.
+- Details / Change:
+  1. Rewrite `README.md` from initial bootstrap text into a concise, honest project README covering Phase 3 implementation.
+  2. Document the implemented architecture: Phase 1 low-level runner, Phase 2 Linux isolation controls (cgroup v2, user/mount/pid/net namespaces, pivot_root, seccomp allowlist), and Phase 3 Kotlin worker with loopback gRPC service and sandboxed C compilation / Python execution.
+  3. Include Roadmap table distinguishing completed phases (0, 1, 2, 3) from planned work (4, 5, 6, 7).
+  4. Document honest limitations: loopback-only binding (`127.0.0.1`), single final response in `ExecuteStream` (line streaming planned for Phase 4), supported languages (C and Python only), kernel requirements (cgroups v2 delegation, unprivileged user namespaces), and container/process isolation rather than microVM.
+  5. Provide verifiable commands for sandbox regression suite, worker unit tests, and end-to-end `verify_grpcurl.sh` checks.
+  6. Verify repository hygiene and append-only rules via `scripts/check_repo_hygiene.sh` and `scripts/check_progress_append_only.sh`.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0151, LOG-0149.
+- Tutor review: pending
+
+
+## [LOG-0153] 2026-11-16 00:47 IST | DONE | actor: agent
+- Order: PLAN was LOG-0152.
+- Reason: Update `README.md` to reflect Phase 3 implementation, architecture, quickstart verification, and honest limitations resolving tutor review merge blocker.
+- Details / Change:
+  1. Updated `README.md` to document Phase 3 functionality:
+     - Documented C sandbox runner capabilities (Phase 1 process lifecycle & rlimits; Phase 2 cgroup v2, namespaces, tmpfs rootfs, pivot_root, seccomp-bpf allowlist, fail-closed isolation).
+     - Documented Kotlin gRPC worker service (`pes.execution.v1.ExecutionService`), bounded request validation, ephemeral workspace lifecycle (`/tmp/pes-job-<id>-*`, mode 0700), sandboxed compilation via `/usr/bin/gcc`, sandboxed execution for C and Python with standard input forwarding, and typed protobuf status mapping.
+     - Provided Roadmap table with accurate phase statuses (Phases 0-3 complete/implemented; Phases 4-7 marked planned).
+     - Documented honest limitations per `AI_RULES.md` §11: loopback binding (`127.0.0.1`), single final response in `ExecuteStream`, supported runtimes (C and Python), Linux host kernel prerequisites (cgroup v2 delegation and unprivileged user namespaces), and container process isolation rather than hypervisor microVMs.
+     - Documented quickstart build and test commands for sandbox runner, worker unit tests, and live `grpcurl` verification.
+  2. Verified repository markdown hygiene: no disallowed markdown files added or tracked; `HANDOFF_PROMPT.md` and `LEARNING_NOTES/` remain local-only.
+- Verification: `scripts/check_repo_hygiene.sh` passed; `scripts/check_progress_append_only.sh` passed; `git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0152, LOG-0149.
+- Tutor review: ready for tutor review
+
+
+## [LOG-0154] 2026-11-16 00:49 IST | PLAN | actor: agent
+- Reason: Resolve tutor review findings on `README.md`: eliminate "secure C sandbox" claim in favor of specific Linux isolation mechanisms per `AI_RULES.md` §6, and fix consecutive `cd worker` shell commands to run safely from the repository root.
+- Details / Change:
+  1. In `README.md`, line 3, replace "secure C sandbox" with an explicit description of the isolation controls: Linux namespaces, cgroups v2, private tmpfs rootfs, capability dropping, and seccomp-bpf.
+  2. In `README.md`, lines 73-80, encapsulate worker build commands in subshells `(cd worker && gradle test)` and `(cd worker && gradle installDist)` so sequential execution from repository root does not fail on directory persistence.
+  3. Run repository hygiene and append-only checks. Stage explicitly by name, commit, and push `phase/3-worker-grpc`.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0153.
+- Tutor review: pending
+
+
+## [LOG-0155] 2026-11-16 00:50 IST | DONE | actor: agent
+- Order: PLAN was LOG-0154.
+- Reason: Complete README corrections addressing tutor review findings before final Phase 3 merge sign-off.
+- Details / Change:
+  1. In `README.md`, replaced the "secure C sandbox" phrase with an accurate, mechanism-specific summary: "a C sandbox runner constrained by Linux namespaces, cgroups v2, a private tmpfs rootfs, capability dropping, and seccomp-bpf" conforming strictly to `AI_RULES.md` §6.
+  2. In `README.md`, updated worker commands to use subshell execution `(cd worker && gradle test)` and `(cd worker && gradle installDist)` so running them sequentially from the repository root functions correctly without leaving the shell in a nested directory.
+  3. Verified repository hygiene, clean diff, and append-only progression.
+- Verification: `scripts/check_repo_hygiene.sh` passed; `scripts/check_progress_append_only.sh` passed; `git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0154, LOG-0153.
+- Tutor review: ready for tutor review
+
+
+## [LOG-0156] 2026-11-16 00:53 IST | DECISION | actor: Piyush + tutor
+- Reason: Formally record tutor review approval and sign-off for Phase 3 Kotlin gRPC execution worker and sandboxed compilation, close Phase 3 Definition of Done, and authorize non-fast-forward merge into `main` with tag `phase-3-done`.
+- Details / Change:
+  1. Tutor reviewed the Phase 3 implementation, test evidence, and README corrections (mechanism-specific isolation summary and subshell execution for worker commands). The tutor officially signed off on Phase 3 and approved merging the branch into `main` via the project's normal process.
+  2. Phase 3 Definition of Done in `docs/04_BUILD_PLAN.md` ("C and Python run end-to-end from a gRPC client (grpcurl), with compilation also sandboxed") is fully satisfied with live runtime evidence on Omarchy host:
+     - Real sandbox C compilation: `/usr/bin/gcc` compiles user source inside `sandbox-runner` under bounded limits, outputs artifact into pre-opened descriptor, and rejects invalid C with `COMPILE_ERROR` before execution.
+     - Real sandbox C execution: compiled binary executes inside `sandbox-runner`, forwards stdin, and returns status `OK` with expected stdout.
+     - Real sandbox Python execution: `/usr/bin/python3` executes user script inside `sandbox-runner`, forwards stdin, and returns status `OK` with expected stdout.
+     - Loopback binding: worker binds strictly to `127.0.0.1:50055`.
+     - Protocol doubles: fake runner verifies RPC schema and single-response `ExecuteStream` contract without executing target binaries; production fail-closed verification confirms `SANDBOX_ERROR` when unprivileged.
+  3. All suites verified:
+     - Sandbox daemon integration: 22/22 passed (18 Phase 1 + 4 Phase 2).
+     - Sandbox safe structural tests: all passed.
+     - Worker unit tests: 11/11 tasks executed, all passed.
+     - End-to-end `verify_grpcurl.sh`: fake, production fail-closed, and production-runtime all passed.
+     - Lingering process check: 0 stray processes.
+  4. Phase 3 DoD status is marked CLOSED and APPROVED.
+  5. Action authorized: Merge `phase/3-worker-grpc` into `main` using `git merge --no-ff` and tag `phase-3-done` per AI_RULES.md §10.
+- Verification: `make -C sandbox-daemon test` (22/22 passed); `(cd worker && gradle test)` (passed); `verify_grpcurl.sh` (passed); `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`.
+- Linked: LOG-0155, LOG-0153, LOG-0149.
+- Tutor review: approved for Phase 3 sign-off and merge into main

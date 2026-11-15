@@ -92,7 +92,7 @@ static int test_unrelated_descriptor_is_closed(void) {
         descriptor_limit.rlim_cur = 128;
         if (setrlimit(RLIMIT_NOFILE, &descriptor_limit) < 0) _exit(5);
 #endif
-        int result = close_unrelated_fds(gate[1]);
+        int result = close_unrelated_fds(gate[1], -1, -1, -1);
         int inherited = fcntl(unrelated, F_GETFD);
         int preserved = fcntl(gate[1], F_GETFD);
         if (result != 0 || inherited >= 0 || errno != EBADF || preserved < 0) _exit(1);

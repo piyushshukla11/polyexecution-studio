@@ -3,6 +3,8 @@
 
 #define _GNU_SOURCE
 
+#define PES_MAX_STDIN_BYTES (64U * 1024U)
+
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
@@ -44,7 +46,8 @@ typedef enum {
     SETUP_STAGE_NNP,
     SETUP_STAGE_SECCOMP,
     SETUP_STAGE_SUPERVISOR,
-    SETUP_STAGE_PHASE2_ISOLATION
+    SETUP_STAGE_PHASE2_ISOLATION,
+    SETUP_STAGE_WORKSPACE
 } setup_stage_t;
 
 /* Binary record transmitted over err_pipe on failure */
@@ -96,6 +99,11 @@ typedef struct {
     size_t   max_output_bytes; /* e.g. 64 KiB = 64 * 1024 */
     const char *const *target_args; /* optional argv entries after argv[0] */
     size_t target_argc;
+    const char *stdin_data;         /* bounded request bytes forwarded to target stdin */
+    size_t stdin_len;
+    int workspace_source_fd;        /* validated source opened from the private worker workspace, or -1 */
+    const char *workspace_source_name; /* fixed leaf copied into private /workspace, or NULL */
+    int artifact_output_fd;          /* exclusive worker artifact file, or -1 */
 } sandbox_config_t;
 
 /* Execution results */

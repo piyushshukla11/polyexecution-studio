@@ -138,7 +138,7 @@ static int test_fail_closed_runner_on_cgroup_failure(void) {
     }
 
     sandbox_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
+    sandbox_config_init_default(&cfg);
     cfg.timeout_ms = 2000;
     cfg.rlimit_cpu_soft = 1;
     cfg.rlimit_cpu_hard = 2;
@@ -239,7 +239,7 @@ static int test_fail_closed_runner_on_fork_failure(void) {
     }
 
     sandbox_config_t cfg;
-    memset(&cfg, 0, sizeof(cfg));
+    sandbox_config_init_default(&cfg);
     cfg.timeout_ms = 2000;
     cfg.rlimit_cpu_soft = 1;
     cfg.rlimit_cpu_hard = 2;

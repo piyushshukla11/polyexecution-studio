@@ -66,6 +66,9 @@ This is the project-wide final learning checklist. Piyush asked to finish techni
 - [ ] **Evidence:** Explain how the adversarial test suite supports a claim, what its cleanup check can prove, and the difference between an observed result, an inference, and an unknown.
 - [ ] **Trade-offs and ownership:** Explain why C, gRPC, Kotlin coroutines, a separate Java Gateway, and Yjs were chosen; state one alternative and one cost. Describe AI assistance accurately and identify your own contributions.
 - [ ] **Project story:** Describe one real bug or review correction, how it was found, how it was fixed, and what test evidence supports the fix.
+- [ ] **Compiler sandboxing:** Why must C compilation run inside the sandbox, and what compiler subprocesses and files must be available for GCC to work?
+- [ ] **gRPC streaming:** What does `ExecuteStream` return today, and what would need to change to deliver stdout and stderr incrementally?
+- [ ] **Workspace isolation:** How does the worker safely hand source files and the compiled artifact between its private workspace and the sandbox?
 
 The existing 25 interview questions above are also required: answer every one without relying on the sketched answer. These added questions cover topics that came up during tutoring and agent review.
 
