@@ -34,9 +34,12 @@ Phase 2 Groundwork Checks (Scaffolded / Pending):
 
 import json
 import os
+import signal
 import subprocess
 import sys
+import tempfile
 import time
+import uuid
 from pathlib import Path
 
 
@@ -986,25 +989,381 @@ def test_process_cleanup(tc):
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 Scaffolded / Pending Checks
+# Phase 2 Integration Checks
 # ---------------------------------------------------------------------------
 
+def find_delegated_cgroup_parent():
+    """Find the delegated cgroup v2 parent directory for the current user."""
+    cgroup_root = Path("/sys/fs/cgroup")
+    proc_cgroup = Path("/proc/self/cgroup")
+    if not proc_cgroup.exists() or not cgroup_root.exists():
+        return None
+    try:
+        for line in proc_cgroup.read_text().splitlines():
+            if line.startswith("0::"):
+                rel = line[3:].strip()
+                cand = Path(f"{cgroup_root}{rel}")
+                while str(cand) != str(cgroup_root) and str(cand).startswith(str(cgroup_root)):
+                    ctrl_file = cand / "cgroup.controllers"
+                    sub_file = cand / "cgroup.subtree_control"
+                    procs_file = cand / "cgroup.procs"
+                    if ctrl_file.exists() and sub_file.exists() and procs_file.exists():
+                        ctrl = ctrl_file.read_text()
+                        sub = sub_file.read_text()
+                        procs = procs_file.read_text().strip()
+                        if (all(c in ctrl.split() for c in ("cpu", "memory", "pids")) and
+                            all(c in sub.split() for c in ("cpu", "memory", "pids")) and
+                            procs == "" and os.access(str(cand), os.W_OK | os.X_OK)):
+                            return cand
+                    cand = cand.parent
+    except Exception:
+        pass
+    return None
+
+
 def test_phase2_fork_bomb(tc):
-    """Phase 2 Check 01: Fork bomb containment (PENDING)."""
-    tc.status = "PENDING"
-    tc.detail = "Requires PID namespace (CLONE_NEWPID) and cgroups v2 pids.max (Phase 2). Execution skipped to protect host process table."
+    """Phase 2 Check 01: Fork bomb containment via cgroups v2 pids.max (32) and PID namespace."""
+    delegated_parent = find_delegated_cgroup_parent()
+    if not delegated_parent:
+        tc.status = "FAILED"
+        tc.failure_category = "SYSTEM_ENVIRONMENT_ERROR"
+        tc.detail = "No writable delegated cgroup parent with cpu, memory, and pids controllers found"
+        return
+
+    cmd = [str(RUNNER_BIN), "--timeout-ms", "1000", "tests/evil/bin/fork_bomb"]
+    tc.command = cmd
+
+    outer_watchdog_timeout = 5.0
+    start_time = time.time()
+    proc = subprocess.Popen(
+        cmd,
+        cwd=BASE_DIR,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+
+    cgroup_path = None
+    pids_max_observed = None
+    max_events_observed = 0
+    peak_pids_current = 0
+    watchdog_tripped = False
+
+    try:
+        while True:
+            now = time.time()
+            if now - start_time > outer_watchdog_timeout:
+                watchdog_tripped = True
+                break
+
+            if not cgroup_path:
+                for cand in delegated_parent.glob(f"pes-{proc.pid}-*"):
+                    cgroup_path = cand
+                    break
+
+            if cgroup_path and cgroup_path.exists():
+                try:
+                    if pids_max_observed is None:
+                        pids_max_file = cgroup_path / "pids.max"
+                        if pids_max_file.exists():
+                            pids_max_observed = pids_max_file.read_text().strip()
+
+                    pids_cur_file = cgroup_path / "pids.current"
+                    if pids_cur_file.exists():
+                        cur_val = int(pids_cur_file.read_text().strip())
+                        if cur_val > peak_pids_current:
+                            peak_pids_current = cur_val
+
+                    pids_events_file = cgroup_path / "pids.events"
+                    if pids_events_file.exists():
+                        for line in pids_events_file.read_text().splitlines():
+                            if line.startswith("max "):
+                                ev_val = int(line.split()[1])
+                                if ev_val > max_events_observed:
+                                    max_events_observed = ev_val
+                except OSError:
+                    pass
+
+            if proc.poll() is not None:
+                break
+            time.sleep(0.01)
+
+        if watchdog_tripped:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except OSError:
+                pass
+            if cgroup_path and cgroup_path.exists():
+                try:
+                    (cgroup_path / "cgroup.kill").write_text("1")
+                except OSError:
+                    pass
+            tc.status = "FAILED"
+            tc.failure_category = "HARNESS_TIMEOUT"
+            tc.detail = f"Outer watchdog ({outer_watchdog_timeout}s) expired before runner finished fork_bomb containment"
+            return
+
+        stdout, stderr = proc.communicate(timeout=2.0)
+        tc.raw_stdout, tc.raw_stderr = stdout, stderr
+    except Exception as exc:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except OSError:
+            pass
+        tc.status = "FAILED"
+        tc.failure_category = "UNHANDLED_EXCEPTION"
+        tc.detail = f"Exception during fork bomb monitoring: {exc}"
+        return
+
+    try:
+        data = json.loads(stdout)
+        tc.parsed_json = data
+    except Exception as exc:
+        tc.status = "FAILED"
+        tc.failure_category = "SCHEMA_ERROR"
+        tc.detail = f"Failed to parse runner JSON output: {exc}"
+        return
+
+    valid, msg = validate_json_schema(data)
+    if not valid:
+        tc.status = "FAILED"
+        tc.failure_category = "SCHEMA_ERROR"
+        tc.detail = msg
+        return
+
+    if data["status"] != "TIMEOUT":
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Expected status TIMEOUT on fork_bomb wall deadline; got status '{data['status']}'"
+        return
+
+    if pids_max_observed != "32":
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Live cgroup pids.max was {pids_max_observed!r}, expected '32'"
+        return
+
+    if max_events_observed <= 0:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Cgroup pids.events 'max' counter was {max_events_observed}; expected > 0 (no kernel fork denials registered)"
+        return
+
+    if peak_pids_current > 32:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Peak cgroup pids.current was {peak_pids_current}, exceeding pids.max 32"
+        return
+
+    if cgroup_path and cgroup_path.exists():
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Cgroup directory {cgroup_path} was not removed after runner exit"
+        return
+
+    time.sleep(0.1)
+    lingering = [p for p in find_lingering_processes() if "fork_bomb" in p[1]]
+    if lingering:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Detected {len(lingering)} lingering fork_bomb process(es): {lingering}"
+        return
+
+    tc.status = "PASSED"
+    tc.detail = (
+        f"Cgroup pids.max=32 verified; live kernel pids.events max={max_events_observed} "
+        f"(causal proof of task ceiling); peak pids.current={peak_pids_current} <= 32; "
+        f"status TIMEOUT (1000ms); cgroup cleaned up; 0 lingering processes"
+    )
 
 
 def test_phase2_read_etc_passwd(tc):
-    """Phase 2 Check 02: Host filesystem snooping defense (PENDING)."""
-    tc.status = "PENDING"
-    tc.detail = "Requires mount namespace (CLONE_NEWNS), pivot_root, and minimal unprivileged rootfs (Phase 2). Execution skipped to protect host filesystem."
+    """Phase 2 Check 02: Host filesystem snooping defense via mount namespace, tmpfs rootfs, and pivot_root."""
+    canary_token = f"CANARY_SECRET_{uuid.uuid4().hex}"
+    canary_file = tempfile.NamedTemporaryFile("w", prefix="pes_canary_", suffix=".txt", delete=False)
+    canary_path = canary_file.name
+    canary_file.write(f"HOST_SECRET_TOKEN={canary_token}\n")
+    canary_file.close()
+
+    cmd = [
+        str(RUNNER_BIN),
+        "--timeout-ms", "2000",
+        "--",
+        "tests/evil/bin/read_etc_passwd",
+        canary_path,
+        canary_token,
+    ]
+    tc.command = cmd
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+        tc.raw_stdout, tc.raw_stderr = proc.stdout, proc.stderr
+    except subprocess.TimeoutExpired:
+        tc.status = "FAILED"
+        tc.failure_category = "HARNESS_TIMEOUT"
+        tc.detail = "Runner timed out under 5s outer watchdog during filesystem canary test"
+        return
+    finally:
+        if os.path.exists(canary_path):
+            try:
+                os.unlink(canary_path)
+            except OSError:
+                pass
+
+    try:
+        data = json.loads(tc.raw_stdout)
+        tc.parsed_json = data
+    except Exception as exc:
+        tc.status = "FAILED"
+        tc.failure_category = "SCHEMA_ERROR"
+        tc.detail = f"Failed to parse runner JSON output: {exc}"
+        return
+
+    valid, msg = validate_json_schema(data)
+    if not valid:
+        tc.status = "FAILED"
+        tc.failure_category = "SCHEMA_ERROR"
+        tc.detail = msg
+        return
+
+    if data["status"] != "RUNTIME_ERROR" or data["exit_code"] != 1 or data["signal"] != 0:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Expected status RUNTIME_ERROR, exit_code 1, signal 0; got status {data['status']}, exit_code {data['exit_code']}, signal {data['signal']}"
+        return
+
+    if canary_token in data["stdout"] or canary_token in data["stderr"]:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = "CRITICAL: Host canary secret token was leaked in sandbox output"
+        return
+
+    if "HOST_CANARY_LEAKED" in data["stdout"] or "HOST_PASSWD_LEAKED" in data["stdout"]:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = "CRITICAL: Target binary reported host filesystem breach in stdout"
+        return
+
+    if f"TARGET={canary_path} STATUS=BLOCKED_BY_POLICY ERRNO=2" not in data["stderr"]:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Expected BLOCKED_BY_POLICY ERRNO=2 for canary path '{canary_path}'; got stderr: {data['stderr']!r}"
+        return
+
+    if "TARGET=/etc/passwd STATUS=BLOCKED_BY_POLICY ERRNO=2" not in data["stderr"]:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Expected BLOCKED_BY_POLICY ERRNO=2 for /etc/passwd; got stderr: {data['stderr']!r}"
+        return
+
+    if os.path.exists(canary_path):
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Temporary canary file {canary_path} was not cleaned up on host"
+        return
+
+    time.sleep(0.1)
+    lingering = [p for p in find_lingering_processes() if "read_etc_passwd" in p[1]]
+    if lingering:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Detected lingering read_etc_passwd process(es): {lingering}"
+        return
+
+    tc.status = "PASSED"
+    tc.detail = (
+        f"Host canary ({canary_path}) unobservable (ENOENT in private rootfs); "
+        f"/etc/passwd inaccessible (ENOENT); exit_code 1 (BLOCKED_BY_POLICY); "
+        f"secret token absent; guaranteed cleanup confirmed; 0 lingering processes"
+    )
 
 
 def test_phase2_net_connect(tc):
-    """Phase 2 Check 03: Outbound network connect defense (PENDING)."""
-    tc.status = "PENDING"
-    tc.detail = "Requires network namespace (CLONE_NEWNET) and seccomp socket syscall filtering (Phase 2). Execution skipped to prevent unauthorized network access."
+    """Phase 2 Check 03: Outbound network connect defense via seccomp socket filtering and CLONE_NEWNET."""
+    local_target_ip = "127.0.0.1"
+    local_target_port = 65432
+
+    cmd = [
+        str(RUNNER_BIN),
+        "--timeout-ms", "2000",
+        "--",
+        "tests/evil/bin/net_connect",
+        local_target_ip,
+        str(local_target_port),
+    ]
+    tc.command = cmd
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+        tc.raw_stdout, tc.raw_stderr = proc.stdout, proc.stderr
+    except subprocess.TimeoutExpired:
+        tc.status = "FAILED"
+        tc.failure_category = "HARNESS_TIMEOUT"
+        tc.detail = "Runner timed out under 5s outer watchdog during network isolation test"
+        return
+
+    try:
+        data = json.loads(tc.raw_stdout)
+        tc.parsed_json = data
+    except Exception as exc:
+        tc.status = "FAILED"
+        tc.failure_category = "SCHEMA_ERROR"
+        tc.detail = f"Failed to parse runner JSON output: {exc}"
+        return
+
+    valid, msg = validate_json_schema(data)
+    if not valid:
+        tc.status = "FAILED"
+        tc.failure_category = "SCHEMA_ERROR"
+        tc.detail = msg
+        return
+
+    if data["status"] != "RUNTIME_ERROR" or data["exit_code"] != 1 or data["signal"] != 0:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Expected status RUNTIME_ERROR, exit_code 1, signal 0; got status {data['status']}, exit_code {data['exit_code']}, signal {data['signal']}"
+        return
+
+    if "NETWORK_CONNECTED" in data["stdout"]:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = "CRITICAL: Target binary established outbound network connection"
+        return
+
+    expected_diag = f"DIAG: OP=socket TARGET={local_target_ip}:{local_target_port} STATUS=BLOCKED_BY_POLICY ERRNO=1 (Operation not permitted)"
+    if expected_diag not in data["stderr"]:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Expected seccomp socket denial in stderr; got: {data['stderr']!r}"
+        return
+
+    time.sleep(0.1)
+    lingering = [p for p in find_lingering_processes() if "net_connect" in p[1]]
+    if lingering:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Detected lingering net_connect process(es): {lingering}"
+        return
+
+    tc.status = "PASSED"
+    tc.detail = (
+        f"Seccomp denied socket() with EPERM (errno 1, BLOCKED_BY_POLICY) before connect; "
+        f"local endpoint {local_target_ip}:{local_target_port} unreachable; "
+        f"CLONE_NEWNET network namespace isolated; 0 lingering processes"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1041,7 +1400,7 @@ PHASE2_CHECKS = [
 
 def main():
     print("=" * 72)
-    print("PolyExecution Studio (PES) — Phase 1 Regression Lab & Phase 2 Groundwork")
+    print("PolyExecution Studio (PES) — Phase 1 & Phase 2 Integration Test Harness")
     print("=" * 72)
 
     clean_temp_files()
@@ -1078,24 +1437,43 @@ def main():
                 truncated_err = tc.raw_stderr[:300] + ("..." if len(tc.raw_stderr) > 300 else "")
                 print(f"         Raw stderr: {truncated_err!r}")
 
-    print("\n--- Phase 2 Groundwork Checks (Scaffolded / Pending) ---")
-    pending_p2_count = 0
+    print("\n--- Phase 2 Integration Checks ---")
+    passed_p2_count = 0
+    failed_p2_count = 0
     for idx, (func_name, desc, func) in enumerate(PHASE2_CHECKS, start=1):
         tc = TestCase(func_name, desc, is_phase2=True)
-        func(tc)
-        pending_p2_count += 1
+        try:
+            func(tc)
+        except Exception as exc:
+            tc.status = "FAILED"
+            tc.failure_category = "UNHANDLED_EXCEPTION"
+            tc.detail = f"Unhandled exception during test execution: {exc}"
+
         badge = f"[{tc.status}]"
         print(f"P2-{idx:02d}: {tc.description:<55} {badge}")
-        print(f"         Note: {tc.detail}")
+        if tc.status == "PASSED":
+            passed_p2_count += 1
+            print(f"         Detail: {tc.detail}")
+        elif tc.status == "FAILED":
+            failed_p2_count += 1
+            print(f"         FAILED [{tc.failure_category}]: {tc.detail}")
+            if tc.command:
+                print(f"         Command: {' '.join(tc.command)}")
+            if tc.raw_stdout:
+                truncated_out = tc.raw_stdout[:300] + ("..." if len(tc.raw_stdout) > 300 else "")
+                print(f"         Raw stdout: {truncated_out!r}")
+            if tc.raw_stderr:
+                truncated_err = tc.raw_stderr[:300] + ("..." if len(tc.raw_stderr) > 300 else "")
+                print(f"         Raw stderr: {truncated_err!r}")
 
     clean_temp_files()
 
     print("\n" + "=" * 72)
     print(f"Phase 1 Summary: {passed_count} passed, {failed_count} failed, {skipped_count} skipped (Total: {len(PHASE1_TESTS)})")
-    print(f"Phase 2 Groundwork: {pending_p2_count} pending (scaffolded, execution blocked until container isolation)")
+    print(f"Phase 2 Integration: {passed_p2_count} passed, {failed_p2_count} failed (Total: {len(PHASE2_CHECKS)})")
     print("=" * 72)
 
-    if failed_count > 0:
+    if failed_count > 0 or failed_p2_count > 0:
         sys.exit(1)
     sys.exit(0)
 

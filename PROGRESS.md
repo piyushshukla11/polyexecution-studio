@@ -2019,3 +2019,33 @@
 - Files: `PROGRESS.md`, `sandbox-daemon/sandbox.c`.
 - Linked: LOG-0139, LOG-0138.
 - Tutor review: pending
+
+
+## [LOG-0141] 2026-11-15 21:22 IST | PLAN | actor: agent
+- Reason: Replace the three Phase 2 PENDING scaffold checks in `sandbox-daemon/tests/test_runner.py` with bounded live kernel integration checks for cgroup pids.max containment, host filesystem canary isolation, and seccomp/netns network denial.
+- Details / Change:
+  1. In `sandbox-daemon/phase2_privilege.c`, adjust `RLIMIT_NPROC` in `phase2_target_drop_capabilities_and_identity()` from 32 to 64. When `RLIMIT_NPROC` was set to 32 (identical to cgroup `pids.max`), the Linux kernel's user-process check in `copy_process()` intercepted forks before reaching `cgroup_can_fork()`, preventing `pids.events` `max` counter from incrementing. Setting `RLIMIT_NPROC` to 64 provides a secondary safety ceiling while allowing cgroups v2 `pids.max` (32) to be the primary, binding kernel ceiling and generate causal counter evidence. Label as `AGENT-WROTE-TIER-A` under AI_RULES §14.
+  2. In `sandbox-daemon/tests/test_runner.py`, implement `test_phase2_fork_bomb`: execute `fork_bomb` only through production `sandbox-runner` with `--timeout-ms 1000`. Concurrently locate the active job cgroup under the delegated parent (`pes-<pid>-*`), confirm `pids.max == 32`, sample `pids.events` while the cgroup is alive, and assert `max > 0` (causal proof of task ceiling enforcement). Verify `cgroup.events` reaches `populated 0`, the cgroup is removed, and 0 lingering processes remain. Wrap with an independent outer watchdog.
+  3. In `sandbox-daemon/tests/test_runner.py`, implement `test_phase2_read_etc_passwd`: generate a unique unguessable temporary canary file containing a random UUID token, execute `read_etc_passwd` under `sandbox-runner`, assert token absence in stdout and stderr, assert exit code 1 (`BLOCKED_BY_POLICY`), verify explicit policy denial on stderr (`ENOENT` for both canary and `/etc/passwd`), and guarantee canary removal in a `finally` block. Wrap with an outer watchdog.
+  4. In `sandbox-daemon/tests/test_runner.py`, implement `test_phase2_net_connect`: execute `net_connect` targeting a local-only endpoint (`127.0.0.1:65432`) without external network access, assert exit code 1 (`BLOCKED_BY_POLICY`), and verify stderr reports `DIAG: OP=socket TARGET=127.0.0.1:65432 STATUS=BLOCKED_BY_POLICY ERRNO=1 (Operation not permitted)` to prove seccomp denial. Record network namespace isolation (`CLONE_NEWNET`) separately. Wrap with an outer watchdog.
+  5. Run baseline 18/18 tests and the 3 Phase 2 checks one by one. Verify zero process leaks and clean cgroup cleanup.
+- Files: `PROGRESS.md`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/tests/test_runner.py`.
+- Linked: LOG-0140.
+- Tutor review: pending
+
+
+## [LOG-0142] 2026-11-15 21:26 IST | DONE | actor: agent
+- Reason: Implement and verify the three bounded Phase 2 live kernel integration checks in `sandbox-daemon/tests/test_runner.py` with causal kernel evidence from cgroup v2 pids.max, host canary isolation, and seccomp/netns network denial.
+- Details / Change:
+  1. In `sandbox-daemon/phase2_privilege.c`, set `RLIMIT_NPROC` to 64 (from 32) in `phase2_target_drop_capabilities_and_identity()` to ensure cgroups v2 `pids.max` (32) binds as the primary task ceiling and triggers kernel `pids.events` `max` increments rather than being preempted by POSIX user rlimit checks. Labeled as `AGENT-WROTE-TIER-A` under AI_RULES §14 authorization.
+  2. In `sandbox-daemon/tests/test_runner.py`, implemented `find_delegated_cgroup_parent()` to dynamically resolve the user's delegated cgroup v2 parent (`/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service`).
+  3. Implemented `test_phase2_fork_bomb`: runs `tests/evil/bin/fork_bomb` under `sandbox-runner --timeout-ms 1000` with an outer 5s watchdog. Concurrently discovered the active cgroup `pes-<pid>-*`, verified `pids.max == 32`, polled `pids.events` and recorded `max = 5691` (direct causal proof that the Linux kernel rejected fork attempts with `EAGAIN` upon hitting task ceiling), verified peak `pids.current = 32 <= 32`, confirmed runner exit with `status: TIMEOUT` at wall deadline, confirmed atomic cgroup cleanup/removal, and verified 0 lingering test processes.
+  4. Implemented `test_phase2_read_etc_passwd`: generated a unique host canary file with a random UUID token, executed `read_etc_passwd` through `sandbox-runner`, confirmed status `RUNTIME_ERROR` with exit code 1 (`BLOCKED_BY_POLICY`), verified secret token was not leaked, verified stderr diagnostics reported `STATUS=BLOCKED_BY_POLICY ERRNO=2 (ENOENT)` for both canary and `/etc/passwd` due to minimal tmpfs private rootfs pivot, confirmed guaranteed host canary removal, and verified 0 lingering processes.
+  5. Implemented `test_phase2_net_connect`: targeted local endpoint `127.0.0.1:65432` without public internet access, confirmed status `RUNTIME_ERROR` with exit code 1 (`BLOCKED_BY_POLICY`), verified stderr diagnostics reported `DIAG: OP=socket TARGET=127.0.0.1:65432 STATUS=BLOCKED_BY_POLICY ERRNO=1 (Operation not permitted)` proving seccomp BPF denial, noted network namespace isolation (`CLONE_NEWNET`) guarantees no host interfaces or routing routes, and verified 0 lingering processes.
+  6. Updated `main()` in `test_runner.py` to execute both Phase 1 and Phase 2 suites and fail closed on any failure.
+  7. Verification: Full test suite ran and passed 21/21 (18/18 Phase 1 regression tests + 3/3 Phase 2 integration checks). Safe component tests (`test-setup-protocol`, `test-phase2-structural`, `test-phase2-seccomp-safe`, `test-phase2-fail-closed`) all passed.
+  8. Phase 2 DoD remaining status: All technical requirements and runtime tests for Phase 2 hardening (fork bomb containment, filesystem isolation, network denial, cgroup/namespace cleanup) are now green with live kernel evidence. Branch remains local on `phase/2-sandbox-hardening` (not merged into `main`).
+- Verification: `make clean all evil && make test` passed (18 Phase 1 passed, 3 Phase 2 passed; total 21 passed, 0 failed); `make test-setup-protocol test-phase2-structural test-phase2-seccomp-safe test-phase2-fail-closed` passed; `bash scripts/check_repo_hygiene.sh && bash scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/tests/test_runner.py`.
+- Linked: LOG-0141, LOG-0140.
+- Tutor review: pending

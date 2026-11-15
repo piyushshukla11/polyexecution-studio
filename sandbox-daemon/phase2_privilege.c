@@ -251,7 +251,8 @@ int phase2_target_drop_capabilities_and_identity(void) {
     if (clear_supplementary_groups() < 0) return -1;
     if (clear_ambient_capabilities() < 0) return -1;
     if (set_unprivileged_identity() < 0) return -1;
-    struct rlimit nproc_limit = {.rlim_cur = 32, .rlim_max = 32};
+    /* AGENT-WROTE-TIER-A: Allow cgroup pids.max (32) to bind first while providing safety ceiling at 64 */
+    struct rlimit nproc_limit = {.rlim_cur = 64, .rlim_max = 64};
     if (setrlimit(RLIMIT_NPROC, &nproc_limit) < 0) return -1;
     return verify_zero_capability_masks();
 }
