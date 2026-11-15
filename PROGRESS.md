@@ -2384,3 +2384,27 @@
 - Files: `PROGRESS.md`, `README.md`.
 - Linked: LOG-0154, LOG-0153.
 - Tutor review: ready for tutor review
+
+
+## [LOG-0156] 2026-11-16 00:53 IST | DECISION | actor: Piyush + tutor
+- Reason: Formally record tutor review approval and sign-off for Phase 3 Kotlin gRPC execution worker and sandboxed compilation, close Phase 3 Definition of Done, and authorize non-fast-forward merge into `main` with tag `phase-3-done`.
+- Details / Change:
+  1. Tutor reviewed the Phase 3 implementation, test evidence, and README corrections (mechanism-specific isolation summary and subshell execution for worker commands). The tutor officially signed off on Phase 3 and approved merging the branch into `main` via the project's normal process.
+  2. Phase 3 Definition of Done in `docs/04_BUILD_PLAN.md` ("C and Python run end-to-end from a gRPC client (grpcurl), with compilation also sandboxed") is fully satisfied with live runtime evidence on Omarchy host:
+     - Real sandbox C compilation: `/usr/bin/gcc` compiles user source inside `sandbox-runner` under bounded limits, outputs artifact into pre-opened descriptor, and rejects invalid C with `COMPILE_ERROR` before execution.
+     - Real sandbox C execution: compiled binary executes inside `sandbox-runner`, forwards stdin, and returns status `OK` with expected stdout.
+     - Real sandbox Python execution: `/usr/bin/python3` executes user script inside `sandbox-runner`, forwards stdin, and returns status `OK` with expected stdout.
+     - Loopback binding: worker binds strictly to `127.0.0.1:50055`.
+     - Protocol doubles: fake runner verifies RPC schema and single-response `ExecuteStream` contract without executing target binaries; production fail-closed verification confirms `SANDBOX_ERROR` when unprivileged.
+  3. All suites verified:
+     - Sandbox daemon integration: 22/22 passed (18 Phase 1 + 4 Phase 2).
+     - Sandbox safe structural tests: all passed.
+     - Worker unit tests: 11/11 tasks executed, all passed.
+     - End-to-end `verify_grpcurl.sh`: fake, production fail-closed, and production-runtime all passed.
+     - Lingering process check: 0 stray processes.
+  4. Phase 3 DoD status is marked CLOSED and APPROVED.
+  5. Action authorized: Merge `phase/3-worker-grpc` into `main` using `git merge --no-ff` and tag `phase-3-done` per AI_RULES.md §10.
+- Verification: `make -C sandbox-daemon test` (22/22 passed); `(cd worker && gradle test)` (passed); `verify_grpcurl.sh` (passed); `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`.
+- Linked: LOG-0155, LOG-0153, LOG-0149.
+- Tutor review: approved for Phase 3 sign-off and merge into main
