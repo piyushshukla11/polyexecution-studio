@@ -54,7 +54,7 @@ test-setup-protocol: all
 
 test-phase2-structural: all
 	mkdir -p $(EVIL_BIN_DIR)
-	$(CC) $(CFLAGS) -o $(EVIL_BIN_DIR)/test_phase2_cgroup tests/test_phase2_cgroup.c phase2_cgroup.c
+	$(CC) $(CFLAGS) -o $(EVIL_BIN_DIR)/test_phase2_cgroup tests/test_phase2_cgroup.c
 	$(EVIL_BIN_DIR)/test_phase2_cgroup
 
 probe-userns-mapping: all

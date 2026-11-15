@@ -1690,3 +1690,27 @@
 - Files: PROGRESS.md.
 - Linked: LOG-0104 through LOG-0109.
 - Tutor review: approved for the focused safe regressions only.
+
+## [LOG-0111] 2026-11-15 10:21 IST | PLAN | actor: agent
+- Reason: Add deterministic host-safe fake-tree coverage for the Phase 2 cgroup helper's success path and input gates without treating regular-file behavior as kernel cgroup enforcement.
+- Details / Change:
+  1. Extend the cgroup test with a test-only mkdir shim that creates regular-file stand-ins for the kernel-provided cgroup control files after the helper creates its job directory.
+  2. Verify a valid delegated controller path, required controller/subtree gate, exact cpu.max/memory.max/pids.max values, child PID attach, cgroup.kill write, populated=0 observation, and helper cleanup.
+  3. Cover malformed cgroup paths, missing required controllers, and invalid limits; report fake-tree outcomes as logic-only evidence.
+  4. Run strict build and focused cgroup test only, append the result and local study notes, run hooks, and commit this coherent test change with this LOG id. Never run attack fixtures, merge, or push; Phase 2 DoD remains OPEN.
+- Files: PROGRESS.md, sandbox-daemon/tests/test_phase2_cgroup.c, sandbox-daemon/Makefile, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
+- Linked: LOG-0110.
+- Tutor review: pending
+
+## [LOG-0111] 2026-11-15 10:26 IST | DONE | actor: agent
+- Reason: Add deterministic host-safe fake-tree coverage for the Phase 2 cgroup helper's success path and input gates without presenting regular-file behavior as kernel cgroup enforcement.
+- Details / Change:
+  1. Added a test-translation-unit-only `mkdir` shim that creates regular-file stand-ins for the kernel-provided control files; production cgroup code is unchanged.
+  2. Added fake-tree checks for valid delegated path and controller setup, exact `cpu.max=50000 100000`, `memory.max=67108864`, and `pids.max=17`; a reaped child PID recorded through attach; `cgroup.kill=1`; observation of the fixture's `populated 0`; and removal of the fake cgroup directory.
+  3. Added rejection checks for a missing subtree controller, unavailable controller, traversal-like cgroup path, and zero PID limit.
+  4. Updated the focused Make target and the local-only teaching guide, glossary, and tutor handoff.
+- Verification: The first `make clean && make all && make test-phase2-structural` compile attempt found a static `path_join` name collision in the test; the fixture helper was renamed. The rerun passed under `-Wall -Wextra -Werror -O2`. Final `make test-phase2-structural && make clean` passed and printed: `fake-tree logic only: valid path, controllers, exact limits, child PID attach, cgroup.kill, populated=0, cleanup: PASS`; `fake-tree logic only: missing required controller rejected before job creation: PASS`; `fake-tree logic only: unavailable required controller rejected before job creation: PASS`; `fake-tree logic only: malformed cgroup path rejected before job creation: PASS`; `fake-tree logic only: invalid limit rejected before job creation: PASS`. `git diff --check`, `bash scripts/check_progress_append_only.sh`, and `bash scripts/check_repo_hygiene.sh` passed. No Phase 2 attack fixture was run.
+- Security limit: Fake regular files only test helper logic and written values. They do not attach the PID, enforce limits, kill tasks, or demonstrate kernel `populated` updates. Phase 2 DoD remains OPEN.
+- Files: sandbox-daemon/Makefile, sandbox-daemon/tests/test_phase2_cgroup.c, PROGRESS.md; private notes and handoff are local-only and never staged.
+- Linked: LOG-0111 PLAN.
+- Tutor review: pending
