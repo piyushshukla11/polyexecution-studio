@@ -388,6 +388,13 @@ static void drain_and_close_pipe(int pipe_fd, char **buf, size_t *len, size_t *c
     close(pipe_fd);
 }
 
+#ifdef PES_TEST_FAULT_INJECTION
+/* AGENT-WROTE-TIER-A: Test-only fault injection hooks to exercise error branches deterministically */
+static int pes_test_inject_cgroup_create_errno = 0;
+static bool pes_test_inject_cgroup_create_fake_success = false;
+static int pes_test_inject_fork_errno = 0;
+#endif
+
 int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg, sandbox_result_t *res) {
     if (!binary_path || !cfg || !res) {
         return -1;
@@ -480,7 +487,21 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
     phase2_cgroup_t job_cgroup;
     phase2_cgroup_limits_t cgroup_limits;
     phase2_cgroup_limits_init(&cgroup_limits);
-    if (phase2_cgroup_create(&job_cgroup, "/sys/fs/cgroup", "/proc/self/cgroup", &cgroup_limits) < 0) {
+#ifdef PES_TEST_FAULT_INJECTION
+    int cgroup_create_res = 0;
+    if (pes_test_inject_cgroup_create_errno != 0) {
+        cgroup_create_res = -1;
+        errno = pes_test_inject_cgroup_create_errno;
+    } else if (pes_test_inject_cgroup_create_fake_success) {
+        memset(&job_cgroup, 0, sizeof(job_cgroup));
+        cgroup_create_res = 0;
+    } else {
+        cgroup_create_res = phase2_cgroup_create(&job_cgroup, "/sys/fs/cgroup", "/proc/self/cgroup", &cgroup_limits);
+    }
+#else
+    int cgroup_create_res = phase2_cgroup_create(&job_cgroup, "/sys/fs/cgroup", "/proc/self/cgroup", &cgroup_limits);
+#endif
+    if (cgroup_create_res < 0) {
         int setup_errno = errno;
         if (job_cgroup.active && cleanup_job_resources(&job_cgroup, NULL) < 0) {
             close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
@@ -523,7 +544,13 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
     uint64_t deadline_ms = start_ms + (uint64_t)cfg->timeout_ms;
     pid_t runner_pid = getpid();
 
+#ifdef PES_TEST_FAULT_INJECTION
+    pid_t pid = pes_test_inject_fork_errno != 0 ?
+        (errno = pes_test_inject_fork_errno, (pid_t)-1) :
+        fork();
+#else
     pid_t pid = fork();
+#endif
     if (pid < 0) {
         int fork_errno = errno;
         (void)cleanup_job_resources(&job_cgroup, root_mountpoint);

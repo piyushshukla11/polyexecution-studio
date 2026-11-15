@@ -16,6 +16,8 @@
 #include "../sandbox.c"
 #undef main
 
+static const char CANARY_TOKEN[] = "PES_CANARY_TOKEN_7b9a24_EXEC";
+
 static int count_open_descriptors(void) {
     DIR *dir = opendir("/proc/self/fd");
     if (!dir) return -1;
@@ -30,6 +32,51 @@ static int count_open_descriptors(void) {
     }
     closedir(dir);
     return count;
+}
+
+static int create_canary_script(char *script_path, size_t path_size) {
+    if (snprintf(script_path, path_size, "/tmp/pes-canary-XXXXXX") >= (int)path_size) return -1;
+    int fd = mkstemp(script_path);
+    if (fd < 0) return -1;
+
+    char script_body[512];
+    snprintf(script_body, sizeof(script_body),
+             "#!/bin/sh\n"
+             "echo \"%s\"\n"
+             "exit 0\n",
+             CANARY_TOKEN);
+
+    size_t len = strlen(script_body);
+    if (write(fd, script_body, len) != (ssize_t)len) {
+        close(fd);
+        unlink(script_path);
+        return -1;
+    }
+    close(fd);
+    if (chmod(script_path, 0755) < 0) {
+        unlink(script_path);
+        return -1;
+    }
+    return 0;
+}
+
+static int verify_no_child_processes(void) {
+    int wait_status = 0;
+    errno = 0;
+    pid_t orphan = waitpid(-1, &wait_status, WNOHANG);
+    if (orphan > 0) {
+        fprintf(stderr, "FAIL: orphaned child PID %ld detected (still waitable)\n", (long)orphan);
+        return -1;
+    }
+    if (orphan == 0) {
+        fprintf(stderr, "FAIL: child process is still running (waitpid returned 0)\n");
+        return -1;
+    }
+    if (orphan == -1 && errno != ECHILD) {
+        fprintf(stderr, "FAIL: unexpected waitpid error: %s (errno=%d)\n", strerror(errno), errno);
+        return -1;
+    }
+    return 0;
 }
 
 static int test_cleanup_job_resources_decoupled(void) {
@@ -76,32 +123,19 @@ static int test_cleanup_job_resources_decoupled(void) {
     return 0;
 }
 
-static int test_fail_closed_runner_on_unsupported_host(void) {
-    char canary_script[] = "/tmp/pes-canary-XXXXXX";
-    int fd = mkstemp(canary_script);
-    if (fd < 0) {
-        fprintf(stderr, "FAIL: cannot create temporary canary script\n");
-        return 1;
-    }
-
-    char marker_path[PATH_MAX];
-    snprintf(marker_path, sizeof(marker_path), "%s.marker", canary_script);
-    (void)unlink(marker_path);
-
-    char script_body[PATH_MAX + 128];
-    snprintf(script_body, sizeof(script_body), "#!/bin/sh\necho canary > \"%s\"\nexit 0\n", marker_path);
-    if (write(fd, script_body, strlen(script_body)) != (ssize_t)strlen(script_body)) {
-        close(fd);
-        unlink(canary_script);
-        return 1;
-    }
-    close(fd);
-    if (chmod(canary_script, 0755) < 0) {
-        unlink(canary_script);
+static int test_fail_closed_runner_on_cgroup_failure(void) {
+    char canary_script[PATH_MAX];
+    if (create_canary_script(canary_script, sizeof(canary_script)) < 0) {
+        fprintf(stderr, "FAIL: cannot create canary script\n");
         return 1;
     }
 
     int fds_before = count_open_descriptors();
+    if (fds_before < 0) {
+        fprintf(stderr, "FAIL: count_open_descriptors failed before runner invocation\n");
+        unlink(canary_script);
+        return 1;
+    }
 
     sandbox_config_t cfg;
     memset(&cfg, 0, sizeof(cfg));
@@ -116,15 +150,22 @@ static int test_fail_closed_runner_on_unsupported_host(void) {
     sandbox_result_t res;
     memset(&res, 0, sizeof(res));
 
+    /* Inject deterministic cgroup creation failure */
+    pes_test_inject_cgroup_create_errno = ENOTSUP;
     int ret = run_sandbox_with_config(canary_script, &cfg, &res);
+    pes_test_inject_cgroup_create_errno = 0;
 
     int fds_after = count_open_descriptors();
+    if (fds_after < 0) {
+        fprintf(stderr, "FAIL: count_open_descriptors failed after runner invocation\n");
+        unlink(canary_script);
+        return 1;
+    }
 
-    /* 1. Return code must be 0 (setup error handled cleanly, not unhandled crash) */
+    /* 1. Return code must be 0 (setup error handled cleanly, not crash) */
     if (ret != 0) {
         fprintf(stderr, "FAIL: run_sandbox_with_config returned %d, expected 0\n", ret);
         unlink(canary_script);
-        unlink(marker_path);
         return 1;
     }
 
@@ -133,25 +174,22 @@ static int test_fail_closed_runner_on_unsupported_host(void) {
         fprintf(stderr, "FAIL: res.status is %d, expected STATUS_SETUP_ERROR (%d)\n",
                 res.status, STATUS_SETUP_ERROR);
         unlink(canary_script);
-        unlink(marker_path);
         return 1;
     }
 
-    /* 3. Setup stage must identify the exact cgroup gate failure */
+    /* 3. Setup stage must identify cgroup creation failure */
     if (res.setup_err.stage != SETUP_STAGE_CGROUP_CREATE) {
         fprintf(stderr, "FAIL: res.setup_err.stage is %d, expected SETUP_STAGE_CGROUP_CREATE (%d)\n",
                 res.setup_err.stage, SETUP_STAGE_CGROUP_CREATE);
         unlink(canary_script);
-        unlink(marker_path);
         return 1;
     }
 
-    /* 4. Errno must report ENOTSUP (missing required cpu controller in cgroup delegation) */
+    /* 4. Errno must report the injected ENOTSUP */
     if (res.setup_err.errnum != ENOTSUP) {
         fprintf(stderr, "FAIL: res.setup_err.errnum is %d, expected ENOTSUP (%d)\n",
                 res.setup_err.errnum, ENOTSUP);
         unlink(canary_script);
-        unlink(marker_path);
         return 1;
     }
 
@@ -159,44 +197,126 @@ static int test_fail_closed_runner_on_unsupported_host(void) {
     if (res.exit_code != 127) {
         fprintf(stderr, "FAIL: res.exit_code is %d, expected 127\n", res.exit_code);
         unlink(canary_script);
-        unlink(marker_path);
         return 1;
     }
 
-    /* 6. Canary marker file must NOT exist (target binary was NEVER executed) */
-    if (access(marker_path, F_OK) == 0) {
-        fprintf(stderr, "FAIL: canary marker file was created! Target was executed despite setup failure!\n");
+    /* 6. Observable signal: canary token must NOT be in stdout (target never executed) */
+    if (res.stdout_len > 0 || (res.stdout_buf && strstr(res.stdout_buf, CANARY_TOKEN) != NULL)) {
+        fprintf(stderr, "FAIL: canary token observed in stdout! Target was executed despite setup failure!\n");
         unlink(canary_script);
-        unlink(marker_path);
         return 1;
     }
 
-    /* 7. Zero zombie or child processes left un-reaped */
-    int wait_status = 0;
-    pid_t orphan = waitpid(-1, &wait_status, WNOHANG);
-    if (orphan > 0) {
-        fprintf(stderr, "FAIL: orphaned child PID %ld detected\n", (long)orphan);
+    /* 7. Child process verification */
+    if (verify_no_child_processes() < 0) {
         unlink(canary_script);
-        unlink(marker_path);
         return 1;
     }
 
-    /* 8. Zero descriptor leakage */
-    if (fds_before > 0 && fds_after > 0 && fds_before != fds_after) {
+    /* 8. Descriptor leak check */
+    if (fds_before != fds_after) {
         fprintf(stderr, "FAIL: descriptor leak detected: before=%d, after=%d\n", fds_before, fds_after);
         unlink(canary_script);
-        unlink(marker_path);
         return 1;
     }
 
     unlink(canary_script);
-    unlink(marker_path);
+    return 0;
+}
+
+static int test_fail_closed_runner_on_fork_failure(void) {
+    char canary_script[PATH_MAX];
+    if (create_canary_script(canary_script, sizeof(canary_script)) < 0) {
+        fprintf(stderr, "FAIL: cannot create canary script for fork failure test\n");
+        return 1;
+    }
+
+    int fds_before = count_open_descriptors();
+    if (fds_before < 0) {
+        fprintf(stderr, "FAIL: count_open_descriptors failed before fork failure test\n");
+        unlink(canary_script);
+        return 1;
+    }
+
+    sandbox_config_t cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.timeout_ms = 2000;
+    cfg.rlimit_cpu_soft = 1;
+    cfg.rlimit_cpu_hard = 2;
+    cfg.rlimit_as_bytes = 64 * 1024 * 1024;
+    cfg.rlimit_fsize = 1024 * 1024;
+    cfg.rlimit_nofile = 64;
+    cfg.max_output_bytes = 4096;
+
+    sandbox_result_t res;
+    memset(&res, 0, sizeof(res));
+
+    /* Bypass cgroup creation failure so runner reaches fork(), then inject fork failure */
+    pes_test_inject_cgroup_create_fake_success = true;
+    pes_test_inject_fork_errno = ENOMEM;
+    int ret = run_sandbox_with_config(canary_script, &cfg, &res);
+    pes_test_inject_cgroup_create_fake_success = false;
+    pes_test_inject_fork_errno = 0;
+
+    int fds_after = count_open_descriptors();
+    if (fds_after < 0) {
+        fprintf(stderr, "FAIL: count_open_descriptors failed after fork failure test\n");
+        unlink(canary_script);
+        return 1;
+    }
+
+    /* 1. Return code must be 0 */
+    if (ret != 0) {
+        fprintf(stderr, "FAIL: run_sandbox_with_config returned %d on fork failure, expected 0\n", ret);
+        unlink(canary_script);
+        return 1;
+    }
+
+    /* 2. Status must be STATUS_SETUP_ERROR */
+    if (res.status != STATUS_SETUP_ERROR) {
+        fprintf(stderr, "FAIL: res.status is %d on fork failure, expected STATUS_SETUP_ERROR (%d)\n",
+                res.status, STATUS_SETUP_ERROR);
+        unlink(canary_script);
+        return 1;
+    }
+
+    /* 3. Errno must report the injected ENOMEM */
+    if (res.setup_err.errnum != ENOMEM) {
+        fprintf(stderr, "FAIL: res.setup_err.errnum is %d, expected ENOMEM (%d)\n",
+                res.setup_err.errnum, ENOMEM);
+        unlink(canary_script);
+        return 1;
+    }
+
+    /* 4. Target token must NOT be in stdout */
+    if (res.stdout_len > 0 || (res.stdout_buf && strstr(res.stdout_buf, CANARY_TOKEN) != NULL)) {
+        fprintf(stderr, "FAIL: canary token observed in stdout on fork failure!\n");
+        unlink(canary_script);
+        return 1;
+    }
+
+    /* 5. Child process verification */
+    if (verify_no_child_processes() < 0) {
+        unlink(canary_script);
+        return 1;
+    }
+
+    /* 6. Descriptor leak check (specifically verifies userns_ready_pipe and setup pipes cleanup) */
+    if (fds_before != fds_after) {
+        fprintf(stderr, "FAIL: descriptor leak detected on fork failure: before=%d, after=%d\n",
+                fds_before, fds_after);
+        unlink(canary_script);
+        return 1;
+    }
+
+    unlink(canary_script);
     return 0;
 }
 
 int main(void) {
     if (test_cleanup_job_resources_decoupled() != 0) return 1;
-    if (test_fail_closed_runner_on_unsupported_host() != 0) return 2;
-    puts("fail-closed gate regression: decoupled rootfs cleanup PASS, fail-closed target non-execution PASS, zero resource/FD leak PASS");
+    if (test_fail_closed_runner_on_cgroup_failure() != 0) return 2;
+    if (test_fail_closed_runner_on_fork_failure() != 0) return 3;
+    puts("fail-closed gate regression: decoupled rootfs cleanup PASS, injected cgroup-failure token absence/zero FD leak PASS, injected fork-failure pipe cleanup/zero FD leak PASS");
     return 0;
 }

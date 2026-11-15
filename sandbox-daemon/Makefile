@@ -69,7 +69,7 @@ test-phase2-seccomp-safe: all
 
 test-phase2-fail-closed: all
 	mkdir -p $(EVIL_BIN_DIR)
-	$(CC) $(CFLAGS) -o $(EVIL_BIN_DIR)/test_fail_closed_gate tests/test_fail_closed_gate.c phase2_cgroup.c phase2_userns.c phase2_rootfs.c phase2_privilege.c $(LDLIBS)
+	$(CC) $(CFLAGS) -DPES_TEST_FAULT_INJECTION -o $(EVIL_BIN_DIR)/test_fail_closed_gate tests/test_fail_closed_gate.c phase2_cgroup.c phase2_userns.c phase2_rootfs.c phase2_privilege.c $(LDLIBS)
 	$(EVIL_BIN_DIR)/test_fail_closed_gate
 
 .PHONY: all clean evil test test-setup-protocol test-phase2-structural probe-userns-mapping test-phase2-seccomp-safe test-phase2-fail-closed phase2-evil

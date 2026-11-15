@@ -1804,3 +1804,43 @@
 - Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_fail_closed_gate.c, sandbox-daemon/Makefile.
 - Linked: LOG-0116.
 - Tutor review: pending
+
+## [LOG-0118] 2026-11-15 12:35 IST | CORRECTION | actor: agent
+- Reason: Clarify the scope of process attribute `PR_GET_NO_NEW_PRIVS=1` and scope process/resource claims to direct evidence per tutor review.
+- Details / Change:
+  1. Process attribute scope correction: `PR_GET_NO_NEW_PRIVS=1` is a per-process attribute set on the container runner process (and inherited across fork/exec by its descendant process tree), not a system-wide or global kernel setting. Prior phrasing referring to it as "globally active" or "globally enforced" is corrected to accurately reflect that it is an inherited process attribute within this container's execution tree.
+  2. Scoping process and resource assertions: Claims of "zero orphaned processes" or "zero resource leaks" are strictly scoped to the exact invariants verified: `waitpid(-1, WNOHANG)` returning `-1` with `errno == ECHILD` confirms that no child processes of the runner remain waitable, and `/proc/self/fd` enumeration confirms that no open file descriptors leaked across `run_sandbox_with_config`. Phase 2 runtime kernel isolation (namespaces and cgroups v2 containment) remains unverified on this host, and Phase 2 DoD remains strictly OPEN.
+- Files: PROGRESS.md, HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
+- Linked: LOG-0117, LOG-0113.
+- Tutor review: pending
+
+## [LOG-0119] 2026-11-15 12:35 IST | PLAN | actor: agent
+- Reason: Address tutor review findings on the fail-closed regression test: add test-only failure injection seams for cgroup-create and fork failures, replace host-file canary with an observable stdout token check, fix waitpid child status handling, ensure descriptor-count errors fail the test, and exercise the fork-failure pipe cleanup path.
+- Details / Change:
+  1. In `sandbox-daemon/sandbox.c`, introduce a test-only fault injection seam under `#ifdef PES_TEST_FAULT_INJECTION` (with static hook variables `pes_test_inject_cgroup_create_errno` and `pes_test_inject_fork_errno`). In production builds (where this flag is omitted), the code paths remain completely unchanged and zero-overhead. Label agent-written Tier A code `AGENT-WROTE-TIER-A`.
+  2. In `sandbox-daemon/tests/test_fail_closed_gate.c`:
+     a) Replace the host-file canary marker with a benign target script emitting a unique token on stdout (`PES_FAIL_CLOSED_TOKEN_7b9a`). Assert the token is absent and `res.stdout_len == 0` upon setup failure (avoiding false assertions due to container mount namespaces / private tmpfs).
+     b) Fix the child process check: explicitly check `waitpid(-1, &status, WNOHANG)` such that `> 0` fails (leaked child), `== 0` fails (child still running), and `-1` requires `errno == ECHILD` (no child processes).
+     c) Make descriptor enumeration failures fail the test immediately if `count_open_descriptors()` returns `< 0`.
+     d) Add a test case `test_fail_closed_runner_on_fork_failure()` using `pes_test_inject_fork_errno = ENOMEM` to deterministically exercise the `fork()` failure branch in `run_sandbox_with_config`, proving that all 6 pipes (including `userns_ready_pipe`) are closed and zero file descriptors leak.
+     e) Use `pes_test_inject_cgroup_create_errno = ENOTSUP` in `test_fail_closed_runner_on_cgroup_failure()` so the test remains fully deterministic on both this host and capable VMs.
+  3. In `sandbox-daemon/Makefile`, compile `test_fail_closed_gate` with `-DPES_TEST_FAULT_INJECTION`.
+  4. Run all safe tests, strict builds, preflight checks, diagnostics, and git hooks. Phase 2 DoD remains OPEN. No hostile attack fixtures will be run.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_fail_closed_gate.c, sandbox-daemon/Makefile.
+- Linked: LOG-0118, LOG-0117.
+- Tutor review: pending
+
+## [LOG-0120] 2026-11-15 12:39 IST | DONE | actor: agent
+- Reason: Verified the deterministic and portable fail-closed regression test with injected cgroup and fork failure seams, observable stdout canary token, fixed waitpid child check, strict descriptor counting, and fork-failure pipe cleanup regression.
+- Details / Change:
+  1. Test-only fault injection seams: Added `#ifdef PES_TEST_FAULT_INJECTION` in `sandbox-daemon/sandbox.c` with static variables `pes_test_inject_cgroup_create_errno`, `pes_test_inject_cgroup_create_fake_success`, and `pes_test_inject_fork_errno`. Production builds remain completely untouched and zero-overhead.
+  2. Observable canary token: Replaced the host-file marker under `/tmp` with an observable stdout token check (`PES_CANARY_TOKEN_7b9a24_EXEC`) emitted by a benign target script. Verified `res.stdout_len == 0` and absence of the token upon injected setup failure.
+  3. Fixed waitpid child check: Updated `verify_no_child_processes()` to explicitly check `waitpid(-1, &status, WNOHANG)`: `> 0` fails (leaked child), `== 0` fails (child still running), and `-1` requires `errno == ECHILD`.
+  4. Strict descriptor counts: Updated `count_open_descriptors()` checks to fail the test immediately if `< 0`, asserting strict descriptor equality (`fds_before == fds_after`).
+  5. Exercised fork-failure pipe cleanup: Added `test_fail_closed_runner_on_fork_failure()` injecting `fork()` returning `-1, errno = ENOMEM`. Verified that `run_sandbox_with_config` cleans up `root_mountpoint`, closes all 6 pipes (including `userns_ready_pipe`), returns `STATUS_SETUP_ERROR`, leaves no waitable child processes, and exhibits zero descriptor leaks.
+  6. Verified compilation and tests: `make test-phase2-fail-closed` passed 3/3 checks; `make test-setup-protocol` passed 5/5 normal and 5/5 fallback; `make test-phase2-structural` passed 5/5 fake-tree logic checks; `make test-phase2-seccomp-safe` passed; Python diagnostics passed 18/18; preflight passed 6/6; hygiene and append-only hooks passed.
+  7. Scope boundaries: Confirmed that claims are strictly scoped to verified invariants; Phase 2 runtime kernel isolation remains unverified and Phase 2 DoD remains OPEN. No hostile fixtures were run.
+- Verification: `make clean && make all && make test-phase2-fail-closed && make test-setup-protocol && make test-phase2-structural && make test-phase2-seccomp-safe` passed under `-Wall -Wextra -Werror -O2`. Diagnostics 18/18, preflight 6/6, `git diff --check`, and repo hooks passed cleanly.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/tests/test_fail_closed_gate.c, sandbox-daemon/Makefile.
+- Linked: LOG-0119, LOG-0118.
+- Tutor review: pending
