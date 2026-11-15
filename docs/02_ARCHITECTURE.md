@@ -64,3 +64,10 @@ Strings in `ExecuteResponse` (`stdout`, `stderr`) follow RFC 8259 JSON encoding 
 
 ## Failure modes to design for
 Worker crashes mid-job; sandbox hangs; client disconnects during run; two Runs in one room at once; output of 1 GB; compile bombs (huge templates / macros).
+
+## Phase 3 worker behavior and evidence (2026-11-15)
+
+- `proto/execution.proto` is the contract source of truth. C compilation, the compiled C program, and Python all go through the production `ProcessSandboxRunner`; there is no host compiler/interpreter fallback.
+- `ExecuteStream` is a server-streaming RPC in the schema, but the current service emits exactly one final response after the pipeline completes. It does not send live compile/run status or incremental output.
+- The `--fake-runner` mode is limited to loopback and returns deterministic canned responses. It never starts a compiler, interpreter, or submitted program. Its gRPC results verify protocol behavior only; they are not execution evidence.
+- Production sandbox setup errors are reported as `SANDBOX_ERROR`. On the current host, the cgroup/namespace gate prevents a real run, so Phase 3's end-to-end C/Python DoD, including sandboxed compilation, remains open.

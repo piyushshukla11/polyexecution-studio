@@ -26,6 +26,11 @@ void sandbox_config_init_default(sandbox_config_t *cfg) {
     cfg->max_output_bytes = 64ULL * 1024ULL;            /* 64 KiB */
     cfg->target_args = NULL;
     cfg->target_argc = 0;
+    cfg->stdin_data = NULL;
+    cfg->stdin_len = 0;
+    cfg->workspace_source_fd = -1;
+    cfg->workspace_source_name = NULL;
+    cfg->artifact_output_fd = -1;
 }
 
 void sandbox_result_cleanup(sandbox_result_t *res) {
@@ -244,19 +249,32 @@ static int cleanup_job_resources(phase2_cgroup_t *cgroup, const char *root_mount
     return result;
 }
 
-static int close_unrelated_fds(int preserve_fd) {
+static int close_unrelated_fds(int preserve_fd, int preserve_fd2, int preserve_fd3, int preserve_fd4) {
 #ifdef SYS_close_range
 #ifdef PES_TEST_FORCE_CLOSE_RANGE_FAILURE
     /* Test-only build switch: exercise the /proc fallback deterministically. */
 #else
     bool close_range_ok = true;
-    if (preserve_fd > STDERR_FILENO + 1 &&
-        syscall(SYS_close_range, (unsigned int)(STDERR_FILENO + 1), (unsigned int)(preserve_fd - 1), 0) < 0) {
-        if (errno != ENOSYS && errno != EINVAL) return -1;
-        close_range_ok = false;
+    int keep[4] = {preserve_fd, preserve_fd2, preserve_fd3, preserve_fd4};
+    for (size_t i = 0; i < 4; i++) {
+        for (size_t j = i + 1; j < 4; j++) {
+            if (keep[j] >= 0 && (keep[i] < 0 || keep[j] < keep[i])) {
+                int temp = keep[i]; keep[i] = keep[j]; keep[j] = temp;
+            }
+        }
     }
-    if (preserve_fd < INT_MAX &&
-        syscall(SYS_close_range, (unsigned int)(preserve_fd + 1), UINT_MAX, 0) < 0) {
+    unsigned int first = (unsigned int)(STDERR_FILENO + 1);
+    for (size_t i = 0; i < 4; i++) {
+        if (keep[i] < (int)first) continue;
+        unsigned int current = (unsigned int)keep[i];
+        if (current > first && syscall(SYS_close_range, first, current - 1U, 0) < 0) {
+            if (errno != ENOSYS && errno != EINVAL) return -1;
+            close_range_ok = false;
+            break;
+        }
+        first = current + 1U;
+    }
+    if (close_range_ok && syscall(SYS_close_range, first, UINT_MAX, 0) < 0) {
         if (errno != ENOSYS && errno != EINVAL) return -1;
         close_range_ok = false;
     }
@@ -298,7 +316,8 @@ static int close_unrelated_fds(int preserve_fd) {
             continue;
         }
         int fd = (int)listed_fd;
-        if (fd <= STDERR_FILENO || fd == preserve_fd || fd == directory_fd) continue;
+        if (fd <= STDERR_FILENO || fd == preserve_fd || fd == preserve_fd2 ||
+            fd == preserve_fd3 || fd == preserve_fd4 || fd == directory_fd) continue;
         if (close(fd) < 0 && errno != EBADF && result == 0) {
             result = -1;
             saved_errno = errno;
@@ -413,6 +432,13 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         errno = E2BIG;
         return -1;
     }
+    if (cfg->stdin_len > PES_MAX_STDIN_BYTES || (cfg->stdin_len > 0 && !cfg->stdin_data) ||
+        ((cfg->workspace_source_fd < 0) != (cfg->workspace_source_name == NULL)) ||
+        (cfg->artifact_output_fd >= 0 && cfg->workspace_source_fd < 0)) {
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+        errno = EINVAL;
+        return -1;
+    }
     for (size_t i = 0; i < cfg->target_argc; i++) {
         if (!cfg->target_args[i] || strnlen(cfg->target_args[i], MAX_TARGET_ARG_LEN + 1U) > MAX_TARGET_ARG_LEN) {
             res->status = STATUS_RUNNER_INTERNAL_ERROR;
@@ -492,6 +518,18 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         return -1;
     }
 
+    int artifact_status_pipe[2] = {-1, -1};
+    if (cfg->artifact_output_fd >= 0 && pipe2(artifact_status_pipe, O_CLOEXEC) < 0) {
+        close(userns_ready_pipe[0]); close(userns_ready_pipe[1]);
+        close(gate_pipe[0]); close(gate_pipe[1]);
+        close(err_pipe[0]); close(err_pipe[1]);
+        close(stdout_pipe[0]); close(stdout_pipe[1]);
+        close(stderr_pipe[0]); close(stderr_pipe[1]);
+        close(placement_pipe[0]); close(placement_pipe[1]);
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+        return -1;
+    }
+
     phase2_cgroup_t job_cgroup;
     memset(&job_cgroup, 0, sizeof(job_cgroup));
     phase2_cgroup_limits_t cgroup_limits;
@@ -518,6 +556,8 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             close(err_pipe[0]); close(err_pipe[1]);
             close(stdout_pipe[0]); close(stdout_pipe[1]);
             close(stderr_pipe[0]); close(stderr_pipe[1]);
+            if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
+            if (artifact_status_pipe[1] >= 0) close(artifact_status_pipe[1]);
             res->status = STATUS_RUNNER_INTERNAL_ERROR;
             return -1;
         }
@@ -527,6 +567,8 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         close(err_pipe[0]); close(err_pipe[1]);
         close(stdout_pipe[0]); close(stdout_pipe[1]);
         close(stderr_pipe[0]); close(stderr_pipe[1]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
+        if (artifact_status_pipe[1] >= 0) close(artifact_status_pipe[1]);
         set_setup_failure(res, SETUP_STAGE_CGROUP_CREATE, setup_errno);
         return 0;
     }
@@ -541,6 +583,8 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         close(err_pipe[0]); close(err_pipe[1]);
         close(stdout_pipe[0]); close(stdout_pipe[1]);
         close(stderr_pipe[0]); close(stderr_pipe[1]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
+        if (artifact_status_pipe[1] >= 0) close(artifact_status_pipe[1]);
         set_setup_failure(res, SETUP_STAGE_ROOTFS, setup_errno);
         return 0;
     }
@@ -571,6 +615,8 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         close(err_pipe[0]); close(err_pipe[1]);
         close(stdout_pipe[0]); close(stdout_pipe[1]);
         close(stderr_pipe[0]); close(stderr_pipe[1]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
+        if (artifact_status_pipe[1] >= 0) close(artifact_status_pipe[1]);
         set_setup_failure(res, SETUP_STAGE_SUPERVISOR, fork_errno);
         return 0;
     }
@@ -585,6 +631,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         close(gate_pipe[1]);
         close(userns_ready_pipe[0]);
         close(placement_pipe[1]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
 
         if (setup_gate_wait(placement_pipe[0]) < 0) {
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CGROUP_RELEASE, errno);
@@ -603,13 +650,11 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         if (setup_gate_wait(gate_pipe[0]) < 0) {
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CGROUP_RELEASE, errno);
         }
-        close(gate_pipe[0]);
 
-        int null_fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
-        if (null_fd < 0 || dup2(null_fd, STDIN_FILENO) < 0) {
+        if (dup2(gate_pipe[0], STDIN_FILENO) < 0) {
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CLOSE_FDS, errno);
         }
-        if (null_fd != STDIN_FILENO && close(null_fd) < 0) {
+        if (gate_pipe[0] != STDIN_FILENO && close(gate_pipe[0]) < 0) {
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CLOSE_FDS, errno);
         }
         /* 1. Establish new session / process group */
@@ -628,7 +673,8 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         /* Close original write descriptors if not already 1 and 2 */
         if (stdout_pipe[1] != STDOUT_FILENO) close(stdout_pipe[1]);
         if (stderr_pipe[1] != STDERR_FILENO) close(stderr_pipe[1]);
-        if (close_unrelated_fds(err_pipe[1]) < 0) {
+        if (close_unrelated_fds(err_pipe[1], cfg->workspace_source_fd, cfg->artifact_output_fd,
+                                artifact_status_pipe[1]) < 0) {
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CLOSE_FDS, errno);
         }
 
@@ -680,8 +726,14 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         }
 
         char target_path[PATH_MAX];
-        if (phase2_rootfs_prepare(binary_path, root_mountpoint, target_path, sizeof(target_path)) < 0) {
+        if (phase2_rootfs_prepare(binary_path, root_mountpoint, target_path, sizeof(target_path),
+                                  cfg->workspace_source_fd, cfg->workspace_source_name, 65534, 65534) < 0) {
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_ROOTFS, errno);
+        }
+        if (cfg->workspace_source_fd >= 0) {
+            if (close(cfg->workspace_source_fd) < 0) {
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_WORKSPACE, errno);
+            }
         }
 
         /* AGENT-WROTE-TIER-A: Dedicated pipe for Child 2 -> Child 1 status propagation */
@@ -845,6 +897,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
          * --- CHILD 1 (Host-level intermediate supervisor outside PID namespace) ---
          */
         close(status_pipe[1]);
+        close(STDIN_FILENO);
         close(STDOUT_FILENO);
         close(STDERR_FILENO);
 
@@ -881,8 +934,30 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         do {
             waited = waitpid(target_pid, &child2_status, 0);
         } while (waited < 0 && errno == EINTR);
+        if (waited != target_pid) _exit(126);
 
         int final_status = (total_status_read == sizeof(target_status)) ? target_status : child2_status;
+
+        if (cfg->artifact_output_fd >= 0) {
+            unsigned char artifact_status = 0;
+            if (WIFEXITED(final_status) && WEXITSTATUS(final_status) == 0) {
+                int workspace_fd = open("/workspace", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+                if (workspace_fd >= 0 && phase2_rootfs_copy_artifact(
+                        workspace_fd, cfg->artifact_output_fd, 65534,
+                        (size_t)cfg->rlimit_fsize) == 0) {
+                    artifact_status = 1;
+                } else {
+                    artifact_status = 2;
+                }
+                if (workspace_fd >= 0) close(workspace_fd);
+            }
+            ssize_t status_written;
+            do {
+                status_written = write(artifact_status_pipe[1], &artifact_status, sizeof(artifact_status));
+            } while (status_written < 0 && errno == EINTR);
+            if (status_written != (ssize_t)sizeof(artifact_status) || artifact_status == 2) _exit(126);
+            close(artifact_status_pipe[1]);
+        }
 
         if (WIFEXITED(final_status)) {
             _exit(WEXITSTATUS(final_status));
@@ -905,6 +980,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
     close(gate_pipe[0]);
     close(userns_ready_pipe[1]);
     close(placement_pipe[0]);
+    if (artifact_status_pipe[1] >= 0) close(artifact_status_pipe[1]);
 
     if (phase2_cgroup_attach(&job_cgroup, pid) < 0) {
         int attach_errno = errno;
@@ -913,6 +989,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         memset(&child_usage, 0, sizeof(child_usage));
         (void)terminate_and_reap_setup_child(pid, &child_status, &child_usage);
         close(gate_pipe[1]); close(userns_ready_pipe[0]); close(placement_pipe[1]); close(err_pipe[0]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
         close(stdout_pipe[0]); close(stderr_pipe[0]);
         if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
             res->status = STATUS_RUNNER_INTERNAL_ERROR;
@@ -929,6 +1006,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         memset(&child_usage, 0, sizeof(child_usage));
         int cleanup_result = terminate_and_reap_setup_child(pid, &child_status, &child_usage);
         close(placement_pipe[1]); close(userns_ready_pipe[0]); close(gate_pipe[1]); close(err_pipe[0]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
         close(stdout_pipe[0]); close(stderr_pipe[0]);
         if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
             res->status = STATUS_RUNNER_CHILD_LOST;
@@ -948,6 +1026,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         memset(&child_usage, 0, sizeof(child_usage));
         int cleanup_result = terminate_and_reap_setup_child(pid, &child_status, &child_usage);
         close(gate_pipe[1]); close(err_pipe[0]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
         close(stdout_pipe[0]); close(stderr_pipe[0]);
         if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
             res->status = STATUS_RUNNER_CHILD_LOST;
@@ -971,6 +1050,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         memset(&child_usage, 0, sizeof(child_usage));
         int cleanup_result = terminate_and_reap_setup_child(pid, &child_status, &child_usage);
         close(gate_pipe[1]); close(err_pipe[0]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
         close(stdout_pipe[0]); close(stderr_pipe[0]);
         if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
             res->status = STATUS_RUNNER_CHILD_LOST;
@@ -992,6 +1072,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         memset(&child_usage, 0, sizeof(child_usage));
         (void)terminate_and_reap_setup_child(pid, &child_status, &child_usage);
         close(gate_pipe[1]); close(err_pipe[0]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
         close(stdout_pipe[0]); close(stderr_pipe[0]);
         if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
             res->status = STATUS_RUNNER_INTERNAL_ERROR;
@@ -1000,8 +1081,6 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         set_setup_failure(res, SETUP_STAGE_CGROUP_RELEASE, release_errno);
         return 0;
     }
-    close(gate_pipe[1]);
-
     /* Read error pipe */
     setup_error_t s_err;
     memset(&s_err, 0, sizeof(s_err));
@@ -1016,6 +1095,8 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
 
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
+        close(gate_pipe[1]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
 
         if (reap_pid != pid) {
             (void)cleanup_job_resources(&job_cgroup, root_mountpoint);
@@ -1041,6 +1122,8 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
 
         close(stdout_pipe[0]);
         close(stderr_pipe[0]);
+        close(gate_pipe[1]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
 
         if (cleanup_result < 0 || cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
             res->status = STATUS_RUNNER_CHILD_LOST;
@@ -1081,6 +1164,45 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
     bool alloc_failed = false;
     bool stdout_open = true;
     bool stderr_open = true;
+    bool stdin_open = cfg->stdin_len > 0;
+    size_t stdin_offset = 0;
+    if (!stdin_open) {
+        close(gate_pipe[1]);
+        gate_pipe[1] = -1;
+    } else if (fcntl(gate_pipe[1], F_SETFL, O_NONBLOCK) < 0) {
+        int setup_errno = errno;
+        (void)terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        close(gate_pipe[1]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
+        close(stdout_pipe[0]);
+        close(stderr_pipe[0]);
+        if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
+            return -1;
+        }
+        set_setup_failure(res, SETUP_STAGE_SUPERVISOR, setup_errno);
+        return 0;
+    }
+
+    struct sigaction ignore_sigpipe;
+    struct sigaction previous_sigpipe;
+    memset(&ignore_sigpipe, 0, sizeof(ignore_sigpipe));
+    ignore_sigpipe.sa_handler = SIG_IGN;
+    sigemptyset(&ignore_sigpipe.sa_mask);
+    if (sigaction(SIGPIPE, &ignore_sigpipe, &previous_sigpipe) < 0) {
+        int setup_errno = errno;
+        (void)terminate_and_reap_setup_child(pid, &child_status, &child_usage);
+        if (stdin_open) close(gate_pipe[1]);
+        if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
+        close(stdout_pipe[0]);
+        close(stderr_pipe[0]);
+        if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+            res->status = STATUS_RUNNER_INTERNAL_ERROR;
+            return -1;
+        }
+        set_setup_failure(res, SETUP_STAGE_SUPERVISOR, setup_errno);
+        return 0;
+    }
 
     while (!child_reaped) {
         /* Check monotonic wall clock before poll */
@@ -1096,10 +1218,10 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
         uint64_t remaining_ms = deadline_ms - pre_poll_ms;
         int poll_timeout = (remaining_ms > 50ULL) ? 50 : (int)remaining_ms;
 
-        if (stdout_open || stderr_open) {
-            struct pollfd pfds[2];
+        if (stdout_open || stderr_open || stdin_open) {
+            struct pollfd pfds[3];
             int nfds = 0;
-            int stdout_idx = -1, stderr_idx = -1;
+            int stdout_idx = -1, stderr_idx = -1, stdin_idx = -1;
 
             if (stdout_open) {
                 stdout_idx = nfds++;
@@ -1112,6 +1234,12 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                 pfds[stderr_idx].fd = stderr_pipe[0];
                 pfds[stderr_idx].events = POLLIN | POLLHUP;
                 pfds[stderr_idx].revents = 0;
+            }
+            if (stdin_open) {
+                stdin_idx = nfds++;
+                pfds[stdin_idx].fd = gate_pipe[1];
+                pfds[stdin_idx].events = POLLOUT | POLLHUP | POLLERR;
+                pfds[stdin_idx].revents = 0;
             }
 
             int poll_ret = poll(pfds, (nfds_t)nfds, poll_timeout);
@@ -1128,6 +1256,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                 }
                 if (stdout_open) { close(stdout_pipe[0]); stdout_open = false; }
                 if (stderr_open) { close(stderr_pipe[0]); stderr_open = false; }
+                if (stdin_open) { close(gate_pipe[1]); gate_pipe[1] = -1; stdin_open = false; }
                 res->status = STATUS_RUNNER_INTERNAL_ERROR;
                 break;
             }
@@ -1211,6 +1340,28 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                 }
                 if (alloc_failed || output_cap_breached) break;
             }
+            if (stdin_open && (pfds[stdin_idx].revents & (POLLOUT | POLLHUP | POLLERR))) {
+                if (pfds[stdin_idx].revents & (POLLHUP | POLLERR)) {
+                    close(gate_pipe[1]);
+                    gate_pipe[1] = -1;
+                    stdin_open = false;
+                } else {
+                    ssize_t written = write(gate_pipe[1], cfg->stdin_data + stdin_offset,
+                                            cfg->stdin_len - stdin_offset);
+                    if (written > 0) {
+                        stdin_offset += (size_t)written;
+                        if (stdin_offset == cfg->stdin_len) {
+                            close(gate_pipe[1]);
+                            gate_pipe[1] = -1;
+                            stdin_open = false;
+                        }
+                    } else if (written < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
+                        close(gate_pipe[1]);
+                        gate_pipe[1] = -1;
+                        stdin_open = false;
+                    }
+                }
+            }
         } else {
             /* Both pipes closed: sleep briefly while respecting deadline */
             (void)poll(NULL, 0, poll_timeout);
@@ -1227,10 +1378,15 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             }
             if (stdout_open) { close(stdout_pipe[0]); stdout_open = false; }
             if (stderr_open) { close(stderr_pipe[0]); stderr_open = false; }
+            if (stdin_open) { close(gate_pipe[1]); gate_pipe[1] = -1; stdin_open = false; }
             if (cleanup_job_resources(&job_cgroup, root_mountpoint) < 0) {
+                (void)sigaction(SIGPIPE, &previous_sigpipe, NULL);
+                if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
                 res->status = STATUS_RUNNER_INTERNAL_ERROR;
                 return -1;
             }
+            (void)sigaction(SIGPIPE, &previous_sigpipe, NULL);
+            if (artifact_status_pipe[0] >= 0) close(artifact_status_pipe[0]);
             res->status = STATUS_RUNNER_INTERNAL_ERROR;
             return -1;
         }
@@ -1343,6 +1499,30 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             } else {
                 res->status = STATUS_INDETERMINATE_SETUP_STATUS;
             }
+        }
+    }
+
+    if (stdin_open) {
+        close(gate_pipe[1]);
+        gate_pipe[1] = -1;
+        stdin_open = false;
+    }
+    if (sigaction(SIGPIPE, &previous_sigpipe, NULL) < 0 && res->status == 0) {
+        res->status = STATUS_RUNNER_INTERNAL_ERROR;
+    }
+
+    if (artifact_status_pipe[0] >= 0) {
+        unsigned char artifact_status = 0;
+        ssize_t status_read;
+        do {
+            status_read = read(artifact_status_pipe[0], &artifact_status, sizeof(artifact_status));
+        } while (status_read < 0 && errno == EINTR);
+        close(artifact_status_pipe[0]);
+        if (!timed_out && !output_cap_breached &&
+            (status_read != (ssize_t)sizeof(artifact_status) ||
+             (artifact_status == 2) || (artifact_status == 1 && res->status != STATUS_OK) ||
+             (artifact_status == 0 && res->status == STATUS_OK))) {
+            set_setup_failure(res, SETUP_STAGE_WORKSPACE, EIO);
         }
     }
 
@@ -1522,6 +1702,10 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "  --as-mb <mb>           RLIMIT_AS limit in MiB (default: 128)\n");
         fprintf(stderr, "  --fsize-mb <mb>        RLIMIT_FSIZE limit in MiB (default: 1)\n");
         fprintf(stderr, "  --max-output-kb <kb>   Output stream cap in KiB (default: 64)\n");
+        fprintf(stderr, "  --workspace <dir>       Private /tmp/pes-job-* workspace\n");
+        fprintf(stderr, "  --source-file <name>    Copy source.c or source.py into /workspace\n");
+        fprintf(stderr, "  --artifact-out <name>   Copy /workspace/target back after success\n");
+        fprintf(stderr, "  stdin                  Target stdin from standard input (max 64 KiB)\n");
         fprintf(stderr, "  -- <binary> [args...]  Target executable and arguments (max 128, 4096 bytes each)\n");
         return 1;
     }
@@ -1530,6 +1714,9 @@ int main(int argc, char *argv[]) {
     sandbox_config_init_default(&cfg);
 
     const char *binary_path = NULL;
+    const char *workspace_path = NULL;
+    const char *workspace_source_name = NULL;
+    const char *artifact_name = NULL;
     bool target_args_started = false;
 
     for (int i = 1; i < argc; i++) {
@@ -1557,6 +1744,12 @@ int main(int argc, char *argv[]) {
             cfg.rlimit_fsize = (uint64_t)strtoull(argv[++i], NULL, 10) * 1024ULL * 1024ULL;
         } else if (strcmp(argv[i], "--max-output-kb") == 0 && i + 1 < argc) {
             cfg.max_output_bytes = (size_t)strtoull(argv[++i], NULL, 10) * 1024ULL;
+        } else if (strcmp(argv[i], "--workspace") == 0 && i + 1 < argc) {
+            workspace_path = argv[++i];
+        } else if (strcmp(argv[i], "--source-file") == 0 && i + 1 < argc) {
+            workspace_source_name = argv[++i];
+        } else if (strcmp(argv[i], "--artifact-out") == 0 && i + 1 < argc) {
+            artifact_name = argv[++i];
         } else if (argv[i][0] != '-') {
             binary_path = argv[i];
         } else {
@@ -1575,6 +1768,39 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    if ((workspace_path == NULL) != (workspace_source_name == NULL) ||
+        (artifact_name && !workspace_path)) {
+        fprintf(stderr, "Error: --workspace and --source-file must be provided together; --artifact-out requires them\n");
+        return 1;
+    }
+    char stdin_buffer[PES_MAX_STDIN_BYTES + 1U];
+    size_t stdin_length = 0;
+    while (stdin_length <= PES_MAX_STDIN_BYTES) {
+        ssize_t count = read(STDIN_FILENO, stdin_buffer + stdin_length,
+                             PES_MAX_STDIN_BYTES + 1U - stdin_length);
+        if (count < 0 && errno == EINTR) continue;
+        if (count < 0) {
+            fprintf(stderr, "Error: failed to read runner stdin: %s\n", strerror(errno));
+            return 1;
+        }
+        if (count == 0) break;
+        stdin_length += (size_t)count;
+    }
+    if (stdin_length > PES_MAX_STDIN_BYTES) {
+        fprintf(stderr, "Error: stdin exceeds maximum of %u bytes\n", PES_MAX_STDIN_BYTES);
+        return 1;
+    }
+    if (workspace_path) {
+        if (phase2_workspace_open(workspace_path, workspace_source_name, artifact_name,
+                geteuid(), 256U * 1024U, &cfg.workspace_source_fd, &cfg.artifact_output_fd) < 0) {
+            fprintf(stderr, "Error: invalid or unsafe worker workspace: %s\n", strerror(errno));
+            return 1;
+        }
+        cfg.workspace_source_name = workspace_source_name;
+    }
+    cfg.stdin_data = stdin_buffer;
+    cfg.stdin_len = stdin_length;
+
     sandbox_result_t res;
     int ret = run_sandbox_with_config(binary_path, &cfg, &res);
     if (ret != 0) {
@@ -1583,5 +1809,7 @@ int main(int argc, char *argv[]) {
 
     sandbox_result_print_json(stdout, &res, cfg.job_id, &cfg);
     sandbox_result_cleanup(&res);
+    if (cfg.workspace_source_fd >= 0) close(cfg.workspace_source_fd);
+    if (cfg.artifact_output_fd >= 0) close(cfg.artifact_output_fd);
     return (ret == 0) ? 0 : 1;
 }

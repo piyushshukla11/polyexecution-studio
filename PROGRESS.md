@@ -17,6 +17,7 @@
 - Linked: (LOG ids)
 - Piyush prediction (optional):
 - Tutor review: pending
+
 ```
 
 ---
@@ -1955,6 +1956,62 @@
 - Verification: `cd worker && gradle --offline test --rerun-tasks` passed 8/8 unit tests. `bash worker/tests/verify_grpcurl.sh 50055 simulation` and `bash worker/tests/verify_grpcurl.sh 50056 production` passed all scenarios. Git repo hygiene and append-only hooks passed cleanly.
 - Files: PROGRESS.md, proto/execution.proto, worker/build.gradle.kts, worker/settings.gradle.kts, worker/src/**, worker/tests/**.
 - Linked: LOG-0125, LOG-0124.
+- Tutor review: pending
+
+## [LOG-0127] 2026-11-15 17:54 IST | PLAN | actor: agent
+- Reason: Close Phase 3 implementation gaps without executing submitted code outside the Phase 2 sandbox or weakening Phase 2 gates.
+- Details / Change:
+  1. Replace host-executing `SimulationSandboxRunner` with a deterministic `FakeRunnerClient` for tests/protocol demonstrations; bind all worker gRPC listeners to loopback and label grpcurl modes as fake protocol checks versus production fail-closed checks.
+  2. Implement bounded source/artifact handoff: validate the worker's private job directory and named regular source file, copy only that source into a private `/workspace` in the sandbox rootfs, and return a bounded compiler artifact through a pre-opened descriptor; keep the target identity at its existing mapped unprivileged UID/GID and verify ownership from the user namespace map.
+  3. Implement bounded request stdin from gRPC through Kotlin, runner stdin, and target stdin; start Kotlin output drainers and deadline before writing; have the C runner poll target stdin writes alongside stdout/stderr and enforce the same deadline.
+  4. Add focused unit/protocol/helper tests for fake gRPC responses, typed production arguments/fail-closed behavior, workspace path/permission/copy/cleanup behavior, stdin limits/forwarding/deadlines, compile failure short-circuit, language dispatch, status mapping, and the one-final-response `ExecuteStream` contract.
+  5. Preserve `proto/execution.proto` as source of truth, append a dependency DECISION for the existing Kotlin/gRPC/protobuf/Gson stack, correct stream documentation, update the grpcurl script labels, and update local-only learning notes and tutor handoff.
+  6. Run Gradle tests, safe C/protocol checks, the fake grpcurl protocol check, and the production fail-closed grpcurl check. Do not run Phase 2 hostile fixtures. Keep both phase branches local and unmerged; Phase 2 DoD remains OPEN and Phase 3 DoD remains OPEN absent capable-host runtime evidence.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/phase2_rootfs.c, sandbox-daemon/phase2_rootfs.h, sandbox-daemon/Makefile, worker/src/**, worker/tests/verify_grpcurl.sh, docs/02_ARCHITECTURE.md, docs/03_SANDBOX_DEEP_DIVE.md, HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md.
+- Linked: LOG-0126, LOG-0124.
+- Tutor review: pending
+
+## [LOG-0128] 2026-11-15 17:54 IST | DECISION | actor: agent
+- Reason: Choose a bounded workspace handoff that preserves the current mapped unprivileged identity and does not expose host `/tmp` or assume host UID 1000 maps to namespace UID 65534.
+- Details / Change: The worker owns a mode-0700 job directory and source file. The C runner opens and validates only that directory and the fixed source leaf with no-follow semantics and ownership/mode/size checks. During rootfs setup, the sandbox creates a private tmpfs `/workspace`, assigns it to the already-verified namespace UID/GID 65534, and copies in only the current job's source. Compiler output is created inside that tmpfs and copied out through a separately pre-opened, bounded, exclusive-create artifact descriptor held only by the trusted setup/supervisor path; the target process does not inherit that descriptor. This is chosen over a writable bind mount because the existing map makes host-owned worker files namespace UID 0, not UID/GID 65534, while changing that identity mapping or granting a host ACL would alter the approved identity assumptions. The handoff adds no dependency and leaves namespace, cgroup, privilege, seccomp, rootfs, and fail-closed behavior unchanged.
+- Files: PROGRESS.md, sandbox-daemon/sandbox.c, sandbox-daemon/phase2_rootfs.c, worker/src/**.
+- Linked: LOG-0127.
+- Tutor review: pending
+
+## [LOG-0129] 2026-11-15 17:54 IST | DECISION | actor: agent
+- Reason: Explain the purpose, alternatives, runtime/build footprint, and maintenance cost of the dependencies already present in the Phase 3 worker.
+- Details / Change:
+  1. Kotlin JVM Gradle plugin and protobuf Gradle plugin: compile the worker and generate Java/Kotlin types from the single `proto/execution.proto` contract. Alternatives were handwritten protocol types or manually maintained generated sources; both risk contract drift. Build-only cost is extra Gradle/plugin resolution and generated code; versions remain pinned and should be updated together with compatibility tests.
+  2. gRPC Java/Kotlin, protobuf, reflection, and shaded Netty: implement the typed RPC, coroutine service stubs, wire serialization, client discovery, and transport. Alternatives were REST/JSON (which would abandon the selected gRPC contract) or unshaded Netty (which adds runtime classpath conflict risk). This is the largest runtime footprint because shaded Netty and generated RPC code add transitive JARs; keep the version family pinned and upgrade deliberately with grpcurl and Gradle checks.
+  3. Kotlin coroutines: provide suspend/Flow service APIs and structured async work. Alternatives were blocking gRPC service implementations or callbacks; those add thread-management complexity. Runtime cost is the coroutine library and dispatcher threads; avoid blocking a dispatcher and keep the dependency version aligned with gRPC Kotlin.
+  4. Gson: map the sandbox runner's existing JSON result to typed Kotlin data classes. Alternatives were a new JSON library or a custom parser; a custom parser is error-prone and another library adds more transitive maintenance. Gson is a small runtime dependency used only at the C-runner boundary.
+  5. JUnit 5, Kotlin test, grpc-testing, grpc-inprocess, and coroutines-test are test-only dependencies for unit and in-process protocol tests; they are absent from the worker runtime. They add test resolution time and should track the Gradle/JUnit/gRPC versions. `io.grpc:grpc-inprocess` was added to `testImplementation` to enable in-process gRPC testing without network socket bindings.
+  6. No runtime dependency is added by this plan.
+- Files: PROGRESS.md, worker/build.gradle.kts.
+- Linked: LOG-0127.
+- Tutor review: pending
+
+## [LOG-0130] 2026-11-15 19:20 IST | DONE | actor: agent
+- Reason: Complete the authorized Phase 3 safety and worker implementation work while preserving the approved parallel Phase 2 decision and both open DoDs.
+- Details / Change:
+  1. Removed `SimulationSandboxRunner` and host execution entry points. The replacement `FakeRunnerClient` returns conspicuous canned responses and a canned artifact without starting any process. `--simulation` is rejected. Worker gRPC binds explicitly to `127.0.0.1`; production routes only through `ProcessSandboxRunner`.
+  2. Added a fixed-path workspace copy-in/copy-back design. The C runner validates `/tmp/pes-job-*`, source leaf, no-follow behavior, owner, exact private modes, links, size, and directory entries. In `main()`, `cfg.workspace_source_name` is explicitly assigned, and `artifact_status_pipe` is closed across all setup error paths. The rootfs creates a private `/workspace`, verifies mapped UID/GID 65534 ownership, copies source as mode 0400, and returns bounded C compiler output through a pre-opened descriptor. Source and artifact descriptors are explicitly retained through trusted setup only; close-on-exec and the target supervisor's descriptor cleanup keep them out of the target.
+  3. Added a 64 KiB stdin maximum. Kotlin concurrently drains outputs, writes stdin, and applies a runner process deadline. The C runner reads no more than the limit plus one byte, rejects oversize input before sandbox setup, forwards target input nonblockingly in the output/deadline poll loop, and closes the pipe for empty input and cleanup.
+  4. Added focused fake gRPC, pipeline, production adapter, C workspace helper, and protocol tests. `ExecuteStream` remains one final response and documentation now says so. `io.grpc:grpc-inprocess` is added to `testImplementation` in `worker/build.gradle.kts` (recorded in LOG-0129); no runtime dependencies were added. `proto/execution.proto` was not changed.
+  5. Added `production-runtime` to `worker/tests/verify_grpcurl.sh`. On a capable VM it requests C compile/run that consumes stdin, Python that consumes stdin, and a C compiler error; expected evidence is C/Python `OK` with matching output and `COMPILE_ERROR` for invalid C. Fake mode is explicitly protocol-only; production setup-error mode is explicitly not execution evidence.
+- Verification:
+  - `cd sandbox-daemon && make clean && make all && make test-workspace-handoff && make test-setup-protocol && make test-phase2-structural && make test-phase2-seccomp-safe && make test-phase2-fail-closed`: PASS under `-Wall -Wextra -Werror -O2`. Workspace helper covered private/mapped permissions, source bytes, symlink/traversal/size/mode/extra-entry rejection, artifact symlink rejection and copy-back, and teardown. Setup protocol passed 5/5 plus forced fallback 5/5. Structural fake-tree checks, seccomp probe, and fail-closed descriptor/cleanup regressions passed.
+  - `python3 scripts/test_phase2_preflight.py` (6/6 pass) and `python3 scripts/test_phase2_diagnostics.py` (18/18 pass).
+  - `bash -n worker/tests/verify_grpcurl.sh`: PASS.
+  - `cd worker && gradle --offline test --rerun-tasks`: PASS (11 actionable tasks executed). All 16 unit tests passed: `StatusMappingTest` (3/3), `ProcessSandboxRunnerTest` (4/4), `ExecutionPipelineTest` (8/8), `FakeRunnerGrpcTest` (1/1).
+  - `cd worker && gradle --offline installDist`: PASS (distribution installed to `worker/build/install/pes-worker/`).
+  - `bash worker/tests/verify_grpcurl.sh 50055 fake`: PASS (verified reflection, unary C fake protocol, unary Python fake protocol, and ExecuteStream single-response contract on loopback 127.0.0.1).
+  - `bash worker/tests/verify_grpcurl.sh 50056 production`: PASS (verified fail-closed behavior against real sandbox-runner: returned status `SANDBOX_ERROR`, exit_code 127, and diagnostic `setup error: stage=11 errno=95 (Operation not supported)` in stderr; no target or host gcc was executed).
+  - `git diff --check`, `bash scripts/check_progress_append_only.sh`, and `bash scripts/check_repo_hygiene.sh`: PASS.
+- Phase boundaries: Phase 2 DoD remains OPEN; Phase 3 DoD remains OPEN because this host did not run real C/Python requests through the production sandbox, including sandboxed C compilation. No Phase 2 hostile fixtures were run. Both branches remain local, unmerged, and unpushed.
+- Remaining VM verification command: `cd "/home/zogratis/Projects/Personal Projects/polyexecution-studio" && make -C sandbox-daemon clean all && cd worker && gradle --offline test installDist && ./tests/verify_grpcurl.sh 50055 production-runtime`. Expected evidence: real production worker startup, C request `OK` with echoed stdin after sandboxed compile and execution, Python request `OK` with echoed stdin, invalid C `COMPILE_ERROR`, and captured grpcurl responses. Do not close Phase 3 until all three scenarios pass through the real runner on a capable Linux VM.
+- Files: PROGRESS.md, docs/02_ARCHITECTURE.md, docs/03_SANDBOX_DEEP_DIVE.md, sandbox-daemon/Makefile, sandbox-daemon/phase2_rootfs.c, sandbox-daemon/phase2_rootfs.h, sandbox-daemon/sandbox.c, sandbox-daemon/sandbox.h, sandbox-daemon/tests/test_fail_closed_gate.c, sandbox-daemon/tests/test_setup_handshake.c, sandbox-daemon/tests/test_workspace_handoff.c, worker/build.gradle.kts, worker/src/main/kotlin/pes/worker/WorkerServer.kt, worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt, worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt, worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt, worker/src/test/kotlin/pes/worker/runner/ProcessSandboxRunnerTest.kt, worker/src/test/kotlin/pes/worker/service/FakeRunnerGrpcTest.kt, worker/tests/verify_grpcurl.sh. Local-only files updated: HANDOFF_PROMPT.md, LEARNING_NOTES/phase-overview.md, LEARNING_NOTES/glossary.md (excluded from staging).
+- Linked: LOG-0127, LOG-0128, LOG-0129, LOG-0124.
 - Tutor review: pending
 
 

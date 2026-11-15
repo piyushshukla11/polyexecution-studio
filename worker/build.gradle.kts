@@ -29,6 +29,7 @@ dependencies {
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
     testImplementation("io.grpc:grpc-testing:$grpcVersion")
+    testImplementation("io.grpc:grpc-inprocess:$grpcVersion")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:$coroutinesVersion")
 }
 
