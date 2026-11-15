@@ -2299,3 +2299,33 @@
 - Files: PROGRESS.md, sandbox-daemon/phase2_privilege.c, sandbox-daemon/sandbox.c, worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt.
 - Linked: LOG-0148, LOG-0147, LOG-0130.
 - Tutor review: ready for tutor review
+
+
+## [LOG-0150] 2026-11-16 00:37 IST | PLAN | actor: agent
+- Reason: Add Phase 3 interview and explain-back questions to `docs/05_INTERVIEW_PREP.md` required checklist per `AI_RULES.md` §14, covering compiler sandboxing requirements, gRPC streaming architecture, and workspace handoff isolation.
+- Details / Change:
+  1. In `docs/05_INTERVIEW_PREP.md`, under `### Required explain-back questions`, append three required checkboxes:
+     - Compiler sandboxing: Why must C compilation run inside the sandbox, and what compiler subprocesses and files must be available for GCC to work?
+     - gRPC streaming: What does `ExecuteStream` return today, and what would need to change to deliver stdout and stderr incrementally?
+     - Workspace isolation: How does the worker safely hand source files and the compiled artifact between its private workspace and the sandbox?
+  2. Verify repository markdown hygiene and append-only rules via `scripts/check_repo_hygiene.sh` and `scripts/check_progress_append_only.sh`.
+  3. Ensure ignored files (`HANDOFF_PROMPT.md`, `LEARNING_NOTES/`) remain untracked and unstaged.
+- Files: `PROGRESS.md`, `docs/05_INTERVIEW_PREP.md`.
+- Linked: LOG-0149.
+- Tutor review: pending
+
+
+## [LOG-0151] 2026-11-16 00:38 IST | DONE | actor: agent
+- Order: PLAN was LOG-0150.
+- Reason: Record Phase 3 interview and explain-back questions into `docs/05_INTERVIEW_PREP.md` required explain-back checklist per `AI_RULES.md` §14 while maintaining repository markdown hygiene.
+- Details / Change:
+  1. In `docs/05_INTERVIEW_PREP.md`, appended three required explain-back items:
+     - `Compiler sandboxing`: Why must C compilation run inside the sandbox, and what compiler subprocesses and files must be available for GCC to work?
+     - `gRPC streaming`: What does `ExecuteStream` return today, and what would need to change to deliver stdout and stderr incrementally?
+     - `Workspace isolation`: How does the worker safely hand source files and the compiled artifact between its private workspace and the sandbox?
+  2. Preserved all existing interview questions and checklist items unchanged.
+  3. Verified repository markdown hygiene: no disallowed markdown files added or tracked; `HANDOFF_PROMPT.md` and `LEARNING_NOTES/` remain untracked and unstaged.
+- Verification: `scripts/check_repo_hygiene.sh` passed; `scripts/check_progress_append_only.sh` passed; `git diff --check` passed.
+- Files: `PROGRESS.md`, `docs/05_INTERVIEW_PREP.md`.
+- Linked: LOG-0150, LOG-0149.
+- Tutor review: ready for tutor review
