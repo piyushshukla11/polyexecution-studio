@@ -4,9 +4,9 @@ PolyExecution Studio is a collaborative multi-language code execution platform u
 
 ---
 
-## Current Implementation State (Phase 3)
+## Current Implementation State (Phase 4)
 
-The project currently implements the bottom three layers of the architecture:
+The project currently implements the bottom four layers of the architecture:
 
 1. **C Sandbox Runner (`sandbox-daemon/sandbox-runner`)**:
    - Systems programming core implementing low-level process lifecycle management (`fork`, `execve`, `wait4`), resource limit enforcement (`RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_CORE`), and non-blocking stream capture (`poll`, pipe draining).
@@ -21,6 +21,13 @@ The project currently implements the bottom three layers of the architecture:
    - Sandboxed execution: routes compiled targets or `/usr/bin/python3` through `sandbox-runner` with bounded standard input forwarding.
    - Result classification: translates runner results into typed protobuf statuses (`OK`, `COMPILE_ERROR`, `RUNTIME_ERROR`, `TIMEOUT`, `OUTPUT_LIMIT`, `MEMORY_LIMIT`, `SANDBOX_ERROR`).
 
+3. **Java Spring Boot Gateway (`gateway/`)**:
+   - Ingress gateway binding strictly to loopback (`127.0.0.1:8080`) providing a WebSocket endpoint on `/ws` and a REST health check on `/health`.
+   - Structured JSON protocol: handles client messages (`room.join`, `room.leave`, `run`) and emits truthful server events (`room.joined`, `room.left`, `run.accepted`, `run.rejected`, `run.completed`, `error`).
+   - Bounded in-memory room manager: enforces room capacity (max 100 rooms, max 20 sessions per room), sliding-window rate limiting (30 runs/minute), thread-safe session tracking, disconnect cleanup, and strict room isolation with zero cross-room event leakage.
+   - Concurrency governance: enforces an explicit single active run per room policy and a global concurrent execution ceiling (16 runs max).
+   - Typed gRPC client: dispatches validated requests to the Kotlin execution worker via generated `pes.execution.v1` stubs, enforces call deadlines, and translates worker responses and transport failures fail-closed.
+
 ---
 
 ## Roadmap & Phase Status
@@ -30,8 +37,8 @@ The project currently implements the bottom three layers of the architecture:
 | **Phase 0** | Repo Setup & Governance | Complete (`phase-0-done`) | Pre-commit hook rejects edits to old progress log entries |
 | **Phase 1** | C Sandbox v1 (Process Lifecycle & Limits) | Complete (`phase-1-done`) | Correct execution and statuses for clean exit, exit codes, CPU/wall timeouts, memory bomb, output flood; no zombies |
 | **Phase 2** | C Sandbox v2 (Linux Isolation & Defences) | Complete (`phase-2-done`) | Fork bomb containment (`pids.max`), filesystem snooping defense, network denial via seccomp; cgroup cleanup verified; 0 stray processes |
-| **Phase 3** | Kotlin Worker & Sandboxed Compilation | Implemented (In Review) | C and Python run end-to-end from a gRPC client (`grpcurl`), with C compilation running inside the sandbox |
-| **Phase 4** | Java Gateway & WebSocket Server | Planned | WebSocket client triggers run and receives status events |
+| **Phase 3** | Kotlin Worker & Sandboxed Compilation | Complete (`phase-3-done`) | C and Python run end-to-end from a gRPC client (`grpcurl`), with C compilation running inside the sandbox |
+| **Phase 4** | Java Gateway & WebSocket Server | Implemented (In Review) | WebSocket client triggers run and receives status events |
 | **Phase 5** | Browser Web Client (Monaco Editor) | Planned | Browser editor executes code; renders Idle, Compiling, Running, Timed Out states |
 | **Phase 6** | Real-Time Collaboration (Yjs CRDT) | Planned | Concurrent multi-user edits converge deterministically |
 | **Phase 7** | Multi-Language Runtimes & Load Benchmarks | Planned | 50 concurrent runs without host instability; documented resource limits |
@@ -42,9 +49,11 @@ The project currently implements the bottom three layers of the architecture:
 
 In accordance with project governance rules, the following limitations reflect current functionality:
 
-- **Loopback binding only**: The worker service binds strictly to `127.0.0.1` (`--port 50055`). Public network ingress, authentication, rate limiting, and room routing are planned for the Phase 4 Java Gateway.
-- **Single-response streaming**: The `ExecuteStream` RPC uses a server-streaming signature but currently returns a single final execution response upon completion. Live chunked streaming of standard output and standard error is planned for Phase 4.
-- **Language support**: The worker currently supports C (compiled and executed inside the sandbox) and Python 3 (interpreted inside the sandbox). Runtimes for Rust, Java, and Node.js are planned for Phase 7.
+- **Loopback binding only**: Both the gateway (`127.0.0.1:8080`) and worker (`127.0.0.1:50055`) bind strictly to loopback. Public network ingress, TLS termination, and external identity provider authentication are deferred.
+- **In-memory room state**: Collaboration rooms and session memberships are stored entirely in JVM memory and are not persisted across server restarts. Empty rooms are pruned upon disconnection.
+- **Event truthfulness (no fake intermediate states)**: Because the worker returns a single final execution response after compilation and execution, the gateway emits truthful lifecycle events (`run.accepted` upon dispatch, followed by `run.completed`). It does not fabricate artificial compiling or running progress states.
+- **Unauthenticated sessions**: WebSocket sessions use server-assigned random UUIDs. Client-supplied user identifiers are untrusted and used only for room display metadata.
+- **Language support**: The pipeline currently supports C (compiled and executed inside the sandbox) and Python 3 (interpreted inside the sandbox). Runtimes for Rust, Java, and Node.js are planned for Phase 7.
 - **Linux host requirements**: Production sandbox execution requires a Linux kernel with cgroups v2 delegation (`cpu`, `memory`, `pids`) and unprivileged user namespaces. If these prerequisites are absent, the runner strictly fails closed (`SANDBOX_ERROR`).
 - **Containment model**: Isolation is enforced via Linux kernel namespaces, cgroups, and seccomp-bpf. It does not use hypervisor-level virtual machines (such as Firecracker or gVisor).
 
@@ -79,11 +88,26 @@ make -C sandbox-daemon test-workspace-handoff test-setup-protocol test-phase2-st
 (cd worker && gradle installDist)
 ```
 
-### 3. End-to-End gRPC Verification via `grpcurl`
-The repository includes an automated verification script that launches the worker on loopback, validates discovery via gRPC reflection, submits C and Python jobs, and verifies responses:
+### 3. Build and Test the Java Gateway
+```bash
+# Run gateway unit and in-process gRPC integration tests (from repository root)
+(cd gateway && gradle test)
+
+# Build the gateway executable jar (from repository root)
+(cd gateway && gradle bootJar)
+```
+
+### 4. End-to-End WebSocket Verification
+Run the complete stack verification (WebSocket Client -> Java Gateway -> Kotlin Worker -> Sandbox Runner):
 
 ```bash
-# Run live sandbox compilation and execution checks
+# Verify end-to-end WebSocket execution with real sandboxed C and Python
+bash gateway/tests/verify_e2e_websocket.sh 8080 50055
+```
+
+### 5. Worker gRPC Direct Verification via `grpcurl`
+```bash
+# Run live sandbox compilation and execution checks against worker
 bash worker/tests/verify_grpcurl.sh 50055 production-runtime
 
 # Run protocol-only verification with the fake runner

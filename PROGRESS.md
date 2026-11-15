@@ -2408,3 +2408,86 @@
 - Files: `PROGRESS.md`.
 - Linked: LOG-0155, LOG-0153, LOG-0149.
 - Tutor review: approved for Phase 3 sign-off and merge into main
+
+
+## [LOG-0157] 2026-11-16 01:06 IST | DECISION | actor: agent
+- Reason: Record architecture and dependency selections for Phase 4 Java Gateway per AI_RULES.md §7.
+- Details / Change:
+  1. Framework and build tool: Gradle with Java 21, standalone project `gateway/` structured consistently with `worker/` (its own `build.gradle.kts` and `settings.gradle.kts`), compiling generated Java protobuf/gRPC stubs from `../proto/execution.proto`.
+  2. Spring Boot 3.3.5 with `spring-boot-starter-websocket`: Mandated by `docs/02_ARCHITECTURE.md`. Provides embedded Tomcat/WebSocket server binding strictly to loopback (`127.0.0.1:8080`), connection lifecycle hooks, and concurrent session decorators. Alternative considered: raw Netty/Vert.x (lower footprint, but rejected because architecture document explicitly chose Spring Boot for gateway).
+  3. Raw `TextWebSocketHandler` instead of STOMP/SockJS: A custom JSON protocol (`room.join`, `room.leave`, `run`) with direct `TextWebSocketHandler` eliminates broker overhead, removes multi-frame complexity, and provides explicit control over room concurrency, session tracking, and error mapping.
+  4. gRPC client: `io.grpc:grpc-netty-shaded:1.68.1`, `io.grpc:grpc-protobuf:1.68.1`, `io.grpc:grpc-stub:1.68.1`, matching worker gRPC version 1.68.1. Netty is shaded to avoid classpath conflicts with Spring Boot.
+  5. JSON: `com.fasterxml.jackson.core:jackson-databind` (provided by spring-boot-starter-websocket) for deterministic parsing and serialization of protocol messages.
+  6. Testing: JUnit 5, Spring Boot Starter Test, `io.grpc:grpc-inprocess:1.68.1`, and `io.grpc:grpc-testing:1.68.1` for unit and deterministic in-process integration testing.
+- Files: `PROGRESS.md`.
+- Linked: LOG-0156.
+- Tutor review: pending
+
+
+## [LOG-0158] 2026-11-16 01:06 IST | PLAN | actor: agent
+- Reason: Implement Phase 4 Java Gateway, WebSocket Rooms, and Execution Status Events meeting the exact technical Definition of Done in `docs/04_BUILD_PLAN.md` ("Java gateway + WebSocket + rooms — Test WebSocket client triggers a run and receives status events").
+- Details / Change:
+  1. Configure `gateway/build.gradle.kts` and `gateway/settings.gradle.kts` using Java 21 toolchain and protobuf Gradle plugin compiling from `../proto/execution.proto`.
+  2. Implement Spring Boot gateway core:
+     - `GatewayApplication`: entry point configuring loopback binding `127.0.0.1:8080` and health check.
+     - `WebSocketConfig`: register `/ws` endpoint with bounded frame/message buffer (512 KiB).
+     - Protocol models: client messages (`RoomJoinMessage`, `RoomLeaveMessage`, `RunMessage`) and server events (`RoomJoinedEvent`, `RoomLeftEvent`, `RunAcceptedEvent`, `RunRejectedEvent`, `RunCompletedEvent`, `ErrorEvent`).
+     - Validation: validate room ID (`^[a-zA-Z0-9_-]{1,64}$`), request ID (`^[a-zA-Z0-9_-]{1,64}$`), language (`c`, `python`), UTF-8 byte bounds (source <= 256 KiB, stdin <= 64 KiB), and resource limits.
+     - `RoomManager`: in-memory thread-safe room manager tracking room membership, bounded rooms (max 100), bounded members per room (max 20), bounded global concurrency (max 16 runs), 1 active run per room policy, sliding rate limits, and disconnect reaping.
+     - `WorkerGrpcClient`: typed gRPC client communicating with Kotlin worker over loopback (`127.0.0.1:50051` configurable), enforcing call deadlines, mapping protobuf `ExecutionStatus` to JSON events, and handling gRPC transport errors fail-closed.
+     - `GatewayWebSocketHandler`: routing incoming text frames, managing session subscriptions, dispatching runs asynchronously, and broadcasting events exclusively to room members.
+  3. Tests:
+     - Unit tests: validation, room concurrency lock, rate limiting, disconnect cleanup, cross-room isolation, protobuf mapping.
+     - Integration test: Spring Boot test with real WebSocket client and in-process fake gRPC worker verifying full event flow.
+     - Production end-to-end integration check: live test running WebSocket client -> Java Gateway -> Kotlin Worker -> Phase 3 sandbox-runner with C and Python payloads.
+  4. Documentation & Hygiene:
+     - Update `README.md` to document Phase 4 gateway capabilities and honest limitations.
+     - Append Phase 4 interview questions to `docs/05_INTERVIEW_PREP.md`.
+     - Update local untracked `LEARNING_NOTES/`.
+     - Run existing suites (sandbox daemon 22/22, worker tests, verify_grpcurl.sh) and new gateway tests.
+     - Run `scripts/check_repo_hygiene.sh` and `scripts/check_progress_append_only.sh`.
+- Files: `PROGRESS.md`, `gateway/*`, `README.md`, `docs/05_INTERVIEW_PREP.md`.
+- Linked: LOG-0157, LOG-0156.
+- Tutor review: pending
+
+
+## [LOG-0159] 2026-11-16 01:25 IST | DONE | actor: agent
+- Order: PLAN was LOG-0158.
+- Reason: Complete Phase 4 Java Gateway, WebSocket Rooms, and Execution Status Events vertical slice meeting the exact technical Definition of Done in `docs/04_BUILD_PLAN.md` ("Java gateway + WebSocket + rooms — Test WebSocket client triggers a run and receives status events").
+- Details / Change:
+  1. Configured `gateway/` Gradle project with Java 21 toolchain, Spring Boot 3.3.5, `spring-boot-starter-websocket`, `grpc-netty-shaded:1.68.1`, `grpc-protobuf:1.68.1`, `protobuf-java:3.25.5`, and protobuf plugin compiling from `../proto/execution.proto`.
+  2. Implemented Java Gateway application core:
+     - `GatewayApplication`: Spring Boot main class binding to loopback `127.0.0.1:8080`, providing REST health check endpoint `/health`.
+     - `WebSocketConfig`: registers `/ws` endpoint with bounded frame/message buffer (512 KiB).
+     - Protocol DTOs: client messages (`RoomJoinMessage`, `RoomLeaveMessage`, `RunMessage`) and server events (`RoomJoinedEvent`, `RoomLeftEvent`, `RunAcceptedEvent`, `RunRejectedEvent`, `RunCompletedEvent`, `ErrorEvent`).
+     - Validation: `RequestValidator` validates room IDs (`^[a-zA-Z0-9_-]{1,64}$`), request IDs, languages (`c`, `python`), UTF-8 byte limits (source <= 256 KiB, stdin <= 64 KiB), and resource limit bounds.
+     - In-memory room manager: `RoomManager` tracks active rooms (max 100), sessions per room (max 20), sliding rate limiting (30 runs/min), disconnect reaping, and concurrency controls (1 active run per room policy, 16 global concurrent runs cap).
+     - gRPC client: `WorkerGrpcClient` connects to Kotlin execution worker via loopback (`127.0.0.1:50051` configurable), enforces call deadlines, maps protobuf `ExecutionStatus` to JSON events, and handles transport errors fail-closed.
+     - WebSocket handler: `GatewayWebSocketHandler` routes text messages, manages subscriptions, dispatches runs asynchronously without blocking connection threads, and broadcasts events exclusively to room members.
+  3. Added comprehensive test coverage:
+     - `RequestValidatorTest`: 7 unit tests covering valid/invalid languages, malformed IDs, source/stdin byte ceilings, and limit bounds.
+     - `RoomManagerTest`: 11 unit tests covering room join/leave, capacity limits, empty room cleanup, disconnect reaping, 1 active run per room lock, global concurrency cap, rate limiting, and cross-room event isolation.
+     - `WorkerGrpcClientTest`: 2 unit tests covering successful asynchronous execution and gRPC failure propagation.
+     - `GatewayIntegrationTest`: 4 in-process integration tests with real WebSocket client and fake gRPC worker proving room join, run execution, cross-room isolation, input validation, and fail-closed handling on worker failure.
+  4. Implemented live end-to-end verification:
+     - `gateway/tests/E2eWebSocketClient.java`: standalone Java 21 WebSocket client connecting to gateway, joining room, submitting C (valid and compile error) and Python, and asserting status events.
+     - `gateway/tests/verify_e2e_websocket.sh`: automated test script starting Kotlin worker on `127.0.0.1:50055`, Java gateway on `127.0.0.1:8080`, running `E2eWebSocketClient`, asserting `OK` and `COMPILE_ERROR` against production `sandbox-runner`, and cleaning up cleanly.
+  5. Verified all regression suites:
+     - `sandbox-daemon`: 22/22 integration tests passed (18 Phase 1 + 4 Phase 2).
+     - `sandbox-daemon`: safe structural, handshake protocol, seccomp safe, userns mapping, and fail-closed tests all passed.
+     - `worker`: 11/11 unit tests executed fresh, all passed.
+     - `gateway`: 24/24 unit and integration tests passed.
+     - Live Phase 4 E2E verification: passed against production sandbox runner.
+  6. Documentation and learning prep:
+     - Updated `README.md` to document Phase 4 Gateway functionality, quickstart commands, and honest limitations.
+     - Appended Phase 4 explain-back questions (Questions 21-23) to `docs/05_INTERVIEW_PREP.md`.
+     - Appended corresponding study questions (Questions 15-17) and glossary terms to local untracked `LEARNING_NOTES/`.
+- Verification:
+  - `(cd gateway && gradle test)` (24/24 passed).
+  - `(cd worker && gradle test --rerun-tasks)` (11/11 passed).
+  - `make -C sandbox-daemon test` (22/22 passed).
+  - `gateway/tests/verify_e2e_websocket.sh 8080 50055` (passed against real sandbox).
+  - `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `README.md`, `docs/05_INTERVIEW_PREP.md`, `gateway/*`.
+- Linked: LOG-0158, LOG-0157.
+- Tutor review: pending

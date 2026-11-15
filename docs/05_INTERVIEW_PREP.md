@@ -69,6 +69,9 @@ This is the project-wide final learning checklist. Piyush asked to finish techni
 - [ ] **Compiler sandboxing:** Why must C compilation run inside the sandbox, and what compiler subprocesses and files must be available for GCC to work?
 - [ ] **gRPC streaming:** What does `ExecuteStream` return today, and what would need to change to deliver stdout and stderr incrementally?
 - [ ] **Workspace isolation:** How does the worker safely hand source files and the compiled artifact between its private workspace and the sandbox?
+- [ ] **WebSocket session lifecycle and room isolation:** How does the gateway associate WebSocket connections with room memberships, why is client-provided identity untrusted, and how does the server prevent events from leaking across room boundaries?
+- [ ] **Gateway concurrency and rate limits:** Why does the gateway enforce an explicit "one active run per room" policy and global execution ceilings, and how do thread-safe data structures prevent race conditions when two users submit simultaneously?
+- [ ] **gRPC deadlines and error mapping:** How does the gateway use gRPC deadlines to prevent hung worker calls, and how are gRPC transport failures (`UNAVAILABLE`, `DEADLINE_EXCEEDED`) mapped to fail-closed client events without fabricating false successes?
 
 The existing 25 interview questions above are also required: answer every one without relying on the sketched answer. These added questions cover topics that came up during tutoring and agent review.
 
