@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import pes.execution.v1.ExecuteRequest;
 import pes.execution.v1.ExecuteResponse;
 import pes.execution.v1.ExecutionServiceGrpc;
+import pes.execution.v1.Language;
 import pes.gateway.config.GatewayProperties;
 
 import java.util.concurrent.CompletableFuture;
@@ -47,10 +48,20 @@ public class WorkerGrpcClient implements WorkerClient {
 
     @Override
     public CompletableFuture<ExecuteResponse> executeAsync(ExecuteRequest request) {
-        long wallMs = request.hasLimits() && request.getLimits().getWallMs() > 0
+        long targetWallMs = request.hasLimits() && request.getLimits().getWallMs() > 0
             ? request.getLimits().getWallMs()
             : 5000L;
-        long deadlineMs = Math.max(10000L, wallMs + 5000L);
+
+        // C requires sandboxed compilation before execution.
+        // Worker allows up to 8000 ms compile wall time plus 5000 ms runner setup grace.
+        long compileBudgetMs = (request.getLanguage() == Language.LANGUAGE_C)
+            ? 13000L
+            : 0L;
+
+        long runnerGraceMs = 5000L;
+        long gatewayMarginMs = 5000L;
+
+        long deadlineMs = compileBudgetMs + targetWallMs + runnerGraceMs + gatewayMarginMs;
 
         return CompletableFuture.supplyAsync(() -> {
             return blockingStub.withDeadlineAfter(deadlineMs, TimeUnit.MILLISECONDS)

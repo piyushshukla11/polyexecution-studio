@@ -19,6 +19,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
@@ -131,13 +132,44 @@ class GatewayIntegrationTest {
     }
 
     @Test
+    @DisplayName("Unapproved origin is rejected with HTTP 403 by WebSocket handshake")
+    void testUnapprovedOriginRejected() {
+        StandardWebSocketClient client = new StandardWebSocketClient();
+        TestWebSocketHandler handler = new TestWebSocketHandler();
+        URI uri = URI.create("ws://127.0.0.1:" + port + "/ws");
+
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://evil.com");
+
+        assertThrows(Exception.class, () -> client.execute(handler, headers, uri).get(5, TimeUnit.SECONDS));
+    }
+
+    @Test
+    @DisplayName("Approved development origin is accepted by WebSocket handshake")
+    void testApprovedOriginAccepted() throws Exception {
+        StandardWebSocketClient client = new StandardWebSocketClient();
+        TestWebSocketHandler handler = new TestWebSocketHandler();
+        URI uri = URI.create("ws://127.0.0.1:" + port + "/ws");
+
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://localhost:8080");
+
+        WebSocketSession session = client.execute(handler, headers, uri).get(5, TimeUnit.SECONDS);
+        assertTrue(session.isOpen());
+        session.close();
+    }
+
+    @Test
     @DisplayName("End-to-end WebSocket client joins room, triggers run, receives accepted and completed events")
     void testWebSocketClientRunSuccess() throws Exception {
         StandardWebSocketClient client = new StandardWebSocketClient();
         TestWebSocketHandler handler = new TestWebSocketHandler();
         URI uri = URI.create("ws://127.0.0.1:" + port + "/ws");
 
-        WebSocketSession session = client.execute(handler, null, uri).get(5, TimeUnit.SECONDS);
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        WebSocketSession session = client.execute(handler, headers, uri).get(5, TimeUnit.SECONDS);
         assertTrue(session.isOpen());
 
         // 1. Join room
@@ -200,8 +232,11 @@ class GatewayIntegrationTest {
         TestWebSocketHandler handler2 = new TestWebSocketHandler();
         URI uri = URI.create("ws://127.0.0.1:" + port + "/ws");
 
-        WebSocketSession session1 = client.execute(handler1, null, uri).get(5, TimeUnit.SECONDS);
-        WebSocketSession session2 = client.execute(handler2, null, uri).get(5, TimeUnit.SECONDS);
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        WebSocketSession session1 = client.execute(handler1, headers, uri).get(5, TimeUnit.SECONDS);
+        WebSocketSession session2 = client.execute(handler2, headers, uri).get(5, TimeUnit.SECONDS);
 
         session1.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"room-iso-1\"}"));
         assertNotNull(handler1.nextMessage(5000));
@@ -240,7 +275,10 @@ class GatewayIntegrationTest {
         TestWebSocketHandler handler = new TestWebSocketHandler();
         URI uri = URI.create("ws://127.0.0.1:" + port + "/ws");
 
-        WebSocketSession session = client.execute(handler, null, uri).get(5, TimeUnit.SECONDS);
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        WebSocketSession session = client.execute(handler, headers, uri).get(5, TimeUnit.SECONDS);
         session.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"room-invalid-test\"}"));
         assertNotNull(handler.nextMessage(5000));
 
@@ -277,7 +315,10 @@ class GatewayIntegrationTest {
         TestWebSocketHandler handler = new TestWebSocketHandler();
         URI uri = URI.create("ws://127.0.0.1:" + port + "/ws");
 
-        WebSocketSession session = client.execute(handler, null, uri).get(5, TimeUnit.SECONDS);
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        WebSocketSession session = client.execute(handler, headers, uri).get(5, TimeUnit.SECONDS);
         session.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"room-unavail-test\"}"));
         assertNotNull(handler.nextMessage(5000));
 

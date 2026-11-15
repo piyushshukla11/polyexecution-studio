@@ -78,10 +78,7 @@ public class RoomManager {
         Room room = rooms.get(roomId);
         if (room != null) {
             room.removeSession(sessionId);
-            if (room.isEmpty()) {
-                if (room.isRunActive()) {
-                    globalActiveRuns.decrementAndGet();
-                }
+            if (room.isEmpty() && !room.isRunActive()) {
                 rooms.remove(roomId);
             }
         }
@@ -96,10 +93,7 @@ public class RoomManager {
             Room room = rooms.get(roomId);
             if (room != null) {
                 room.removeSession(sessionId);
-                if (room.isEmpty()) {
-                    if (room.isRunActive()) {
-                        globalActiveRuns.decrementAndGet();
-                    }
+                if (room.isEmpty() && !room.isRunActive()) {
                     rooms.remove(roomId);
                 }
             }
@@ -107,7 +101,7 @@ public class RoomManager {
         return roomId;
     }
 
-    public AcquireRunResult tryAcquireRun(String roomId, String sessionId, String requestId) {
+    public synchronized AcquireRunResult tryAcquireRun(String roomId, String sessionId, String requestId) {
         Room room = rooms.get(roomId);
         if (room == null || !room.hasSession(sessionId)) {
             return AcquireRunResult.NOT_IN_ROOM;
@@ -131,12 +125,16 @@ public class RoomManager {
         return AcquireRunResult.ACQUIRED;
     }
 
-    public void releaseRun(String roomId) {
+    public synchronized boolean releaseRun(String roomId, String requestId) {
         Room room = rooms.get(roomId);
-        if (room != null && room.isRunActive()) {
-            room.releaseRun();
+        if (room != null && room.releaseRun(requestId)) {
             globalActiveRuns.decrementAndGet();
+            if (room.isEmpty()) {
+                rooms.remove(roomId);
+            }
+            return true;
         }
+        return false;
     }
 
     public boolean isSessionInRoom(String roomId, String sessionId) {

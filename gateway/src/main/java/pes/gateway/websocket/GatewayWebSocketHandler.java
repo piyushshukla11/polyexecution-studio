@@ -204,7 +204,7 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
                         handleExecutionSuccess(roomId, requestId, response);
                     }
                 } finally {
-                    roomManager.releaseRun(roomId);
+                    roomManager.releaseRun(roomId, requestId);
                 }
             });
     }

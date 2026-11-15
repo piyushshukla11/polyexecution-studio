@@ -13,6 +13,7 @@ public class E2eWebSocketClient {
 
         BlockingQueue<String> messages = new LinkedBlockingQueue<>();
         CompletableFuture<WebSocket> wsFuture = HttpClient.newHttpClient().newWebSocketBuilder()
+            .header("Origin", "http://127.0.0.1:8080")
             .connectTimeout(Duration.ofSeconds(5))
             .buildAsync(URI.create(wsUrl), new WebSocket.Listener() {
                 private final StringBuilder sb = new StringBuilder();

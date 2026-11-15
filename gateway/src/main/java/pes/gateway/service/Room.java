@@ -2,6 +2,7 @@ package pes.gateway.service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -63,7 +64,10 @@ public class Room {
         runTimestamps.offer(nowMs);
     }
 
-    public boolean tryAcquireRun(String requestId) {
+    public synchronized boolean tryAcquireRun(String requestId) {
+        if (requestId == null || requestId.isBlank()) {
+            return false;
+        }
         if (runActive.compareAndSet(false, true)) {
             this.activeRequestId = requestId;
             return true;
@@ -71,9 +75,13 @@ public class Room {
         return false;
     }
 
-    public void releaseRun() {
-        this.activeRequestId = null;
-        this.runActive.set(false);
+    public synchronized boolean releaseRun(String requestId) {
+        if (requestId != null && Objects.equals(this.activeRequestId, requestId)) {
+            this.activeRequestId = null;
+            this.runActive.set(false);
+            return true;
+        }
+        return false;
     }
 
     public boolean isRunActive() {

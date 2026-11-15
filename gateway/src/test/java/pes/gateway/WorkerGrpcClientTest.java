@@ -27,11 +27,19 @@ class WorkerGrpcClientTest {
     private ManagedChannel channel;
     private WorkerGrpcClient client;
     private volatile boolean returnError = false;
+    private volatile long simulateDelayMs = 0L;
 
     private final ExecutionServiceGrpc.ExecutionServiceImplBase serviceImpl =
         new ExecutionServiceGrpc.ExecutionServiceImplBase() {
             @Override
             public void execute(ExecuteRequest request, StreamObserver<ExecuteResponse> responseObserver) {
+                if (simulateDelayMs > 0) {
+                    try {
+                        Thread.sleep(simulateDelayMs);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
                 if (returnError) {
                     responseObserver.onError(Status.UNAVAILABLE.withDescription("Service down").asRuntimeException());
                     return;
@@ -67,6 +75,7 @@ class WorkerGrpcClientTest {
 
         client = new WorkerGrpcClient(channel);
         returnError = false;
+        simulateDelayMs = 0L;
     }
 
     @AfterEach
@@ -118,5 +127,28 @@ class WorkerGrpcClientTest {
         assertTrue(ex.getCause() instanceof io.grpc.StatusRuntimeException);
         io.grpc.StatusRuntimeException sre = (io.grpc.StatusRuntimeException) ex.getCause();
         assertEquals(Status.Code.UNAVAILABLE, sre.getStatus().getCode());
+    }
+
+    @Test
+    @DisplayName("C request with simulated 7s compile time succeeds without premature deadline expiration")
+    void testExecuteAsyncCCompileBudget() throws Exception {
+        // Simulate a slow GCC compilation that takes 7 seconds
+        // Previous deadline was max(10s, wallMs + 5s) = 6s for wallMs=1000, which would fail.
+        // With compileBudget=13000ms, deadline is 13000 + 1000 + 5000 + 5000 = 24000ms.
+        simulateDelayMs = 7000L;
+
+        ExecuteRequest request = ExecuteRequest.newBuilder()
+            .setJobId("test-c-compile-budget")
+            .setLanguage(Language.LANGUAGE_C)
+            .setSourceCode("int main(){return 0;}")
+            .setLimits(ResourceLimits.newBuilder().setWallMs(1000).build())
+            .build();
+
+        CompletableFuture<ExecuteResponse> future = client.executeAsync(request);
+        ExecuteResponse response = future.get(10, TimeUnit.SECONDS);
+
+        assertNotNull(response);
+        assertEquals("test-c-compile-budget", response.getJobId());
+        assertEquals(ExecutionStatus.OK, response.getStatus());
     }
 }

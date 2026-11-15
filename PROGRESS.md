@@ -2491,3 +2491,56 @@
 - Files: `PROGRESS.md`, `README.md`, `docs/05_INTERVIEW_PREP.md`, `gateway/*`.
 - Linked: LOG-0158, LOG-0157.
 - Tutor review: pending
+
+
+## [LOG-0160] 2026-11-16 01:32 IST | PLAN | actor: agent
+- Reason: Resolve tutor review findings on Phase 4 Java Gateway: restrict WebSocket origin to an explicit development allowlist, harden room and global concurrency against concurrent disconnects and TOCTOU races, and include C compilation budget in gRPC call deadlines.
+- Details / Change:
+  1. Origin allowlist (P1): In `GatewayProperties`, add configurable `allowedOrigins` defaulting to loopback development origins (`http://127.0.0.1:8080`, `http://localhost:8080`, `http://127.0.0.1:3000`, `http://localhost:3000`, `http://127.0.0.1:5173`, `http://localhost:5173`). In `WebSocketConfig`, replace wildcard `setAllowedOrigins("*")` with the explicit allowlist. Add integration tests verifying unapproved origins (e.g. `http://evil.com`) are rejected with HTTP 403.
+  2. Room lifecycle and atomic concurrency hardening (P1):
+     - In `Room.java`, tie run acquisition to a specific `requestId`, and require matching `requestId` for `releaseRun(requestId)`.
+     - In `RoomManager.java`, prevent room pruning and premature global slot decrement when the last member disconnects while an active run is in flight. Retain the room in `rooms` until its active run completes so rejoins observe `ROOM_RUN_IN_PROGRESS`. Prune empty rooms only upon `releaseRun`.
+     - Synchronize `tryAcquireRun` and `releaseRun` to guarantee atomic global slot checks and prevent TOCTOU over-allocation.
+     - In `GatewayWebSocketHandler`, pass `requestId` to `roomManager.releaseRun(roomId, requestId)`.
+     - Add regression tests covering: concurrent acquisitions across threads respecting global limit, last-member disconnect while run is active, and stale `releaseRun` rejection.
+  3. gRPC deadline budget for C compilation (P2):
+     - In `WorkerGrpcClient.java`, budget the worker's 8-second C compilation ceiling and 5-second runner grace alongside the execution wall time and gateway margin: `deadlineMs = compileBudgetMs (13s for C) + targetWallMs + runnerGraceMs (5s) + gatewayMarginMs (5s)`.
+     - Add unit test verifying that a C request simulating near-maximal allowed compilation time (7s) completes successfully without premature deadline expiration.
+  4. Run all test suites: gateway tests, worker tests, sandbox-daemon 22/22, live E2E WebSocket verification, and repository hygiene checks.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/config/GatewayProperties.java`, `gateway/src/main/java/pes/gateway/config/WebSocketConfig.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/service/WorkerGrpcClient.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/*`.
+- Linked: LOG-0159.
+- Tutor review: pending
+
+
+## [LOG-0161] 2026-11-16 01:37 IST | DONE | actor: agent
+- Order: PLAN was LOG-0160.
+- Reason: Complete tutor review corrections for Phase 4: enforce an explicit development origin allowlist, harden room and global concurrency against disconnect races, and budget C compilation time in gRPC call deadlines.
+- Details / Change:
+  1. Origin allowlist (P1):
+     - In `GatewayProperties`, added `allowedOrigins` defaulting to development origins (`http://127.0.0.1:8080`, `http://localhost:8080`, `http://127.0.0.1:3000`, `http://localhost:3000`, `http://127.0.0.1:5173`, `http://localhost:5173`).
+     - In `WebSocketConfig`, configured `registry.addHandler(...).setAllowedOrigins(properties.getAllowedOrigins().toArray(new String[0]))`.
+     - In `GatewayIntegrationTest`, added tests verifying that unapproved origins (e.g. `http://evil.com`) are rejected during the WebSocket handshake with HTTP 403, and approved origins connect successfully.
+  2. Room lifecycle and atomic concurrency hardening (P1):
+     - In `Room.java`, tied active run reservation to `requestId`, making `releaseRun(String requestId)` verify identity before clearing the active flag.
+     - In `RoomManager.java`, prevented premature room deletion and premature global slot decrement when the last member disconnects during an in-flight run. Empty rooms with an active run are retained until the run completes.
+     - Made `tryAcquireRun` and `releaseRun` synchronized, ensuring atomic check-and-increment on global slots and preventing TOCTOU races.
+     - In `GatewayWebSocketHandler`, passed `requestId` to `roomManager.releaseRun(roomId, requestId)`.
+     - In `RoomManagerTest`, added regression tests verifying: concurrent multi-threaded acquisitions strictly cap at `maxGlobalConcurrentRuns`, last-member disconnect while run is active preserves the room and rejects duplicate runs on rejoin with `ROOM_RUN_IN_PROGRESS`, and mismatched/stale `releaseRun` calls are safely rejected.
+  3. C compilation budget in gRPC call deadlines (P2):
+     - In `WorkerGrpcClient.java`, budgeted the worker's 8-second C compilation ceiling and 5-second runner grace alongside execution wall time and gateway margins (`deadlineMs = compileBudgetMs (13s for C) + targetWallMs + runnerGraceMs (5s) + gatewayMarginMs (5s)`).
+     - In `WorkerGrpcClientTest`, added a unit test proving that a C request simulating near-maximal compilation time (7 seconds) completes without premature deadline expiration.
+  4. Verified all suites:
+     - `gateway`: 30/30 unit and integration tests passed.
+     - `worker`: 11/11 unit tests passed.
+     - `sandbox-daemon`: 22/22 integration tests passed.
+     - Live E2E WebSocket test: valid C (`OK`), invalid C (`COMPILE_ERROR`), and Python (`OK`) passed against live `sandbox-runner`.
+     - Process cleanup: 0 lingering processes.
+- Verification:
+  - `(cd gateway && gradle test)` (30/30 passed).
+  - `(cd worker && gradle test)` (11/11 passed).
+  - `make -C sandbox-daemon test` (22/22 passed).
+  - `bash gateway/tests/verify_e2e_websocket.sh 8080 50055` (passed).
+  - `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/config/GatewayProperties.java`, `gateway/src/main/java/pes/gateway/config/WebSocketConfig.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/service/WorkerGrpcClient.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/main/resources/application.properties`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`, `gateway/src/test/java/pes/gateway/RoomManagerTest.java`, `gateway/src/test/java/pes/gateway/WorkerGrpcClientTest.java`, `gateway/tests/E2eWebSocketClient.java`.
+- Linked: LOG-0160, LOG-0159.
+- Tutor review: ready for tutor review
