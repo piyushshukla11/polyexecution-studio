@@ -102,6 +102,7 @@ export type IncomingServerEvent =
 
 export type ExecutionUiStatus =
   | 'IDLE'
+  | 'SUBMITTING'
   | 'ACCEPTED'
   | 'COMPILING'
   | 'RUNNING'

@@ -10,6 +10,13 @@ describe('StatusBadge', () => {
     expect(badge).toHaveClass('status-idle');
   });
 
+  it('renders Submitting status badge', () => {
+    render(<StatusBadge status="SUBMITTING" />);
+    const badge = screen.getByTestId('status-badge');
+    expect(badge).toHaveTextContent('Submitting');
+    expect(badge).toHaveClass('status-submitting');
+  });
+
   it('renders Compiling status badge', () => {
     render(<StatusBadge status="COMPILING" />);
     const badge = screen.getByTestId('status-badge');

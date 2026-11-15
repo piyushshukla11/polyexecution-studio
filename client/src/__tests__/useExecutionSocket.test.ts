@@ -103,13 +103,14 @@ describe('useExecutionSocket', () => {
       success = result.current.runCode('c', 'int main() { return 0; }');
     });
     expect(success).toBe(true);
-    expect(result.current.uiStatus).toBe('ACCEPTED');
+    // Submitting state must be shown immediately, NOT Accepted
+    expect(result.current.uiStatus).toBe('SUBMITTING');
 
     const runMsg = JSON.parse(ws.sentMessages[1]);
     expect(runMsg.type).toBe('run');
     const reqId = runMsg.requestId;
 
-    // Simulate run.accepted
+    // Simulate run.accepted: transitions to ACCEPTED only now
     act(() => {
       ws.simulateMessage({
         type: 'run.accepted',
@@ -160,6 +161,13 @@ describe('useExecutionSocket', () => {
     });
 
     expect(result.current.uiStatus).toBe('COMPLETED');
+    expect(result.current.stageHistory).toEqual([
+      'SUBMITTING',
+      'ACCEPTED',
+      'COMPILING',
+      'RUNNING',
+      'COMPLETED'
+    ]);
     expect(result.current.stdout).toBe('Hello World\n');
     expect(result.current.metrics?.wallMs).toBe(25);
     expect(result.current.metrics?.exitCode).toBe(0);
@@ -215,6 +223,12 @@ describe('useExecutionSocket', () => {
     });
 
     expect(result.current.uiStatus).toBe('COMPILE_ERROR');
+    expect(result.current.stageHistory).toEqual([
+      'SUBMITTING',
+      'COMPILING',
+      'COMPILE_ERROR'
+    ]);
+    expect(result.current.stageHistory).not.toContain('RUNNING');
     expect(result.current.stderr).toBe('syntax error on line 1\n');
   });
 
@@ -256,5 +270,71 @@ describe('useExecutionSocket', () => {
 
     expect(result.current.uiStatus).toBe('TIMED_OUT');
     expect(result.current.metrics?.status).toBe('TIMEOUT');
+  });
+
+  it('reconnects with backoff and rejoins room without replaying in-flight run', () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() =>
+        useExecutionSocket({ roomId: 'test-room-reconn', maxReconnectAttempts: 3 })
+      );
+      const ws1 = MockWebSocket.instances[0];
+
+      act(() => {
+        ws1.simulateOpen();
+        ws1.simulateMessage({
+          type: 'room.joined',
+          roomId: 'test-room-reconn',
+          sessionId: 'sess-1',
+          memberCount: 1
+        });
+      });
+      expect(result.current.connected).toBe(true);
+      expect(result.current.joined).toBe(true);
+
+      // Start an in-flight run
+      act(() => {
+        result.current.runCode('c', 'int main() {}');
+      });
+      expect(result.current.uiStatus).toBe('SUBMITTING');
+
+      // Socket drops unexpectedly
+      act(() => {
+        ws1.close();
+      });
+      expect(result.current.connected).toBe(false);
+      expect(result.current.joined).toBe(false);
+      // In-flight run must be aborted with ERROR
+      expect(result.current.uiStatus).toBe('ERROR');
+
+      // Fast-forward backoff timer for attempt 1 (1000ms)
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+
+      // A second WebSocket instance is created for reconnect
+      expect(MockWebSocket.instances.length).toBe(2);
+      const ws2 = MockWebSocket.instances[1];
+
+      // Second socket connects
+      act(() => {
+        ws2.simulateOpen();
+      });
+      expect(result.current.connected).toBe(true);
+
+      // Automatically sent room.join to rejoin the room
+      expect(ws2.sentMessages.length).toBe(1);
+      const rejoinMsg = JSON.parse(ws2.sentMessages[0]);
+      expect(rejoinMsg.type).toBe('room.join');
+      expect(rejoinMsg.roomId).toBe('test-room-reconn');
+
+      // CRITICAL: The old in-flight run is NOT replayed
+      const runMessages = ws2.sentMessages.filter(
+        (m) => JSON.parse(m).type === 'run'
+      );
+      expect(runMessages.length).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

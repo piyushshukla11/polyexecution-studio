@@ -10,6 +10,8 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({ status }) => {
     switch (status) {
       case 'IDLE':
         return { label: 'Idle', className: 'status-idle' };
+      case 'SUBMITTING':
+        return { label: 'Submitting', className: 'status-submitting' };
       case 'ACCEPTED':
         return { label: 'Accepted', className: 'status-accepted' };
       case 'COMPILING':

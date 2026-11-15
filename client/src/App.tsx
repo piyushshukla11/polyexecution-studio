@@ -28,7 +28,9 @@ export const App: React.FC = () => {
     connected,
     joined,
     connectionError,
+    reconnectAttempt,
     uiStatus,
+    stageHistory,
     stdout,
     stderr,
     metrics,
@@ -37,7 +39,11 @@ export const App: React.FC = () => {
     resetState
   } = useExecutionSocket();
 
-  const isRunning = uiStatus === 'ACCEPTED' || uiStatus === 'COMPILING' || uiStatus === 'RUNNING';
+  const isRunning =
+    uiStatus === 'SUBMITTING' ||
+    uiStatus === 'ACCEPTED' ||
+    uiStatus === 'COMPILING' ||
+    uiStatus === 'RUNNING';
 
   const handleLanguageChange = (newLang: SupportedLanguage) => {
     if (newLang === language) return;
@@ -69,7 +75,11 @@ export const App: React.FC = () => {
             className={`connection-indicator ${connected && joined ? 'connected' : 'disconnected'}`}
             data-testid="connection-status"
           >
-            {connected && joined ? `Room: ${roomId}` : 'Disconnected'}
+            {connected && joined
+              ? `Room: ${roomId}`
+              : reconnectAttempt > 0
+              ? `Reconnecting (${reconnectAttempt})...`
+              : 'Disconnected'}
           </span>
         </div>
       </header>
@@ -99,6 +109,9 @@ export const App: React.FC = () => {
           <div className="status-container">
             <span className="status-label">Execution Status:</span>
             <StatusBadge status={uiStatus} />
+            <span data-testid="status-timeline" className="status-timeline">
+              {stageHistory.join(' -> ')}
+            </span>
           </div>
         </div>
 
@@ -119,7 +132,7 @@ export const App: React.FC = () => {
             disabled={isRunning || !connected || !joined}
             data-testid="run-button"
           >
-            {isRunning ? 'Running...' : 'Run Code'}
+            {isRunning ? (uiStatus === 'SUBMITTING' ? 'Submitting...' : 'Running...') : 'Run Code'}
           </button>
         </div>
       </div>

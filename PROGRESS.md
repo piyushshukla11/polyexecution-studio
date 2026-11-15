@@ -2694,3 +2694,68 @@
 - Files: `PROGRESS.md`, `README.md`, `docs/05_INTERVIEW_PREP.md`, `.gitignore`, `proto/execution.proto`, `worker/*`, `gateway/*`, `client/*`.
 - Linked: LOG-0166, LOG-0165.
 - Tutor review: pending
+
+
+## [LOG-0168] 2026-11-16 02:45 IST | PLAN | actor: agent
+- Reason: Address Phase 5 tutor review findings across browser E2E Monaco interaction, status truthfulness, WebSocket reconnection, and toolchain version labels.
+- Details / Change:
+  1. [P1] Real Monaco interaction & progress sequence in Browser E2E:
+     - Remove `window.__setEditorCode` test hook from `CodeEditor.tsx`.
+     - In `client/tests/e2e.spec.ts`, interact directly with Monaco via Playwright clicking the editor, clearing with keypresses, and typing/inserting text.
+     - Implement an observed stage tracker (`stageHistory: ExecutionUiStatus[]`) and timeline in `useExecutionSocket.ts` and `App.tsx` (`data-testid="status-timeline"`).
+     - In `e2e.spec.ts`, assert the real progress sequence:
+       - C code: `['SUBMITTING', 'ACCEPTED', 'COMPILING', 'RUNNING', 'COMPLETED']`.
+       - Invalid C code: `['SUBMITTING', 'ACCEPTED', 'COMPILING', 'COMPILE_ERROR']`, strictly verifying `RUNNING` is NEVER present.
+       - Python code: `['SUBMITTING', 'ACCEPTED', 'RUNNING', 'COMPLETED']`, strictly verifying `COMPILING` is NEVER present.
+  2. [P2] Separate `SUBMITTING` status:
+     - In `protocol.ts`, add `'SUBMITTING'` to `ExecutionUiStatus`.
+     - In `useExecutionSocket.ts`, on `runCode()`, transition `uiStatus` to `'SUBMITTING'`.
+     - Only transition to `'ACCEPTED'` when the gateway responds with `run.accepted`.
+     - Update `StatusBadge.tsx` and `index.css` to render `Submitting` state cleanly.
+  3. [P2] Bounded WebSocket reconnect with room rejoin:
+     - In `useExecutionSocket.ts`, implement bounded reconnect (up to 5 attempts with backoff: 1s, 2s, 3s, 4s, 5s).
+     - On reconnect, automatically send `{ type: 'room.join', roomId }` to rejoin the room.
+     - Abort any in-flight run with error upon disconnect without replaying the run.
+     - Provide unit tests verifying bounded reconnect and room rejoin without run replay.
+  4. [P2] Remove unpinned toolchain version claims:
+     - In `LanguageSelector.tsx`, update option labels to "C (GCC / Linux Sandbox)" and "Python 3 (Linux Sandbox)", removing unpinned claims of "GCC 14" and "Python 3.12".
+  5. Verification:
+     - Run client unit tests, worker tests, gateway tests, sandbox tests, and full browser E2E test.
+- Files: `PROGRESS.md`, `client/src/types/protocol.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/components/CodeEditor.tsx`, `client/src/components/LanguageSelector.tsx`, `client/src/components/StatusBadge.tsx`, `client/src/App.tsx`, `client/src/index.css`, `client/src/__tests__/*`, `client/tests/e2e.spec.ts`.
+- Linked: LOG-0167.
+- Tutor review: pending
+
+
+## [LOG-0169] 2026-11-16 02:52 IST | DONE | actor: agent
+- Reason: Record completion of Phase 5 tutor review fixes addressing browser E2E real Monaco interaction, progress sequence assertions, separate Submitting state, bounded reconnect with room rejoin, and unpinned toolchain labels.
+- Details / Change:
+  1. [P1] Real Monaco interaction & progress sequence assertions in Browser E2E:
+     - Removed `window.__setEditorCode` test hook and hidden fallback textarea from `CodeEditor.tsx`.
+     - In `client/tests/e2e.spec.ts`, updated `setMonacoContent` to focus Monaco's standard accessible editor textbox (`page.getByRole('textbox', { name: 'Editor content' })`), select all, clear, and insert text directly via Playwright user input.
+     - Added `stageHistory` state in `useExecutionSocket.ts` and rendered `<span data-testid="status-timeline">{stageHistory.join(' -> ')}</span>` in `App.tsx`.
+     - In `e2e.spec.ts`:
+       - Verified valid C real progress sequence: `SUBMITTING -> ACCEPTED -> COMPILING -> RUNNING -> COMPLETED`.
+       - Verified invalid C halts at compile error: `SUBMITTING -> ACCEPTED -> COMPILING -> COMPILE_ERROR`, and explicitly asserted that `RUNNING` is strictly NEVER present.
+       - Verified Python real progress sequence: `SUBMITTING -> ACCEPTED -> RUNNING -> COMPLETED`, asserting `COMPILING` is strictly NEVER present.
+       - Verified Timeout real progress sequence: `SUBMITTING -> ACCEPTED -> RUNNING -> TIMED_OUT`.
+  2. [P2] Separate `SUBMITTING` state before gateway acceptance:
+     - Added `'SUBMITTING'` to `ExecutionUiStatus` in `protocol.ts`.
+     - In `useExecutionSocket.ts`, `runCode()` now transitions immediately to `'SUBMITTING'`; only transitions to `'ACCEPTED'` when the gateway responds with `run.accepted`.
+     - Updated `StatusBadge.tsx` and `index.css` to render `Submitting` status with clean styling.
+  3. [P2] Bounded WebSocket reconnect with room rejoin:
+     - In `useExecutionSocket.ts`, implemented bounded reconnect (up to 5 attempts with backoff: 1s, 2s, 3s, 4s, 5s).
+     - When connection opens, automatically sends `{ type: 'room.join', roomId }` to rejoin the same room.
+     - Aborts any in-flight run immediately with `ERROR` upon disconnect, and strictly does NOT replay the run on reconnect.
+     - Added unit test in `useExecutionSocket.test.ts` verifying bounded reconnect and room rejoin without run replay.
+  4. [P2] Removed unpinned toolchain version labels:
+     - Updated `LanguageSelector.tsx` option labels from "C (GCC 14 / Linux Sandbox)" and "Python (3.12 / Linux Sandbox)" to "C (GCC / Linux Sandbox)" and "Python 3 (Linux Sandbox)".
+  5. Test Evidence & Verification:
+     - Client unit tests: 5 test files, 20 unit tests passed (100% pass).
+     - Full-stack browser E2E suite (`client/tests/verify_e2e_browser.sh`): all 4 Playwright tests passed in 12.1s driving host Chromium through Browser -> WebSocket -> Gateway -> Worker -> Linux Sandbox Runner.
+     - Sandbox runner test suite: 22/22 passed.
+     - Worker unit tests: 100% passed.
+     - Gateway unit and integration tests: 100% passed.
+     - Repo hygiene and progress append-only checks passed.
+- Files: `PROGRESS.md`, `client/src/types/protocol.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/components/CodeEditor.tsx`, `client/src/components/LanguageSelector.tsx`, `client/src/components/StatusBadge.tsx`, `client/src/App.tsx`, `client/src/index.css`, `client/src/__tests__/*`, `client/tests/e2e.spec.ts`.
+- Linked: LOG-0168, LOG-0167.
+- Tutor review: pending

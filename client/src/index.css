@@ -169,9 +169,26 @@ body {
   background-color: currentColor;
 }
 
+.status-timeline {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 8px;
+  padding: 2px 8px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
 .status-idle {
   background-color: rgba(157, 167, 179, 0.15);
   color: var(--text-secondary);
+}
+
+.status-submitting {
+  background-color: rgba(100, 116, 139, 0.2);
+  color: #94a3b8;
+  animation: pulse 1.2s infinite;
 }
 
 .status-accepted {
