@@ -677,13 +677,13 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_ROOTFS, errno);
         }
 
-        pid_t supervisor_pid = getpid();
         pid_t target_pid = fork();
         if (target_pid < 0) {
             child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NAMESPACES, errno);
         }
         if (target_pid == 0) {
-            if (phase2_set_parent_death_signal(supervisor_pid) < 0) {
+            /* Child 2 is PID 1 here; its parent is outside this PID namespace, so getppid() is 0. */
+            if (phase2_set_parent_death_signal(0) < 0) {
                 child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
             }
             if (phase2_rootfs_mount_proc() < 0) {
@@ -691,6 +691,10 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             }
             if (phase2_target_drop_capabilities_and_identity() < 0) {
                 child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CAPABILITY_DROP, errno);
+            }
+            /* Credential changes clear PDEATHSIG; reinstall it after dropping to nobody. */
+            if (phase2_set_parent_death_signal(0) < 0) {
+                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
             }
             if (phase2_target_enable_nnp() < 0) {
                 child_report_error_and_exit(err_pipe[1], SETUP_STAGE_NNP, errno);

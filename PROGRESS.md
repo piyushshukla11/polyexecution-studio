@@ -1933,3 +1933,28 @@
 - Files: `PROGRESS.md`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/phase2_privilege.h`, `sandbox-daemon/sandbox.c`.
 - Linked: LOG-0133, LOG-0132.
 - Tutor review: pending
+
+## [LOG-0135] 2026-11-15 20:01 IST | PLAN | actor: agent
+- Reason: Correct the Child 2 parent-death handshake after the native runner reached `SETUP_STAGE_SUPERVISOR` with `ESRCH` inside the new PID namespace.
+- Details / Change:
+  1. Child 2 is PID 1 in the new PID namespace, so its supervisor parent is outside that namespace and `getppid()` reports 0. Pass the namespace-visible expected parent value instead of Child 1's host PID when installing `PR_SET_PDEATHSIG`.
+  2. Reinstall `PR_SET_PDEATHSIG` after dropping target credentials because credential changes can clear the setting.
+  3. Remove the now-unused supervisor PID local.
+  4. Run the strict build and safe existing regression suites; attempt only `/bin/true` as a harmless runner smoke check. Do not run adversarial fixtures. Keep Phase 2 DoD OPEN until native runtime and required containment evidence passes.
+- Files: `PROGRESS.md`, `sandbox-daemon/sandbox.c`.
+- Linked: LOG-0134.
+- Tutor review: pending
+
+## [LOG-0136] 2026-11-15 20:02 IST | DONE | actor: agent
+- Reason: Implement and safely regress the Child 2 parent-death handshake correction prompted by the native `stage=23 errno=3` report.
+- Details / Change:
+  1. Child 2 now validates the parent value visible from its PID namespace (`getppid() == 0`) when installing `PR_SET_PDEATHSIG`; it no longer compares against Child 1's host PID.
+  2. Child 2 reinstalls `PR_SET_PDEATHSIG` after target credential changes, which can clear the setting.
+  3. Removed the unused supervisor PID local. The change is labeled `AGENT-WROTE-TIER-A` in the existing Tier A ownership record for project work.
+  4. Safe regression suites passed: setup protocol 5/5 plus forced fallback 5/5; cgroup fake-tree checks 5/5; seccomp safe probe; fail-closed cleanup/fd regression.
+  5. Harmless `/bin/true` attempt in this agent execution context still fails closed earlier at cgroup setup (`stage=11 errno=95 ENOTSUP`), so it does not validate the native Omarchy result or this later PID-namespace path. Piyush must rebuild and retry on Omarchy.
+  6. Phase 2 DoD remains OPEN. No adversarial fixtures were executed.
+- Verification: `make clean all test-setup-protocol test-phase2-structural test-phase2-seccomp-safe test-phase2-fail-closed` passed under `-Wall -Wextra -Werror -O2`; `./sandbox-runner /bin/true` returned `SANDBOX_ERROR`, stage 11, errno 95 in this restricted execution context; `git diff --check` passed.
+- Files: `PROGRESS.md`, `sandbox-daemon/sandbox.c`.
+- Linked: LOG-0135, LOG-0134.
+- Tutor review: pending
