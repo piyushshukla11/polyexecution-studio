@@ -13,6 +13,7 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 import pes.execution.v1.ExecuteRequest;
 import pes.execution.v1.ExecuteResponse;
+import pes.execution.v1.ExecutionStage;
 import pes.gateway.config.GatewayProperties;
 import pes.gateway.protocol.*;
 import pes.gateway.service.*;
@@ -195,7 +196,12 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
             .setLimits(valResult.protoLimits())
             .build();
 
-        workerClient.executeAsync(protoRequest)
+        workerClient.executeWithProgressAsync(protoRequest, stage -> {
+            if (stage != ExecutionStage.STAGE_UNSPECIFIED && stage != ExecutionStage.UNRECOGNIZED) {
+                String stageName = stage.name().replace("STAGE_", "");
+                roomManager.broadcastToRoom(roomId, new RunProgressEvent(roomId, requestId, stageName));
+            }
+        })
             .whenComplete((response, throwable) -> {
                 try {
                     if (throwable != null) {

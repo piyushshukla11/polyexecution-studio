@@ -2595,3 +2595,102 @@
 - Files: `PROGRESS.md`.
 - Linked: LOG-0163, LOG-0161, LOG-0159.
 - Tutor review: approved for Phase 4 sign-off and merge into main
+
+
+## [LOG-0165] 2026-11-16 01:58 IST | DECISION | actor: agent
+- Reason: Record dependency selections and additive protobuf schema extension for Phase 5 React + Monaco Execution Panel per AI_RULES.md §7.
+- Details / Change:
+  1. Additive Protobuf Progress Event Contract:
+     - Extend `proto/execution.proto` with `ExecutionStage` enum (`STAGE_UNSPECIFIED`, `STAGE_COMPILING`, `STAGE_RUNNING`), `ExecutionProgress` message, `ExecutionStreamEvent` (`oneof event { ExecutionProgress progress = 2; ExecuteResponse result = 3; }`), and an additive RPC `ExecuteProgressStream(ExecuteRequest) returns (stream ExecutionStreamEvent)`.
+     - Preserves existing unary `Execute` and existing `ExecuteStream` without breaking existing Phase 3/4 clients or tests.
+     - Why: Mandated by Phase 5 status truthfulness requirement. Compiling and Running states must reflect actual worker milestones (immediately before invoking sandboxed GCC and before invoking sandboxed target/Python), rather than fabricated timers.
+  2. Frontend build and framework:
+     - React 18 (`react`, `react-dom`) + TypeScript + Vite (`vite`, `@vitejs/plugin-react`): Mandated by `docs/04_BUILD_PLAN.md`. Provides modern, reactive UI and fast development server binding to loopback (`127.0.0.1:5173`). Alternative considered: Create React App (deprecated), Webpack (unnecessary configuration complexity).
+  3. Monaco Editor:
+     - `@monaco-editor/react`: Standard React wrapper for VS Code's Monaco Editor. Provides C and Python syntax highlighting, starter code models, and editing capabilities. Alternative considered: CodeMirror, Ace (rejected because project specification explicitly requires Monaco).
+  4. Component testing:
+     - `vitest`, `@testing-library/react`, `@testing-library/jest-dom`, `jsdom`: Unit testing harness sharing Vite configuration, testing component states, WebSocket message handling, error rendering, and metrics formatting without launching full browsers.
+  5. Browser end-to-end automation:
+     - `@playwright/test`: Browser automation suite to prove full vertical integration (Browser -> WebSocket -> Java Gateway -> Kotlin Worker -> sandbox-runner). Configured to use the existing host Chromium binary (`/usr/bin/chromium`). Alternative considered: Cypress, Selenium (heavier setup, slower execution).
+- Files: `PROGRESS.md`.
+- Linked: LOG-0164.
+- Tutor review: pending
+
+
+## [LOG-0166] 2026-11-16 01:58 IST | PLAN | actor: agent
+- Reason: Implement Phase 5 React + Monaco Single-User Execution Panel meeting the exact Definition of Done in `docs/04_BUILD_PLAN.md` ("React + Monaco, run UI, metrics panel (single user) — Browser run works; statuses Idle, Compiling, Running, Timed Out render").
+- Details / Change:
+  1. Additive Protocol Extension (`proto/execution.proto`):
+     - Add `ExecutionStage` enum (`STAGE_COMPILING`, `STAGE_RUNNING`), `ExecutionProgress` message, `ExecutionStreamEvent` union, and `rpc ExecuteProgressStream`.
+     - Regenerate Kotlin protobuf stubs in `worker/` and Java protobuf stubs in `gateway/`.
+  2. Kotlin Worker Progress Emission (`worker/`):
+     - Implement `ExecuteProgressStream` in `WorkerServer.kt` and `ExecutionPipeline.kt`.
+     - Emit `STAGE_COMPILING` before sandboxed GCC invocation for C requests.
+     - Emit `STAGE_RUNNING` before sandboxed target binary invocation (or `/usr/bin/python3` for Python).
+     - On C compilation failure, emit final `COMPILE_ERROR` result immediately with NO running event.
+     - Add worker unit tests for progress stream ordering and backward-compatibility.
+  3. Java Gateway Progress Relay (`gateway/`):
+     - Extend `WorkerClient` and `WorkerGrpcClient` to subscribe to `ExecuteProgressStream`.
+     - In `GatewayWebSocketHandler`, forward worker progress events as `{ "type": "run.progress", "roomId": "...", "requestId": "...", "stage": "COMPILING" | "RUNNING" }` to room members.
+     - Preserve existing `run.accepted` and `run.completed` events, room isolation, and atomic concurrency guards.
+     - Add gateway unit and integration tests for progress forwarding.
+  4. React Frontend (`client/`):
+     - Initialize Vite + React + TypeScript in `client/`.
+     - Implement layout: header with connection status, language selector (C / Python), Monaco editor with starter code, stdin textarea, Run button, status indicator, separate stdout/stderr view, and truthful worker metrics panel.
+     - Implement `useExecutionSocket` custom hook managing WebSocket connection to `ws://127.0.0.1:8080/ws`, automatic room join (`client-<uuid>`), request correlation via `requestId`, and state machine:
+       `IDLE` -> `ACCEPTED` -> `COMPILING` (on real progress event) -> `RUNNING` (on real progress event) -> `COMPLETED` / `TIMED_OUT` / `ERROR`.
+     - Render `Timed Out` honestly from worker status `TIMEOUT`.
+     - Render worker telemetry fields (`wallMs`, `cpuMs`, `peakMemoryKb`, `exitCode`, `signal`, `status`).
+  5. Testing:
+     - Component unit tests with Vitest: initial Idle, connecting/joined states, C/Python switching, run payload construction, Compiling -> Running progress transitions, Compiling -> Compile Error transition without Running, Python Running transition, Timed Out mapping, separate output rendering, and error handling.
+     - Browser end-to-end integration test with Playwright: launches complete stack (Kotlin worker + Java gateway + Vite client + Chromium), loads UI, runs valid C (observes Compiling -> Running -> OK), invalid C (observes Compiling -> Compile Error), Python (observes Running -> OK), and timeout (observes Timed Out).
+  6. Documentation & Hygiene:
+     - Update `README.md` with Phase 5 UI instructions and honest limitations.
+     - Append Phase 5 interview questions to `docs/05_INTERVIEW_PREP.md`.
+     - Update untracked `LEARNING_NOTES/`.
+     - Run all regression suites (sandbox-daemon 22/22, worker, gateway, frontend, browser e2e).
+- Files: `PROGRESS.md`, `proto/execution.proto`, `worker/*`, `gateway/*`, `client/*`, `README.md`, `docs/05_INTERVIEW_PREP.md`.
+- Linked: LOG-0165, LOG-0164.
+- Tutor review: pending
+
+
+## [LOG-0167] 2026-11-16 02:35 IST | DONE | actor: agent
+- Reason: Record completion of Phase 5 React + Monaco Single-User Execution Panel satisfying the exact Definition of Done in `docs/04_BUILD_PLAN.md` ("React + Monaco, run UI, metrics panel (single user) — Browser run works; statuses Idle, Compiling, Running, Timed Out render").
+- Details / Change:
+  1. Additive Protobuf Progress Event Contract:
+     - Extended `proto/execution.proto` with `ExecutionStage` enum (`STAGE_COMPILING`, `STAGE_RUNNING`), `ExecutionProgress` message, `ExecutionStreamEvent` union, and additive RPC `ExecuteProgressStream(ExecuteRequest) returns (stream ExecutionStreamEvent)`. Existing unary `Execute` and `ExecuteStream` remain intact.
+     - Regenerated Kotlin protobuf bindings in `worker/` and Java protobuf bindings in `gateway/`.
+  2. Kotlin Worker Milestone Event Emission:
+     - Updated `ExecutionPipeline.kt` to accept an optional milestone progress callback `onProgress: (suspend (ExecutionStage) -> Unit)?`.
+     - In C pipeline: emits `STAGE_COMPILING` immediately prior to invoking sandboxed GCC compilation. On compilation error or invalid artifact, halts and returns `COMPILE_ERROR` with compiler diagnostics, without emitting any running milestone. On compilation success, emits `STAGE_RUNNING` immediately prior to executing the target binary.
+     - In Python pipeline: emits `STAGE_RUNNING` immediately prior to invoking sandboxed `/usr/bin/python3`.
+     - Implemented `executeProgressStream` in `ExecutionServiceImpl.kt` using `channelFlow`.
+     - Verified with worker unit tests in `FakeRunnerGrpcTest.kt` (100% pass).
+  3. Java Gateway Progress Relay:
+     - Extended `WorkerClient` and `WorkerGrpcClient` to subscribe to `executeProgressStream` with virtual thread per-task execution.
+     - Created `RunProgressEvent.java` in `gateway/src/main/java/pes/gateway/protocol/`.
+     - In `GatewayWebSocketHandler`, forwarded worker milestones as `{ "type": "run.progress", "roomId": "...", "requestId": "...", "stage": "COMPILING" | "RUNNING" }` exclusively to room members.
+     - Verified with gateway unit and integration tests in `WorkerGrpcClientTest.java` and `GatewayIntegrationTest.java` (100% pass).
+  4. React 18 + Monaco Web Client:
+     - Built `client/` workbench with React 18, TypeScript, Vite, Monaco Editor (`@monaco-editor/react`), Vitest, and Playwright.
+     - Implemented multi-language selector for C (GCC 14 / Linux Sandbox) and Python (3.12 / Linux Sandbox) with automatic starter code switching.
+     - Implemented code editor with dark theme, line numbers, automatic layout, and fallback input binding for testing.
+     - Implemented standard input tab forwarding custom stdin to sandbox execution.
+     - Truthfully renders execution lifecycle status badge: `Idle`, `Accepted`, `Compiling`, `Running`, `Completed`, `Timed Out`, `Compile Error`, and `Error`.
+     - Separated standard output (stdout) and standard error (stderr) viewers with byte counters.
+     - Implemented execution telemetry panel displaying genuine rusage metrics from the Linux sandbox runner (`wallMs`, `cpuMs`, `peakMemoryKb`, `exitCode`, `signal`, `status`).
+     - Implemented `useExecutionSocket` custom hook managing WebSocket connection to `ws://127.0.0.1:8080/ws`, automatic room join, and request correlation.
+  5. Test Evidence & Verification:
+     - Component unit tests: 5 test files, 18 unit tests in `client/` passed with 100% success (`StatusBadge`, `LanguageSelector`, `MetricsPanel`, `useExecutionSocket`, `App`).
+     - Gateway test suite: 100% pass including progress relay and compilation error halting.
+     - Worker test suite: 100% pass including progress stream ordering.
+     - Sandbox runner test suite: 22/22 tests passed (18 Phase 1 regression checks + 4 Phase 2 integration checks).
+     - Full-stack browser E2E suite (`client/tests/verify_e2e_browser.sh`): 4/4 Playwright tests passed driving host Chromium (`/usr/bin/chromium`, v155) through the full vertical stack (Browser -> WebSocket -> Java Gateway -> Kotlin Worker -> Linux Sandbox Runner).
+  6. Documentation & Hygiene:
+     - Updated `README.md` with Phase 5 architecture, build/test commands, and honest limitations.
+     - Appended Phase 5 interview questions to `docs/05_INTERVIEW_PREP.md`.
+     - Updated `.gitignore` to exclude Playwright test artifacts.
+     - Checked repo hygiene and progress append-only rules.
+- Files: `PROGRESS.md`, `README.md`, `docs/05_INTERVIEW_PREP.md`, `.gitignore`, `proto/execution.proto`, `worker/*`, `gateway/*`, `client/*`.
+- Linked: LOG-0166, LOG-0165.
+- Tutor review: pending

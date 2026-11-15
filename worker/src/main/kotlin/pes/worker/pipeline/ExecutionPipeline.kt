@@ -2,6 +2,7 @@ package pes.worker.pipeline
 
 import pes.execution.v1.ExecuteRequest
 import pes.execution.v1.ExecuteResponse
+import pes.execution.v1.ExecutionStage
 import pes.execution.v1.ExecutionStatus
 import pes.execution.v1.Language
 import pes.execution.v1.ResourceLimits
@@ -76,7 +77,10 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
         return ValidationResult.Valid(normalized)
     }
 
-    suspend fun execute(request: ExecuteRequest): ExecuteResponse {
+    suspend fun execute(
+        request: ExecuteRequest,
+        onProgress: (suspend (ExecutionStage) -> Unit)? = null
+    ): ExecuteResponse {
         val validation = validateRequest(request)
         if (validation is ValidationResult.Invalid) return validationFailure(request, validation.reason)
         val normalizedLimits = (validation as ValidationResult.Valid).normalizedLimits
@@ -87,8 +91,8 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
         try {
             workspace = Files.createTempDirectory(Path.of("/tmp"), "pes-job-${request.jobId}-", PRIVATE_DIR_PERMISSIONS)
             response = when (request.language) {
-                Language.LANGUAGE_C -> executeC(request, normalizedLimits, workspace)
-                Language.LANGUAGE_PYTHON -> executePython(request, normalizedLimits, workspace)
+                Language.LANGUAGE_C -> executeC(request, normalizedLimits, workspace, onProgress)
+                Language.LANGUAGE_PYTHON -> executePython(request, normalizedLimits, workspace, onProgress)
                 else -> validationFailure(request, "unsupported language: ${request.language}")
             }
         } catch (e: Exception) {
@@ -108,7 +112,12 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
         return response ?: validationFailure(request, "pipeline produced no response")
     }
 
-    private suspend fun executeC(request: ExecuteRequest, limits: ResourceLimits, workspace: Path): ExecuteResponse {
+    private suspend fun executeC(
+        request: ExecuteRequest,
+        limits: ResourceLimits,
+        workspace: Path,
+        onProgress: (suspend (ExecutionStage) -> Unit)? = null
+    ): ExecuteResponse {
         val sourceFile = workspace.resolve("source.c")
         val targetBinary = workspace.resolve("target")
         writePrivateSource(sourceFile, request.sourceCode)
@@ -119,6 +128,7 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
             .setMemoryMb(512L)
             .setMaxOutputKb(64L)
             .build()
+        onProgress?.invoke(ExecutionStage.STAGE_COMPILING)
         val compileResult = runnerClient.run(
             jobId = "${request.jobId}-compile",
             binaryPath = "/usr/bin/gcc",
@@ -150,6 +160,7 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
             return validationFailure(request, "sandbox reported compile success but artifact handoff was missing or unsafe")
         }
 
+        onProgress?.invoke(ExecutionStage.STAGE_RUNNING)
         val runResult = runnerClient.run(
             jobId = request.jobId,
             binaryPath = targetBinary.toAbsolutePath().normalize().toString(),
@@ -160,9 +171,15 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
         return buildResponse(request.jobId, runResult)
     }
 
-    private suspend fun executePython(request: ExecuteRequest, limits: ResourceLimits, workspace: Path): ExecuteResponse {
+    private suspend fun executePython(
+        request: ExecuteRequest,
+        limits: ResourceLimits,
+        workspace: Path,
+        onProgress: (suspend (ExecutionStage) -> Unit)? = null
+    ): ExecuteResponse {
         val sourceFile = workspace.resolve("source.py")
         writePrivateSource(sourceFile, request.sourceCode)
+        onProgress?.invoke(ExecutionStage.STAGE_RUNNING)
         val runResult = runnerClient.run(
             jobId = request.jobId,
             binaryPath = "/usr/bin/python3",

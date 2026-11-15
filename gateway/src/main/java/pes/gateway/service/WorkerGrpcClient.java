@@ -10,13 +10,17 @@ import org.springframework.stereotype.Service;
 import pes.execution.v1.ExecuteRequest;
 import pes.execution.v1.ExecuteResponse;
 import pes.execution.v1.ExecutionServiceGrpc;
+import pes.execution.v1.ExecutionStage;
+import pes.execution.v1.ExecutionStreamEvent;
 import pes.execution.v1.Language;
 import pes.gateway.config.GatewayProperties;
 
+import java.util.Iterator;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 @Service
 public class WorkerGrpcClient implements WorkerClient {
@@ -48,6 +52,38 @@ public class WorkerGrpcClient implements WorkerClient {
 
     @Override
     public CompletableFuture<ExecuteResponse> executeAsync(ExecuteRequest request) {
+        return executeWithProgressAsync(request, null);
+    }
+
+    @Override
+    public CompletableFuture<ExecuteResponse> executeWithProgressAsync(
+        ExecuteRequest request,
+        Consumer<ExecutionStage> onProgress
+    ) {
+        long deadlineMs = calculateDeadlineMs(request);
+
+        return CompletableFuture.supplyAsync(() -> {
+            Iterator<ExecutionStreamEvent> events = blockingStub
+                .withDeadlineAfter(deadlineMs, TimeUnit.MILLISECONDS)
+                .executeProgressStream(request);
+
+            ExecuteResponse finalResult = null;
+            while (events.hasNext()) {
+                ExecutionStreamEvent event = events.next();
+                if (event.hasProgress() && onProgress != null) {
+                    onProgress.accept(event.getProgress().getStage());
+                } else if (event.hasResult()) {
+                    finalResult = event.getResult();
+                }
+            }
+            if (finalResult == null) {
+                throw new IllegalStateException("Worker closed stream without returning an ExecuteResponse");
+            }
+            return finalResult;
+        }, executor);
+    }
+
+    private long calculateDeadlineMs(ExecuteRequest request) {
         long targetWallMs = request.hasLimits() && request.getLimits().getWallMs() > 0
             ? request.getLimits().getWallMs()
             : 5000L;
@@ -61,12 +97,7 @@ public class WorkerGrpcClient implements WorkerClient {
         long runnerGraceMs = 5000L;
         long gatewayMarginMs = 5000L;
 
-        long deadlineMs = compileBudgetMs + targetWallMs + runnerGraceMs + gatewayMarginMs;
-
-        return CompletableFuture.supplyAsync(() -> {
-            return blockingStub.withDeadlineAfter(deadlineMs, TimeUnit.MILLISECONDS)
-                .execute(request);
-        }, executor);
+        return compileBudgetMs + targetWallMs + runnerGraceMs + gatewayMarginMs;
     }
 
     @Override

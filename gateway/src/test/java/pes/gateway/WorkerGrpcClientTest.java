@@ -58,6 +58,54 @@ class WorkerGrpcClientTest {
                 responseObserver.onNext(response);
                 responseObserver.onCompleted();
             }
+
+            @Override
+            public void executeProgressStream(ExecuteRequest request, StreamObserver<ExecutionStreamEvent> responseObserver) {
+                if (simulateDelayMs > 0) {
+                    try {
+                        Thread.sleep(simulateDelayMs);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                if (returnError) {
+                    responseObserver.onError(Status.UNAVAILABLE.withDescription("Service down").asRuntimeException());
+                    return;
+                }
+                if (request.getLanguage() == Language.LANGUAGE_C) {
+                    responseObserver.onNext(ExecutionStreamEvent.newBuilder()
+                        .setJobId(request.getJobId())
+                        .setProgress(ExecutionProgress.newBuilder()
+                            .setJobId(request.getJobId())
+                            .setStage(ExecutionStage.STAGE_COMPILING)
+                            .build())
+                        .build());
+                }
+                responseObserver.onNext(ExecutionStreamEvent.newBuilder()
+                    .setJobId(request.getJobId())
+                    .setProgress(ExecutionProgress.newBuilder()
+                        .setJobId(request.getJobId())
+                        .setStage(ExecutionStage.STAGE_RUNNING)
+                        .build())
+                    .build());
+
+                ExecuteResponse response = ExecuteResponse.newBuilder()
+                    .setJobId(request.getJobId())
+                    .setStatus(ExecutionStatus.OK)
+                    .setStdout("output: " + request.getSourceCode())
+                    .setStderr("")
+                    .setExitCode(0)
+                    .setSignal(0)
+                    .setWallMs(10)
+                    .setCpuMs(5)
+                    .setPeakMemoryKb(512)
+                    .build();
+                responseObserver.onNext(ExecutionStreamEvent.newBuilder()
+                    .setJobId(request.getJobId())
+                    .setResult(response)
+                    .build());
+                responseObserver.onCompleted();
+            }
         };
 
     @BeforeEach
@@ -109,6 +157,26 @@ class WorkerGrpcClientTest {
         assertEquals(ExecutionStatus.OK, response.getStatus());
         assertEquals("output: printf", response.getStdout());
         assertEquals(0, response.getExitCode());
+    }
+
+    @Test
+    @DisplayName("WorkerGrpcClient invokes progress callback with stages during execution")
+    void testExecuteWithProgressAsync() throws Exception {
+        ExecuteRequest request = ExecuteRequest.newBuilder()
+            .setJobId("test-job-prog")
+            .setLanguage(Language.LANGUAGE_C)
+            .setSourceCode("printf")
+            .setLimits(ResourceLimits.newBuilder().setWallMs(1000).build())
+            .build();
+
+        java.util.List<ExecutionStage> stages = new java.util.concurrent.CopyOnWriteArrayList<>();
+        CompletableFuture<ExecuteResponse> future = client.executeWithProgressAsync(request, stages::add);
+        ExecuteResponse response = future.get(5, TimeUnit.SECONDS);
+
+        assertNotNull(response);
+        assertEquals(2, stages.size());
+        assertEquals(ExecutionStage.STAGE_COMPILING, stages.get(0));
+        assertEquals(ExecutionStage.STAGE_RUNNING, stages.get(1));
     }
 
     @Test

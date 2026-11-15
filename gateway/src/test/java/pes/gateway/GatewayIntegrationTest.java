@@ -25,8 +25,11 @@ import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 import pes.execution.v1.ExecuteRequest;
 import pes.execution.v1.ExecuteResponse;
+import pes.execution.v1.ExecutionProgress;
 import pes.execution.v1.ExecutionServiceGrpc;
+import pes.execution.v1.ExecutionStage;
 import pes.execution.v1.ExecutionStatus;
+import pes.execution.v1.ExecutionStreamEvent;
 import pes.execution.v1.Language;
 import pes.gateway.service.WorkerClient;
 import pes.gateway.service.WorkerGrpcClient;
@@ -79,6 +82,79 @@ class GatewayIntegrationTest {
                 .build();
 
             responseObserver.onNext(response);
+            responseObserver.onCompleted();
+        }
+
+        @Override
+        public void executeProgressStream(ExecuteRequest request, StreamObserver<ExecutionStreamEvent> responseObserver) {
+            recordedRequests.add(request);
+
+            if (simulateUnavailable.get()) {
+                responseObserver.onError(Status.UNAVAILABLE.withDescription("Simulated worker crash").asRuntimeException());
+                return;
+            }
+
+            if (request.getSourceCode().contains("compile_error")) {
+                responseObserver.onNext(ExecutionStreamEvent.newBuilder()
+                    .setJobId(request.getJobId())
+                    .setProgress(ExecutionProgress.newBuilder()
+                        .setJobId(request.getJobId())
+                        .setStage(ExecutionStage.STAGE_COMPILING)
+                        .build())
+                    .build());
+
+                ExecuteResponse response = ExecuteResponse.newBuilder()
+                    .setJobId(request.getJobId())
+                    .setStatus(ExecutionStatus.COMPILE_ERROR)
+                    .setStderr("syntax error: unknown token")
+                    .setExitCode(1)
+                    .setWallMs(15)
+                    .setCpuMs(8)
+                    .setPeakMemoryKb(512)
+                    .build();
+
+                responseObserver.onNext(ExecutionStreamEvent.newBuilder()
+                    .setJobId(request.getJobId())
+                    .setResult(response)
+                    .build());
+                responseObserver.onCompleted();
+                return;
+            }
+
+            if (request.getLanguage() == Language.LANGUAGE_C) {
+                responseObserver.onNext(ExecutionStreamEvent.newBuilder()
+                    .setJobId(request.getJobId())
+                    .setProgress(ExecutionProgress.newBuilder()
+                        .setJobId(request.getJobId())
+                        .setStage(ExecutionStage.STAGE_COMPILING)
+                        .build())
+                    .build());
+            }
+
+            responseObserver.onNext(ExecutionStreamEvent.newBuilder()
+                .setJobId(request.getJobId())
+                .setProgress(ExecutionProgress.newBuilder()
+                    .setJobId(request.getJobId())
+                    .setStage(ExecutionStage.STAGE_RUNNING)
+                    .build())
+                .build());
+
+            ExecuteResponse response = ExecuteResponse.newBuilder()
+                .setJobId(request.getJobId())
+                .setStatus(ExecutionStatus.OK)
+                .setStdout("Fake output for " + request.getJobId())
+                .setStderr("")
+                .setExitCode(0)
+                .setSignal(0)
+                .setWallMs(42)
+                .setCpuMs(24)
+                .setPeakMemoryKb(1024)
+                .build();
+
+            responseObserver.onNext(ExecutionStreamEvent.newBuilder()
+                .setJobId(request.getJobId())
+                .setResult(response)
+                .build());
             responseObserver.onCompleted();
         }
 
@@ -202,7 +278,25 @@ class GatewayIntegrationTest {
         assertEquals("req-001", acceptedJson.get("requestId").asText());
         assertEquals("c", acceptedJson.get("language").asText());
 
-        // 4. Receive run.completed event
+        // 4. Receive run.progress event (COMPILING)
+        String compilingMsg = handler.nextMessage(5000);
+        assertNotNull(compilingMsg, "Expected run.progress (COMPILING) message");
+        JsonNode compilingJson = objectMapper.readTree(compilingMsg);
+        assertEquals("run.progress", compilingJson.get("type").asText());
+        assertEquals("test-room-1", compilingJson.get("roomId").asText());
+        assertEquals("req-001", compilingJson.get("requestId").asText());
+        assertEquals("COMPILING", compilingJson.get("stage").asText());
+
+        // 5. Receive run.progress event (RUNNING)
+        String runningMsg = handler.nextMessage(5000);
+        assertNotNull(runningMsg, "Expected run.progress (RUNNING) message");
+        JsonNode runningJson = objectMapper.readTree(runningMsg);
+        assertEquals("run.progress", runningJson.get("type").asText());
+        assertEquals("test-room-1", runningJson.get("roomId").asText());
+        assertEquals("req-001", runningJson.get("requestId").asText());
+        assertEquals("RUNNING", runningJson.get("stage").asText());
+
+        // 6. Receive run.completed event
         String completedMsg = handler.nextMessage(5000);
         assertNotNull(completedMsg, "Expected run.completed message");
         JsonNode completedJson = objectMapper.readTree(completedMsg);
@@ -213,13 +307,61 @@ class GatewayIntegrationTest {
         assertEquals("Fake output for req-001", completedJson.get("stdout").asText());
         assertEquals(0, completedJson.get("exitCode").asInt());
 
-        // 5. Verify fake gRPC worker received typed protobuf
+        // 7. Verify fake gRPC worker received typed protobuf
         assertEquals(1, fakeService.recordedRequests.size());
         ExecuteRequest req = fakeService.recordedRequests.get(0);
         assertEquals("req-001", req.getJobId());
         assertEquals(Language.LANGUAGE_C, req.getLanguage());
         assertEquals("int main() { return 0; }", req.getSourceCode());
         assertEquals("test", req.getStdin());
+
+        session.close();
+    }
+
+    @Test
+    @DisplayName("C compilation error emits COMPILING progress then COMPILE_ERROR without RUNNING progress")
+    void testCCompilationErrorProgressHaltWithoutRunning() throws Exception {
+        StandardWebSocketClient client = new StandardWebSocketClient();
+        TestWebSocketHandler handler = new TestWebSocketHandler();
+        URI uri = URI.create("ws://127.0.0.1:" + port + "/ws");
+
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        WebSocketSession session = client.execute(handler, headers, uri).get(5, TimeUnit.SECONDS);
+        session.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"test-room-c-err\"}"));
+        assertNotNull(handler.nextMessage(5000));
+
+        String runPayload = """
+            {
+              "type": "run",
+              "roomId": "test-room-c-err",
+              "requestId": "req-c-err",
+              "language": "c",
+              "sourceCode": "compile_error syntax error"
+            }
+            """;
+        session.sendMessage(new TextMessage(runPayload));
+
+        // 1. run.accepted
+        String acceptedMsg = handler.nextMessage(5000);
+        assertNotNull(acceptedMsg);
+        assertEquals("run.accepted", objectMapper.readTree(acceptedMsg).get("type").asText());
+
+        // 2. run.progress COMPILING
+        String progMsg = handler.nextMessage(5000);
+        assertNotNull(progMsg);
+        JsonNode progJson = objectMapper.readTree(progMsg);
+        assertEquals("run.progress", progJson.get("type").asText());
+        assertEquals("COMPILING", progJson.get("stage").asText());
+
+        // 3. run.completed with COMPILE_ERROR (NEVER RUNNING)
+        String completedMsg = handler.nextMessage(5000);
+        assertNotNull(completedMsg);
+        JsonNode completedJson = objectMapper.readTree(completedMsg);
+        assertEquals("run.completed", completedJson.get("type").asText());
+        assertEquals("COMPILE_ERROR", completedJson.get("status").asText());
+        assertEquals(1, completedJson.get("exitCode").asInt());
 
         session.close();
     }
@@ -256,8 +398,9 @@ class GatewayIntegrationTest {
             """;
         session1.sendMessage(new TextMessage(runPayload));
 
-        // session 1 receives accepted & completed
+        // session 1 receives accepted, progress (RUNNING), and completed
         assertNotNull(handler1.nextMessage(5000)); // run.accepted
+        assertNotNull(handler1.nextMessage(5000)); // run.progress
         assertNotNull(handler1.nextMessage(5000)); // run.completed
 
         // session 2 in room-iso-2 must receive NOTHING
