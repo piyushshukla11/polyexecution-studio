@@ -1,29 +1,36 @@
 import React from 'react';
-import Editor from '@monaco-editor/react';
+import Editor, { OnMount } from '@monaco-editor/react';
 import { SupportedLanguage } from '../types/protocol.ts';
 
 interface CodeEditorProps {
   language: SupportedLanguage;
-  value: string;
-  onChange: (val: string) => void;
+  value?: string;
+  defaultValue?: string;
+  onChange?: (val: string) => void;
+  onMount?: OnMount;
   readOnly?: boolean;
 }
 
 export const CodeEditor: React.FC<CodeEditorProps> = ({
   language,
   value,
+  defaultValue,
   onChange,
+  onMount,
   readOnly
 }) => {
   const monacoLanguage = language === 'c' ? 'c' : 'python';
+  const isBound = !!onMount;
 
   return (
     <div className="editor-wrapper" data-testid="code-editor-container">
       <Editor
         height="380px"
         language={monacoLanguage}
-        value={value}
-        onChange={(newVal) => onChange(newVal || '')}
+        value={isBound ? undefined : value}
+        defaultValue={defaultValue || value}
+        onChange={isBound ? undefined : (newVal) => onChange?.(newVal || '')}
+        onMount={onMount}
         theme="vs-dark"
         options={{
           readOnly: !!readOnly,

@@ -8,6 +8,7 @@ public class RoomJoinedEvent extends ServerEvent {
     private String roomId;
     private String sessionId;
     private List<String> members;
+    private AssignedUserDto assignedUser;
 
     public RoomJoinedEvent() {
         super("room.joined");
@@ -18,6 +19,14 @@ public class RoomJoinedEvent extends ServerEvent {
         this.roomId = roomId;
         this.sessionId = sessionId;
         this.members = members;
+    }
+
+    public RoomJoinedEvent(String roomId, String sessionId, List<String> members, AssignedUserDto assignedUser) {
+        super("room.joined");
+        this.roomId = roomId;
+        this.sessionId = sessionId;
+        this.members = members;
+        this.assignedUser = assignedUser;
     }
 
     public String getRoomId() {
@@ -42,5 +51,13 @@ public class RoomJoinedEvent extends ServerEvent {
 
     public void setMembers(List<String> members) {
         this.members = members;
+    }
+
+    public AssignedUserDto getAssignedUser() {
+        return assignedUser;
+    }
+
+    public void setAssignedUser(AssignedUserDto assignedUser) {
+        this.assignedUser = assignedUser;
     }
 }

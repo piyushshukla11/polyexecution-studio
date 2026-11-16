@@ -8,6 +8,7 @@ import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 import pes.gateway.config.GatewayProperties;
+import pes.gateway.protocol.AssignedUserDto;
 import pes.gateway.protocol.ServerEvent;
 
 import java.io.IOException;
@@ -29,6 +30,24 @@ public class RoomManager {
     private final Map<String, WebSocketSession> activeSessions = new ConcurrentHashMap<>();
 
     private final AtomicInteger globalActiveRuns = new AtomicInteger(0);
+
+    private static final String[] PALETTE = {
+        "#30bced", "#e06c75", "#98c379", "#e5c07b", "#61afef", "#be5046", "#d19a66", "#c678dd"
+    };
+
+    private AssignedUserDto createAssignedUser(String sessionId) {
+        int colorIdx = Math.abs(sessionId.hashCode()) % PALETTE.length;
+        String shortId = sessionId.length() > 6 ? sessionId.substring(0, 6) : sessionId;
+        String roomId = sessionToRoom.get(sessionId);
+        Integer clientId = null;
+        if (roomId != null) {
+            Room room = rooms.get(roomId);
+            if (room != null) {
+                clientId = room.getSessionCollabClientId(sessionId);
+            }
+        }
+        return new AssignedUserDto("User-" + shortId, PALETTE[colorIdx], clientId);
+    }
 
     public RoomManager(GatewayProperties properties, ObjectMapper objectMapper) {
         this.properties = properties;
@@ -70,8 +89,9 @@ public class RoomManager {
 
         room.addSession(sessionId);
         sessionToRoom.put(sessionId, roomId);
+        AssignedUserDto assignedUser = createAssignedUser(sessionId);
 
-        return JoinResult.success(room.getMembers());
+        return JoinResult.success(room.getMembers(), assignedUser);
     }
 
     public synchronized String leaveRoom(String roomId, String sessionId) {
@@ -186,6 +206,77 @@ public class RoomManager {
         }
     }
 
+    public void broadcastToRoomExcept(String roomId, String excludedSessionId, ServerEvent event) {
+        Room room = rooms.get(roomId);
+        if (room == null) {
+            return;
+        }
+
+        String jsonPayload;
+        try {
+            jsonPayload = objectMapper.writeValueAsString(event);
+        } catch (Exception e) {
+            log.error("Failed to serialize server event: {}", event.getType(), e);
+            return;
+        }
+
+        TextMessage message = new TextMessage(jsonPayload);
+        for (String sessionId : room.getSessionIds()) {
+            if (sessionId.equals(excludedSessionId)) {
+                continue;
+            }
+            WebSocketSession session = activeSessions.get(sessionId);
+            if (session != null && session.isOpen()) {
+                try {
+                    session.sendMessage(message);
+                } catch (IOException e) {
+                    log.warn("Failed to send event to session {}: {}", sessionId, e.getMessage());
+                }
+            }
+        }
+    }
+
+    public synchronized boolean addCollabUpdate(String roomId, String updateBase64) {
+        Room room = rooms.get(roomId);
+        if (room == null) {
+            return false;
+        }
+        return room.addCollabUpdate(updateBase64, properties.getMaxRoomCollabHistory(), properties.getMaxRoomCollabHistoryBytes());
+    }
+
+    public boolean isCollabHistoryFull(String roomId) {
+        Room room = rooms.get(roomId);
+        return room != null && room.isCollabHistoryFull();
+    }
+
+    public List<String> getCollabUpdates(String roomId) {
+        Room room = rooms.get(roomId);
+        return (room != null) ? room.getCollabUpdates() : Collections.emptyList();
+    }
+
+    public boolean checkCollabUpdateRateLimit(String roomId, String sessionId, long nowMs) {
+        Room room = rooms.get(roomId);
+        return room != null && room.checkCollabUpdateRateLimit(sessionId, properties.getCollabRateLimitPerSec(), nowMs);
+    }
+
+    public boolean checkCollabAwarenessRateLimit(String roomId, String sessionId, long nowMs) {
+        Room room = rooms.get(roomId);
+        return room != null && room.checkCollabAwarenessRateLimit(sessionId, properties.getCollabRateLimitPerSec(), nowMs);
+    }
+
+    public boolean checkCollabRateLimit(String roomId, String sessionId, long nowMs) {
+        return checkCollabUpdateRateLimit(roomId, sessionId, nowMs);
+    }
+
+    public boolean checkCollabSyncRateLimit(String roomId, String sessionId) {
+        Room room = rooms.get(roomId);
+        return room != null && room.checkCollabSyncRateLimit(sessionId, properties.getCollabSyncRateLimitPerMinute(), System.currentTimeMillis());
+    }
+
+    public AssignedUserDto getAssignedUser(String sessionId) {
+        return createAssignedUser(sessionId);
+    }
+
     public void sendToSession(String sessionId, ServerEvent event) {
         WebSocketSession session = activeSessions.get(sessionId);
         if (session == null || !session.isOpen()) {
@@ -200,13 +291,13 @@ public class RoomManager {
         }
     }
 
-    public record JoinResult(boolean success, String reason, String message, List<String> members) {
-        public static JoinResult success(List<String> members) {
-            return new JoinResult(true, null, null, members);
+    public record JoinResult(boolean success, String reason, String message, List<String> members, AssignedUserDto assignedUser) {
+        public static JoinResult success(List<String> members, AssignedUserDto assignedUser) {
+            return new JoinResult(true, null, null, members, assignedUser);
         }
 
         public static JoinResult error(String reason, String message) {
-            return new JoinResult(false, reason, message, Collections.emptyList());
+            return new JoinResult(false, reason, message, Collections.emptyList(), null);
         }
     }
 }

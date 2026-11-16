@@ -49,7 +49,7 @@ test.describe('PolyExecution Studio E2E Browser Suite', () => {
     // Check truthful telemetry metrics from sandbox
     await expect(page.getByTestId('metric-exit-code')).toContainText('0');
     await expect(page.getByTestId('metric-worker-status')).toContainText('OK');
-    await expect(page.getByTestId('metric-wall-time')).not.toContainText('0 ms');
+    await expect(page.getByTestId('metric-wall-time')).not.toHaveText(/^Wall Time\s*0 ms$/);
   });
 
   test('halts on invalid C code with Compile Error and asserts Running is never reached', async ({

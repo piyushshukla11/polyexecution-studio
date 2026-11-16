@@ -31,6 +31,7 @@ import pes.execution.v1.ExecutionStage;
 import pes.execution.v1.ExecutionStatus;
 import pes.execution.v1.ExecutionStreamEvent;
 import pes.execution.v1.Language;
+import pes.gateway.config.GatewayProperties;
 import pes.gateway.service.WorkerClient;
 import pes.gateway.service.WorkerGrpcClient;
 
@@ -53,6 +54,9 @@ class GatewayIntegrationTest {
 
     @Autowired
     private FakeExecutionService fakeService;
+
+    @Autowired
+    private GatewayProperties properties;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -491,5 +495,399 @@ class GatewayIntegrationTest {
         assertEquals(-1, completedJson.get("exitCode").asInt());
 
         session.close();
+    }
+
+    @Test
+    @DisplayName("Collab update is relayed to room peer and excluded from sender")
+    void testCollabUpdateRelayedToRoomAndExcludedFromSender() throws Exception {
+        StandardWebSocketClient wsClient = new StandardWebSocketClient();
+        URI uri = new URI("ws://127.0.0.1:" + port + "/ws");
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        TestWebSocketHandler handlerA = new TestWebSocketHandler();
+        WebSocketSession sessionA = wsClient.execute(handlerA, headers, uri).get(5, TimeUnit.SECONDS);
+
+        TestWebSocketHandler handlerB = new TestWebSocketHandler();
+        WebSocketSession sessionB = wsClient.execute(handlerB, headers, uri).get(5, TimeUnit.SECONDS);
+
+        // Both join same room
+        sessionA.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"collab-relay-room\"}"));
+        assertNotNull(handlerA.nextMessage(5000));
+
+        sessionB.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"collab-relay-room\"}"));
+        String msgB = handlerB.nextMessage(5000);
+        assertNotNull(msgB, "Session B should receive its own room.joined");
+        JsonNode jsonBJoin = objectMapper.readTree(msgB);
+        assertEquals("room.joined", jsonBJoin.get("type").asText());
+        assertEquals("collab-relay-room", jsonBJoin.get("roomId").asText());
+        String serverSessionIdB = jsonBJoin.get("sessionId").asText();
+        assertNotNull(serverSessionIdB);
+        assertTrue(jsonBJoin.has("assignedUser"));
+        assertEquals(2, jsonBJoin.get("assignedUser").get("clientId").asInt());
+
+        // handlerA gets room.peer_joined for sessionB (strictly not room.joined)
+        String msgAPeer = handlerA.nextMessage(5000);
+        assertNotNull(msgAPeer, "Session A should receive room.peer_joined for newcomer B");
+        JsonNode jsonAPeer = objectMapper.readTree(msgAPeer);
+        assertEquals("room.peer_joined", jsonAPeer.get("type").asText());
+        assertEquals("collab-relay-room", jsonAPeer.get("roomId").asText());
+        assertEquals(serverSessionIdB, jsonAPeer.get("sessionId").asText());
+        assertTrue(jsonAPeer.has("assignedUser"));
+        assertEquals(2, jsonAPeer.get("assignedUser").get("clientId").asInt());
+
+        // Session A sends collab.update
+        String sampleUpdate = "dGVzdC15anMtdXBkYXRl";
+        sessionA.sendMessage(new TextMessage("{\"type\":\"collab.update\",\"update\":\"" + sampleUpdate + "\"}"));
+
+        // Session B must receive collab.update
+        String receivedByB = handlerB.nextMessage(5000);
+        assertNotNull(receivedByB, "Session B should receive collab.update");
+        JsonNode jsonB = objectMapper.readTree(receivedByB);
+        assertEquals("collab.update", jsonB.get("type").asText());
+        assertEquals("collab-relay-room", jsonB.get("roomId").asText());
+        assertEquals(sampleUpdate, jsonB.get("update").asText());
+
+        // Session A must NOT receive its own collab.update
+        assertNull(handlerA.nextMessage(500), "Session A must not receive echoed collab.update");
+
+        sessionA.close();
+        sessionB.close();
+    }
+
+    @Test
+    @DisplayName("Collab sync returns accumulated room updates to newly joined session")
+    void testCollabSyncReturnsStoredUpdatesToNewSession() throws Exception {
+        StandardWebSocketClient wsClient = new StandardWebSocketClient();
+        URI uri = new URI("ws://127.0.0.1:" + port + "/ws");
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        TestWebSocketHandler handlerA = new TestWebSocketHandler();
+        WebSocketSession sessionA = wsClient.execute(handlerA, headers, uri).get(5, TimeUnit.SECONDS);
+
+        // Session A joins room and submits an update
+        sessionA.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"collab-sync-room\"}"));
+        assertNotNull(handlerA.nextMessage(5000));
+
+        String initialUpdate = "aW5pdGlhbC1kb2MtdXBkYXRl";
+        sessionA.sendMessage(new TextMessage("{\"type\":\"collab.update\",\"update\":\"" + initialUpdate + "\"}"));
+
+        // Session B connects later and joins same room
+        TestWebSocketHandler handlerB = new TestWebSocketHandler();
+        WebSocketSession sessionB = wsClient.execute(handlerB, headers, uri).get(5, TimeUnit.SECONDS);
+        sessionB.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"collab-sync-room\"}"));
+        assertNotNull(handlerB.nextMessage(5000));
+
+        // Session B requests collab.sync
+        sessionB.sendMessage(new TextMessage("{\"type\":\"collab.sync\"}"));
+
+        String syncResponse = handlerB.nextMessage(5000);
+        assertNotNull(syncResponse, "Session B should receive collab.sync");
+        JsonNode syncJson = objectMapper.readTree(syncResponse);
+        assertEquals("collab.sync", syncJson.get("type").asText());
+        assertEquals("collab-sync-room", syncJson.get("roomId").asText());
+        assertTrue(syncJson.has("updates"));
+        assertEquals(1, syncJson.get("updates").size());
+        assertEquals(initialUpdate, syncJson.get("updates").get(0).asText());
+
+        sessionA.close();
+        sessionB.close();
+    }
+
+    @Test
+    @DisplayName("Collab awareness is relayed with server-verified sender session ID and excluded from sender")
+    void testCollabAwarenessRelayedWithServerSenderSessionId() throws Exception {
+        StandardWebSocketClient wsClient = new StandardWebSocketClient();
+        URI uri = new URI("ws://127.0.0.1:" + port + "/ws");
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        TestWebSocketHandler handlerA = new TestWebSocketHandler();
+        WebSocketSession sessionA = wsClient.execute(handlerA, headers, uri).get(5, TimeUnit.SECONDS);
+
+        TestWebSocketHandler handlerB = new TestWebSocketHandler();
+        WebSocketSession sessionB = wsClient.execute(handlerB, headers, uri).get(5, TimeUnit.SECONDS);
+
+        sessionA.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"awareness-room\"}"));
+        String joinedMsgA = handlerA.nextMessage(5000);
+        assertNotNull(joinedMsgA);
+        String serverSessionIdA = objectMapper.readTree(joinedMsgA).get("sessionId").asText();
+
+        sessionB.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"awareness-room\"}"));
+        assertNotNull(handlerB.nextMessage(5000));
+        assertNotNull(handlerA.nextMessage(5000)); // joined notification
+
+        String sampleAwareness = "YXdhcmVuZXNzLXBheWxvYWQ=";
+        sessionA.sendMessage(new TextMessage("{\"type\":\"collab.awareness\",\"awareness\":\"" + sampleAwareness + "\"}"));
+
+        String receivedByB = handlerB.nextMessage(5000);
+        assertNotNull(receivedByB, "Session B should receive collab.awareness");
+        JsonNode jsonB = objectMapper.readTree(receivedByB);
+        assertEquals("collab.awareness", jsonB.get("type").asText());
+        assertEquals("awareness-room", jsonB.get("roomId").asText());
+        assertEquals(serverSessionIdA, jsonB.get("senderSessionId").asText());
+        assertEquals(sampleAwareness, jsonB.get("awareness").asText());
+
+        // Session A must not receive its own awareness
+        assertNull(handlerA.nextMessage(500));
+
+        sessionA.close();
+        sessionB.close();
+    }
+
+    @Test
+    @DisplayName("Collab updates and awareness are strictly isolated across rooms")
+    void testCollabIsolationAcrossRooms() throws Exception {
+        StandardWebSocketClient wsClient = new StandardWebSocketClient();
+        URI uri = new URI("ws://127.0.0.1:" + port + "/ws");
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        TestWebSocketHandler handlerA = new TestWebSocketHandler();
+        WebSocketSession sessionA = wsClient.execute(handlerA, headers, uri).get(5, TimeUnit.SECONDS);
+
+        TestWebSocketHandler handlerB = new TestWebSocketHandler();
+        WebSocketSession sessionB = wsClient.execute(handlerB, headers, uri).get(5, TimeUnit.SECONDS);
+
+        sessionA.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"room-iso-1\"}"));
+        assertNotNull(handlerA.nextMessage(5000));
+
+        sessionB.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"room-iso-2\"}"));
+        assertNotNull(handlerB.nextMessage(5000));
+
+        // Session A sends update and awareness
+        sessionA.sendMessage(new TextMessage("{\"type\":\"collab.update\",\"update\":\"dXBkYXRlMSI=\"}"));
+        sessionA.sendMessage(new TextMessage("{\"type\":\"collab.awareness\",\"awareness\":\"YXdhcmUx\"}"));
+
+        // Session B in room-iso-2 must receive nothing
+        assertNull(handlerB.nextMessage(500), "Session B in room-iso-2 must not receive updates from room-iso-1");
+
+        sessionA.close();
+        sessionB.close();
+    }
+
+    @Test
+    @DisplayName("Collab security and bounds: rejects not-in-room, oversized, and blank payloads")
+    void testCollabSecurityAndBounds() throws Exception {
+        StandardWebSocketClient wsClient = new StandardWebSocketClient();
+        URI uri = new URI("ws://127.0.0.1:" + port + "/ws");
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        TestWebSocketHandler handler = new TestWebSocketHandler();
+        WebSocketSession session = wsClient.execute(handler, headers, uri).get(5, TimeUnit.SECONDS);
+
+        // 1. Send collab.update before joining room -> NOT_IN_ROOM
+        session.sendMessage(new TextMessage("{\"type\":\"collab.update\",\"update\":\"dXBkYXRl\"}"));
+        String errNotJoined = handler.nextMessage(5000);
+        assertNotNull(errNotJoined);
+        JsonNode jsonNotJoined = objectMapper.readTree(errNotJoined);
+        assertEquals("error", jsonNotJoined.get("type").asText());
+        assertEquals("NOT_IN_ROOM", jsonNotJoined.get("code").asText());
+
+        // Join room
+        session.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"bounds-room\"}"));
+        assertNotNull(handler.nextMessage(5000));
+
+        // 2. Oversized collab.update (> 64 KiB)
+        String oversizedUpdate = "A".repeat(65536 + 10);
+        session.sendMessage(new TextMessage("{\"type\":\"collab.update\",\"update\":\"" + oversizedUpdate + "\"}"));
+        String errOversized = handler.nextMessage(5000);
+        assertNotNull(errOversized);
+        JsonNode jsonOversized = objectMapper.readTree(errOversized);
+        assertEquals("error", jsonOversized.get("type").asText());
+        assertEquals("MESSAGE_TOO_LARGE", jsonOversized.get("code").asText());
+
+        // 3. Oversized collab.awareness (> 16 KiB)
+        String oversizedAwareness = "B".repeat(16384 + 10);
+        session.sendMessage(new TextMessage("{\"type\":\"collab.awareness\",\"awareness\":\"" + oversizedAwareness + "\"}"));
+        String errOversizedAwareness = handler.nextMessage(5000);
+        assertNotNull(errOversizedAwareness);
+        JsonNode jsonOversizedAwareness = objectMapper.readTree(errOversizedAwareness);
+        assertEquals("error", jsonOversizedAwareness.get("type").asText());
+        assertEquals("MESSAGE_TOO_LARGE", jsonOversizedAwareness.get("code").asText());
+
+        // 4. Blank update -> BAD_REQUEST
+        session.sendMessage(new TextMessage("{\"type\":\"collab.update\",\"update\":\"   \"}"));
+        String errBlank = handler.nextMessage(5000);
+        assertNotNull(errBlank);
+        JsonNode jsonBlank = objectMapper.readTree(errBlank);
+        assertEquals("error", jsonBlank.get("type").asText());
+        assertEquals("BAD_REQUEST", jsonBlank.get("code").asText());
+
+        session.close();
+    }
+
+    @Test
+    @DisplayName("Collab awareness identity is bound to server session and assignedUser preventing spoofing")
+    void testCollabAwarenessSpoofingPreventedByServerAttribution() throws Exception {
+        StandardWebSocketClient wsClient = new StandardWebSocketClient();
+        URI uri = new URI("ws://127.0.0.1:" + port + "/ws");
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        TestWebSocketHandler handlerA = new TestWebSocketHandler();
+        WebSocketSession sessionA = wsClient.execute(handlerA, headers, uri).get(5, TimeUnit.SECONDS);
+
+        TestWebSocketHandler handlerB = new TestWebSocketHandler();
+        WebSocketSession sessionB = wsClient.execute(handlerB, headers, uri).get(5, TimeUnit.SECONDS);
+
+        sessionA.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"spoof-prevention-room\"}"));
+        String joinedA = handlerA.nextMessage(5000);
+        assertNotNull(joinedA);
+        String serverSessionIdA = objectMapper.readTree(joinedA).get("sessionId").asText();
+
+        sessionB.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"spoof-prevention-room\"}"));
+        String joinedB = handlerB.nextMessage(5000);
+        assertNotNull(joinedB);
+        String serverSessionIdB = objectMapper.readTree(joinedB).get("sessionId").asText();
+        assertNotNull(handlerA.nextMessage(5000)); // drain joined notification for B
+
+        // Session B sends awareness attempting to claim sessionA's identity inside payload
+        String spoofAwarenessPayload = "eyAidXNlciI6IHsgInNlc3Npb25JZCI6ICI" + serverSessionIdA + "\" } }";
+        sessionB.sendMessage(new TextMessage("{\"type\":\"collab.awareness\",\"awareness\":\"" + spoofAwarenessPayload + "\"}"));
+
+        String receivedByA = handlerA.nextMessage(5000);
+        assertNotNull(receivedByA);
+        JsonNode jsonA = objectMapper.readTree(receivedByA);
+        assertEquals("collab.awareness", jsonA.get("type").asText());
+        // Server MUST attribute message strictly to session B, not the spoofed session A
+        assertEquals(serverSessionIdB, jsonA.get("senderSessionId").asText());
+        assertNotEquals(serverSessionIdA, jsonA.get("senderSessionId").asText());
+        assertTrue(jsonA.has("assignedUser"));
+        assertNotNull(jsonA.get("assignedUser").get("name").asText());
+        assertNotNull(jsonA.get("assignedUser").get("color").asText());
+        assertTrue(jsonA.get("assignedUser").has("clientId"));
+        assertTrue(jsonA.get("assignedUser").get("clientId").asInt() > 0);
+
+        sessionA.close();
+        sessionB.close();
+    }
+
+    @Test
+    @DisplayName("Collab sync flooding is rate-limited and excess requests are rejected")
+    void testCollabSyncRateLimitFloodingRejected() throws Exception {
+        StandardWebSocketClient wsClient = new StandardWebSocketClient();
+        URI uri = new URI("ws://127.0.0.1:" + port + "/ws");
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        TestWebSocketHandler handler = new TestWebSocketHandler();
+        WebSocketSession session = wsClient.execute(handler, headers, uri).get(5, TimeUnit.SECONDS);
+
+        session.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"sync-flood-room\"}"));
+        assertNotNull(handler.nextMessage(5000));
+
+        // Submit 1 update to populate room history
+        session.sendMessage(new TextMessage("{\"type\":\"collab.update\",\"update\":\"dXBkYXRlMQ==\"}"));
+
+        // Rapidly send 15 collab.sync requests (limit is 10/min)
+        int rateLimitErrors = 0;
+        int successfulSyncs = 0;
+        for (int i = 0; i < 15; i++) {
+            session.sendMessage(new TextMessage("{\"type\":\"collab.sync\"}"));
+            String resp = handler.nextMessage(2000);
+            if (resp != null) {
+                JsonNode json = objectMapper.readTree(resp);
+                if ("collab.sync".equals(json.get("type").asText())) {
+                    successfulSyncs++;
+                } else if ("error".equals(json.get("type").asText()) && "RATE_LIMIT_EXCEEDED".equals(json.get("code").asText())) {
+                    rateLimitErrors++;
+                }
+            }
+        }
+
+        assertTrue(successfulSyncs > 0, "Initial sync requests should succeed");
+        assertTrue(rateLimitErrors > 0, "Flooded sync requests must be rejected with RATE_LIMIT_EXCEEDED");
+        session.close();
+    }
+
+    @Test
+    @DisplayName("Collab history cap broadcasts COLLAB_HISTORY_FULL and locks editing across peers and new joiners")
+    void testCollabHistoryCapPreventsDivergence() throws Exception {
+        StandardWebSocketClient wsClient = new StandardWebSocketClient();
+        URI uri = new URI("ws://127.0.0.1:" + port + "/ws");
+        WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+        headers.setOrigin("http://127.0.0.1:8080");
+
+        TestWebSocketHandler handlerA = new TestWebSocketHandler();
+        WebSocketSession sessionA = wsClient.execute(handlerA, headers, uri).get(5, TimeUnit.SECONDS);
+
+        TestWebSocketHandler handlerB = new TestWebSocketHandler();
+        WebSocketSession sessionB = wsClient.execute(handlerB, headers, uri).get(5, TimeUnit.SECONDS);
+
+        sessionA.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"cap-divergence-room\"}"));
+        assertNotNull(handlerA.nextMessage(5000));
+
+        sessionB.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"cap-divergence-room\"}"));
+        assertNotNull(handlerB.nextMessage(5000));
+        assertNotNull(handlerA.nextMessage(5000)); // drain joined notification
+
+        int originalMaxHistory = properties.getMaxRoomCollabHistory();
+        properties.setMaxRoomCollabHistory(2);
+        try {
+            // Send update 1 (fits in history)
+            sessionA.sendMessage(new TextMessage("{\"type\":\"collab.update\",\"update\":\"dXBkYXRlMQ==\"}"));
+            String bGot1 = handlerB.nextMessage(5000);
+            assertNotNull(bGot1);
+            assertEquals("collab.update", objectMapper.readTree(bGot1).get("type").asText());
+
+            // Send update 2 (reaches cap of 2)
+            sessionA.sendMessage(new TextMessage("{\"type\":\"collab.update\",\"update\":\"dXBkYXRlMg==\"}"));
+            String bGot2 = handlerB.nextMessage(5000);
+            assertNotNull(bGot2);
+            assertEquals("collab.update", objectMapper.readTree(bGot2).get("type").asText());
+
+            // Because update 2 reached the cap, COLLAB_HISTORY_FULL is broadcast to BOTH A and B
+            String bFull = handlerB.nextMessage(5000);
+            assertNotNull(bFull);
+            JsonNode bFullJson = objectMapper.readTree(bFull);
+            assertEquals("error", bFullJson.get("type").asText());
+            assertEquals("COLLAB_HISTORY_FULL", bFullJson.get("code").asText());
+
+            String aFull = handlerA.nextMessage(5000);
+            assertNotNull(aFull);
+            JsonNode aFullJson = objectMapper.readTree(aFull);
+            assertEquals("error", aFullJson.get("type").asText());
+            assertEquals("COLLAB_HISTORY_FULL", aFullJson.get("code").asText());
+
+            // Subsequent update 3 from session B must be rejected immediately
+            sessionB.sendMessage(new TextMessage("{\"type\":\"collab.update\",\"update\":\"dXBkYXRlMw==\"}"));
+            String bReject = handlerB.nextMessage(5000);
+            assertNotNull(bReject);
+            JsonNode bRejectJson = objectMapper.readTree(bReject);
+            assertEquals("error", bRejectJson.get("type").asText());
+            assertEquals("COLLAB_HISTORY_FULL", bRejectJson.get("code").asText());
+
+            // New participant Session C joins the capped room
+            TestWebSocketHandler handlerC = new TestWebSocketHandler();
+            WebSocketSession sessionC = wsClient.execute(handlerC, headers, uri).get(5, TimeUnit.SECONDS);
+            sessionC.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"cap-divergence-room\"}"));
+            assertNotNull(handlerC.nextMessage(5000)); // room.joined
+
+            sessionC.sendMessage(new TextMessage("{\"type\":\"collab.sync\"}"));
+            String cSync = handlerC.nextMessage(5000);
+            assertNotNull(cSync);
+            JsonNode cSyncJson = objectMapper.readTree(cSync);
+            assertEquals("collab.sync", cSyncJson.get("type").asText());
+            assertEquals(2, cSyncJson.get("updates").size());
+            assertTrue(cSyncJson.has("historyFull"));
+            assertTrue(cSyncJson.get("historyFull").asBoolean());
+
+            // Session C receives COLLAB_HISTORY_FULL right after sync so it locks immediately
+            String cFull = handlerC.nextMessage(5000);
+            assertNotNull(cFull);
+            JsonNode cFullJson = objectMapper.readTree(cFull);
+            assertEquals("error", cFullJson.get("type").asText());
+            assertEquals("COLLAB_HISTORY_FULL", cFullJson.get("code").asText());
+
+            sessionC.close();
+        } finally {
+            properties.setMaxRoomCollabHistory(originalMaxHistory);
+        }
+
+        sessionA.close();
+        sessionB.close();
     }
 }

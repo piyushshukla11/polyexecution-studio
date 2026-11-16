@@ -7,6 +7,22 @@ import java.time.Duration;
 import java.util.concurrent.*;
 
 public class E2eWebSocketClient {
+    private static String pollUntilCompleted(BlockingQueue<String> messages, long timeoutSeconds) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutSeconds * 1000;
+        while (System.currentTimeMillis() < deadline) {
+            long remaining = Math.max(1, deadline - System.currentTimeMillis());
+            String msg = messages.poll(remaining, TimeUnit.MILLISECONDS);
+            if (msg == null) {
+                return null;
+            }
+            System.out.println("Received: " + msg);
+            if (msg.contains("\"run.completed\"")) {
+                return msg;
+            }
+        }
+        return null;
+    }
+
     public static void main(String[] args) throws Exception {
         String wsUrl = args.length > 0 ? args[0] : "ws://127.0.0.1:8080/ws";
         System.out.println("Connecting to " + wsUrl);
@@ -61,8 +77,7 @@ public class E2eWebSocketClient {
             System.err.println("FAIL: Expected run.accepted for C");
             System.exit(1);
         }
-        String cCompleted = messages.poll(15, TimeUnit.SECONDS);
-        System.out.println("Received: " + cCompleted);
+        String cCompleted = pollUntilCompleted(messages, 15);
         if (cCompleted == null || !cCompleted.contains("\"OK\"") || !cCompleted.contains("Hello from PES E2E C")) {
             System.err.println("FAIL: Expected OK status and stdout from real sandbox");
             System.exit(1);
@@ -82,8 +97,7 @@ public class E2eWebSocketClient {
         ws.sendText(badCRun, true);
         String badCAccepted = messages.poll(5, TimeUnit.SECONDS);
         System.out.println("Received: " + badCAccepted);
-        String badCCompleted = messages.poll(15, TimeUnit.SECONDS);
-        System.out.println("Received: " + badCCompleted);
+        String badCCompleted = pollUntilCompleted(messages, 15);
         if (badCCompleted == null || !badCCompleted.contains("\"COMPILE_ERROR\"")) {
             System.err.println("FAIL: Expected COMPILE_ERROR for invalid C");
             System.exit(1);
@@ -103,8 +117,7 @@ public class E2eWebSocketClient {
         ws.sendText(pyRun, true);
         String pyAccepted = messages.poll(5, TimeUnit.SECONDS);
         System.out.println("Received: " + pyAccepted);
-        String pyCompleted = messages.poll(15, TimeUnit.SECONDS);
-        System.out.println("Received: " + pyCompleted);
+        String pyCompleted = pollUntilCompleted(messages, 15);
         if (pyCompleted == null || !pyCompleted.contains("\"OK\"") || !pyCompleted.contains("Hello from PES E2E Python")) {
             System.err.println("FAIL: Expected OK status and stdout for Python");
             System.exit(1);

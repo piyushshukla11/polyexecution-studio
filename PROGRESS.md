@@ -2823,3 +2823,401 @@
 - Files: `PROGRESS.md`, `README.md`.
 - Linked: LOG-0171, LOG-0170, LOG-0169.
 - Tutor review: approved for Phase 5 sign-off and merge into main
+
+
+## [LOG-0173] 2026-11-16 09:08 IST | DECISION | actor: agent
+- Reason: Record Phase 6 dependency selections (yjs, y-protocols, y-monaco) and WebSocket collaboration protocol design per AI_RULES.md §7.
+- Details / Change:
+  1. Frontend Collaboration Dependencies:
+     - `yjs` (v13.6.33): Core CRDT framework providing conflict-free peer convergence for shared document state without centralized locks or OT servers.
+     - `y-protocols` (v1.0.7): Standard binary awareness and presence protocol handling ephemeral collaborator state (cursors, selections, user info) distinct from durable document CRDT updates.
+     - `y-monaco` (v0.1.6): Official Monaco editor binding translating between `Y.Text` CRDT mutations and Monaco `ITextModel` deltas while rendering remote cursor decorations driven by Awareness.
+     - Alternatives considered: Automerge (larger JSON CRDT, less mature Monaco binding), custom Operational Transformation (requires complex central transform engine and lock serialization, violates architecture goal), CodeMirror native collab (project specifically requires Monaco).
+     - Cost/maintenance: Minimal bundle impact (~40 KiB minified/gzipped for all three packages); mature, zero-dependency except internal `lib0`.
+  2. Protocol Contract for WebSocket Collaboration:
+     - Additive message types on existing `/ws` endpoint:
+       - `collab.update`: `{ "type": "collab.update", "update": "<base64>" }` (opaque CRDT delta; sender and room derived strictly from server session).
+       - `collab.awareness`: `{ "type": "collab.awareness", "awareness": "<base64>" }` (ephemeral presence delta; sender session attached by server).
+       - `collab.sync`: `{ "type": "collab.sync", "roomId": "...", "updates": [ "<base64>", ... ] }` (server-to-client catchup sent on room join).
+  3. Security & Trust Boundaries:
+     - Session-derived authorization: Gateway derives `roomId` and sender identity strictly from server-side session state (`sessionToRoom`). Clients cannot spoof room or sender identity in payloads.
+     - Bounded payloads: Max 64 KiB for collab updates, max 16 KiB for awareness updates. Oversized payloads rejected with `MESSAGE_TOO_LARGE`.
+     - Rate limits: Max 120 collab updates/sec, max 60 awareness updates/sec per session to prevent event flood / DoS.
+     - Room isolation: Updates relayed strictly to sessions in the same room (`broadcastToRoomExcept`); cross-room leakage strictly prevented.
+     - Server-assigned presence identity: `RoomJoinedEvent` provides `assignedUser` `{ name, color }` derived deterministically by Gateway from a distinct color palette.
+     - Ephemeral cleanup: Disconnect/leave immediately triggers `room.left`, removing remote cursors; room teardown frees update history.
+- Files: `PROGRESS.md`.
+- Linked: LOG-0172.
+- Tutor review: pending
+
+
+## [LOG-0174] 2026-11-16 09:08 IST | PLAN | actor: agent
+- Reason: Implement Phase 6 real-time collaboration meeting the exact Definition of Done in docs/04_BUILD_PLAN.md ("Yjs collaboration — Two browsers converge; cursors visible").
+- Details / Change:
+  1. Gateway collaboration relay, rate limiting, and update buffering:
+     - Update `GatewayProperties` with `maxCollabUpdateBytes` (64 KiB), `maxAwarenessBytes` (16 KiB), `maxRoomCollabHistory` (2,000 updates / 2 MiB), `collabRateLimitPerSec` (120).
+     - Extend `Room` with thread-safe `collabUpdates` list, `collabByteCount`, and sliding window collaboration rate counters.
+     - Add `CollabUpdateMessage`, `CollabAwarenessMessage`, `CollabUpdateEvent`, `CollabAwarenessEvent`, `CollabSyncEvent`, and `AssignedUserDto`.
+     - Update `GatewayWebSocketHandler` to handle `collab.update` and `collab.awareness`, validating session room membership, payload size, and rate limits.
+     - In `handleRoomJoin`, emit `collab.sync` directly to newly joined session containing existing room updates.
+     - Add Gateway unit and integration tests verifying room isolation, size limit rejection, rate limit rejection, unauthorized sender rejection, and initial catchup synchronization.
+  2. Client Yjs and Monaco integration:
+     - Install `yjs`, `y-protocols`, and `y-monaco` in `client/package.json`.
+     - Implement collaboration provider hook (`useCollaboration` / update `useExecutionSocket`) managing `Y.Doc`, `Y.Text` ('monaco'), `Y.Map` ('meta' for language), and `Awareness`.
+     - Bind `ytext` and `awareness` to Monaco editor using `MonacoBinding`.
+     - Handle room URL query parameter (`?room=<id>`) and room switcher in UI so multiple browsers can join the same room easily.
+     - Update CSS with styles for `.yRemoteSelection`, `.yRemoteSelectionHead`, and participant name labels.
+     - Add client unit tests for provider lifecycle, update serialization/deserialization, awareness cleanup on `room.left`, and language synchronization.
+  3. Two-Browser Playwright End-to-End Suite:
+     - Implement Playwright test with two independent browser pages connecting to the live Gateway and joining the same room.
+     - Verify concurrent and sequential edits converge to identical text on both pages.
+     - Verify remote cursor decorations and selections are visible across pages.
+     - Verify room isolation: third page in separate room does not receive updates.
+     - Verify disconnect/leave cleanly removes remote cursors without residual stale decorations.
+     - Verify Phase 5 execution flows (C compile+run, C compile error, Python run, timeout) still pass.
+  4. Documentation & Sign-off:
+     - Add 3 required explain-back questions to `docs/05_INTERVIEW_PREP.md` (unchecked).
+     - Update `README.md` to reflect Phase 6 completion with honest limitations.
+     - Run repo hygiene, progress append-only checks, and test suites.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/*`, `client/*`.
+- Linked: LOG-0173, LOG-0172.
+- Tutor review: pending
+
+
+## [LOG-0175] 2026-11-16 10:48 IST | DONE | actor: agent
+- Reason: Complete Phase 6 real-time collaboration implementation and verification meeting Definition of Done ("Two browsers converge; cursors visible").
+- Details / Change:
+  1. Implemented Java Gateway collaboration backend:
+     - `GatewayProperties`: configured bounds (`maxCollabUpdateBytes` 64 KiB, `maxAwarenessBytes` 16 KiB, `maxRoomCollabHistory` 2,000 updates / 2 MiB, `collabRateLimitPerSec` 120).
+     - `Room`: thread-safe opaque collaboration update buffer, byte tracker, and sliding-window rate limiter per session.
+     - `RoomManager`: room-isolated relay (`broadcastToRoomExcept`), deterministic participant color assignment from 8-color palette, initial catchup history retrieval, and session cleanup.
+     - `GatewayWebSocketHandler`: handled `collab.update`, `collab.awareness`, and client-requested `collab.sync`, deriving sender identity and room membership strictly from server-side session state.
+     - Added comprehensive unit and integration tests in `RoomManagerTest` and `GatewayIntegrationTest` covering relay isolation, payload size rejections, rate limiting, and sync catchup (41/41 tests passing).
+  2. Implemented Client Yjs + Monaco collaborative workbench:
+     - Installed `yjs` (v13.6.33), `y-protocols` (v1.0.7), and `y-monaco` (v0.1.6).
+     - Created `codec.ts` for lossless binary `Uint8Array` <-> Base64 conversion with unit tests.
+     - Created `useCollaboration.ts` managing `Y.Doc`, `Awareness`, `ytext` ('monaco'), `ymeta` ('meta' for language), local awareness updates, incoming event dispatch, dynamic participant style injection, and `MonacoBinding`.
+     - In `CodeEditor.tsx`, set Monaco to uncontrolled mode (`value={undefined}`) with `defaultValue` when mounted with `MonacoBinding`, preventing dual-controller feedback loops.
+     - In `App.tsx`, wired collaboration provider, room join form, and collaborator pill badges.
+     - Configured Vite and Vitest aliases for `monaco-editor/esm` and inlined `y-monaco` (29/29 tests passing).
+  3. Two-Browser Playwright End-to-End Suite (`client/tests/collab.spec.ts`):
+     - Opens two independent browser contexts joining the same room through live Gateway.
+     - Sequential edits from Page 1 converge to Page 2.
+     - Remote cursor head and selection decorations are visible across pages.
+     - Concurrent edits from Page 1 and Page 2 converge to identical document text.
+     - Separate room isolation: third page in separate room receives zero updates or cursor decorations.
+     - Disconnect/leave cleans up peer awareness without stale cursors.
+     - Collaborative code execution completes with truthful status progression and stdout (5/5 Playwright tests passing).
+  4. Documentation:
+     - Added 3 required explain-back questions (unchecked) to `docs/05_INTERVIEW_PREP.md`.
+     - Updated `README.md` to reflect Phase 6 completion with honest limitations.
+- Files: `PROGRESS.md`, `README.md`, `docs/05_INTERVIEW_PREP.md`, `client/*`, `gateway/*`.
+- Linked: LOG-0174, LOG-0173.
+- Tutor review: pending
+
+
+## [LOG-0176] 2026-11-16 11:22 IST | PLAN | actor: agent
+- Reason: Address tutor review findings for Phase 6 on branch phase/6-collab: bind awareness identity to server-tracked session, rate-limit collab.sync, prove concurrent convergence in two-browser Playwright test, and prevent silent divergence on history cap.
+- Details / Change:
+  1. Awareness Identity Binding:
+     - Update `CollabAwarenessEvent` to include server-assigned `assignedUser` (`{ name, color }`) alongside server-verified `senderSessionId`.
+     - In `client/src/hooks/useCollaboration.ts`, bind incoming remote awareness client IDs strictly to `event.senderSessionId` and overwrite `user.sessionId`, `user.name`, and `user.color` with server-assigned values. Prevent spoofed updates and reject cross-session client ID hijacks.
+     - Add integration test in `GatewayIntegrationTest` where a joined session attempts to claim another session's ID in an awareness payload, asserting server attribution and isolation.
+  2. Rate-limit `collab.sync`:
+     - Add `collabSyncRateLimitPerMinute` to `GatewayProperties` (default: 10/min per session).
+     - Track sync request timestamps per session in `Room.java` / `RoomManager.java`.
+     - In `GatewayWebSocketHandler.handleCollabSync`, enforce rate limiting; reject excess requests with `RATE_LIMIT_EXCEEDED` without serializing or sending room history.
+     - Add integration test verifying sync flood rejection on populated room.
+  3. Two-Browser Playwright Test Enhancements:
+     - In `client/tests/collab.spec.ts`, execute overlapping edits concurrently using `Promise.all` across independent browser contexts without sequential waits.
+     - Assert exact document equality `lines1 === lines2` without whitespace normalization, and assert remote cursor head/selection visibility with `toBeVisible()`.
+  4. Collaboration History Cap without Silent Divergence:
+     - In `Room.java`, when `collabUpdates.size() == maxHistoryCount` or byte cap is reached, mark `collabHistoryFull = true`.
+     - When an update reaches the cap, accept that update and broadcast `ErrorEvent("COLLAB_HISTORY_FULL")` to all room sessions.
+     - Reject subsequent updates with `COLLAB_HISTORY_FULL`.
+     - On `room.join` / `collab.sync` to a full room, send `CollabSyncEvent` followed immediately by `COLLAB_HISTORY_FULL`.
+     - In `useCollaboration.ts` and `App.tsx`, upon receiving `COLLAB_HISTORY_FULL`, set editor to `readOnly` and render a warning banner, preventing divergence across existing and new peers.
+     - Add integration test with small history cap verifying convergence and locked behavior for existing peers and reconnecting/new participants.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/*`, `client/src/*`, `client/tests/collab.spec.ts`.
+- Linked: LOG-0175, LOG-0174.
+- Tutor review: pending
+
+
+## [LOG-0177] 2026-11-16 12:42 IST | DONE | actor: agent
+- Reason: Complete implementation and verification of tutor review findings for Phase 6 on branch phase/6-collab.
+- Details / Change:
+  1. Awareness Identity Binding:
+     - Updated `CollabAwarenessEvent.java` to include server-assigned `assignedUser` (`{ name, color }`) alongside server-verified `senderSessionId`.
+     - In `GatewayWebSocketHandler.java`, bound awareness broadcast to `roomManager.getAssignedUser(session.getId())`.
+     - In `client/src/types/protocol.ts`, added `assignedUser?: AssignedUser` to `CollabAwarenessEvent`.
+     - In `client/src/hooks/useCollaboration.ts`, used `modifyAwarenessUpdate` from `y-protocols/awareness` to sanitize incoming awareness payloads before applying to local state: strictly rewrote `state.user.sessionId = event.senderSessionId` and `state.user.name` / `color` from server-assigned metadata. Verified impostor identity spoofing or peer presence eviction is prevented.
+     - Added integration test `testCollabAwarenessSpoofingPreventedByServerAttribution` in `GatewayIntegrationTest.java` and unit test in `useCollaboration.test.ts`.
+  2. Rate-limit `collab.sync`:
+     - Added `collabSyncRateLimitPerMinute = 10` to `GatewayProperties.java`.
+     - Added sliding-window sync rate-limiting queue in `Room.java` (`checkCollabSyncRateLimit`) and `RoomManager.java`.
+     - In `GatewayWebSocketHandler.handleCollabSync`, enforced rate limit before sending updates; rejected excess requests with `RATE_LIMIT_EXCEEDED` without unbounded history re-transmission.
+     - Added integration test `testCollabSyncRateLimitFloodingRejected` in `GatewayIntegrationTest.java`.
+  3. Two-Browser Playwright Test Enhancements:
+     - In `client/tests/collab.spec.ts` Step 3, selected printable characters on line 1 (`#include`), creating a visible selection box with positive dimensions and asserting `.yRemoteSelectionHead` and `.yRemoteSelection` are visible via `toBeVisible()`.
+     - In Step 4, converted sequential typing into simultaneous `Promise.all` overlapping edits on `page1` (header) and `page2` (footer) through the real Gateway before waiting for remote convergence.
+     - Extracted Monaco text model / sorted DOM view lines in `getEditorText` and asserted exact document equality (`expect(lines1).toBe(lines2)`) without whitespace normalization, verifying convergence to identical content with both header and footer.
+     - Retained room isolation (page 3 in separate room receives no collab traffic) and disconnect cleanup (peer presence removed).
+  4. Collaboration History Cap without Silent Divergence:
+     - Added `collabHistoryFull` atomic boolean flag in `Room.java`. Separated update and awareness rate-limiting queues (`sessionCollabUpdateTimestamps` vs `sessionCollabAwarenessTimestamps`) to prevent quota starvation.
+     - When an update reaches the cap, accepted that update and broadcast `COLLAB_HISTORY_FULL` to all room sessions. Subsequent edits are rejected with `COLLAB_HISTORY_FULL`.
+     - On `collab.sync` to a full room, sends `CollabSyncEvent` followed immediately by `COLLAB_HISTORY_FULL`.
+     - In `useCollaboration.ts` and `App.tsx`, `COLLAB_HISTORY_FULL` triggers `isLocked = true`, locking Monaco to `readOnly: true` and rendering a warning banner preventing divergence across existing and new peers.
+     - Added integration test `testCollabHistoryCapPreventsDivergence` in `GatewayIntegrationTest.java` and unit test in `useCollaboration.test.ts`.
+  5. Test Evidence:
+     - `make -C sandbox-daemon test`: 22/22 passed.
+     - `(cd worker && gradle test --rerun-tasks)`: 19/19 passed.
+     - `(cd gateway && gradle test --rerun-tasks)`: 44/44 passed.
+     - `(cd client && npm test)`: 31/31 passed.
+     - `bash gateway/tests/verify_e2e_websocket.sh 8080 50055`: passed against live worker and gateway.
+     - `bash client/tests/verify_e2e_browser.sh 8080 50051 5173`: all 5 Playwright tests passed (including two-browser concurrent collaboration).
+- Files: `PROGRESS.md`, `client/src/App.tsx`, `client/src/hooks/useCollaboration.ts`, `client/src/types/protocol.ts`, `client/src/__tests__/useCollaboration.test.ts`, `client/tests/collab.spec.ts`, `gateway/src/main/java/pes/gateway/config/GatewayProperties.java`, `gateway/src/main/java/pes/gateway/protocol/CollabAwarenessEvent.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`.
+- Linked: LOG-0176.
+- Tutor review: pending
+
+
+## [LOG-0178] 2026-11-16 13:06 IST | PLAN | actor: agent
+- Reason: Address tutor re-review P1 findings on Awareness clientID impersonation/eviction defense and history-full read-only lock bypass prevention on branch phase/6-collab.
+- Details / Change:
+  1. Awareness clientID Session Binding:
+     - In `client/src/hooks/useCollaboration.ts`, maintain mapping between received awareness `clientID`s and server-verified `senderSessionId` (`clientIdToSessionRef` and `sessionToClientIdsRef`).
+     - Decode incoming binary awareness updates using `lib0/decoding` and `lib0/encoding`. For each entry, reject any remote update attempting to claim the local user's `awareness.clientID` or another session's established `clientID`.
+     - When an unowned `clientID` is first observed from a session, bind it to that `senderSessionId`. If a collision is detected from a different session, drop that entry to protect the legitimate peer from eviction or overwrite.
+     - On member disconnect / `room.left`, cleanly remove and unbind all `clientID`s associated with that specific session.
+     - Leave the owner-authored regression test in `client/src/__tests__/useCollaboration.test.ts` pending for Piyush to write independently, per pedagogical review instructions.
+  2. Guard All Document Mutation Paths on History Cap:
+     - In `client/src/hooks/useCollaboration.ts`, check `isLocked` in `setSharedCode` and `setSharedLanguage`: no-op and reject modifications when collaboration history is full, preventing local Y.Doc mutations and subsequent server rejections.
+     - In `client/src/App.tsx`, disable `LanguageSelector` and `Reset` button when `collab.isLocked` is true, and guard `handleReset` and `handleLanguageChange`.
+     - Add unit tests in `client/src/__tests__/useCollaboration.test.ts` proving that after receiving `COLLAB_HISTORY_FULL`, calling `setSharedCode` and `setSharedLanguage` does not mutate `ytext` or `ymeta`, and no updates are sent.
+- Files: `PROGRESS.md`, `client/src/hooks/useCollaboration.ts`, `client/src/App.tsx`, `client/src/__tests__/useCollaboration.test.ts`.
+- Linked: LOG-0177.
+- Tutor review: pending
+
+
+## [LOG-0179] 2026-11-16 13:14 IST | DONE | actor: agent
+- Reason: Complete implementation and verification of tutor re-review findings on Awareness clientID binding and history-lock mutation guards.
+- Details / Change:
+  1. Awareness clientID Session Binding:
+     - In `client/src/hooks/useCollaboration.ts`, added `clientIdToSessionRef` (`Map<number, string>`) and `sessionToClientIdsRef` (`Map<string, Set<number>>`).
+     - Decoded binary awareness updates using `lib0/decoding`.
+     - Validated that remote sessions cannot claim local user's `awareness.clientID` or another participant's previously registered `clientID`. Colliding entries are safely dropped, protecting legitimate peers from eviction or presence overwrite.
+     - Bound unowned `clientID`s to `event.senderSessionId` and sanitized `state.user` with server-assigned metadata (`name`, `color`, `sessionId`).
+     - Re-encoded filtered/sanitized entries via `lib0/encoding` before calling `applyAwarenessUpdate`.
+     - In `room.left`, purged and unbound all `clientID`s associated with the departed session.
+     - Left the owner-authored regression test in `client/src/__tests__/useCollaboration.test.ts` pending for Piyush, per pedagogical instruction.
+  2. Guard All Document Mutation Paths on History Cap:
+     - In `client/src/hooks/useCollaboration.ts`, added `isLockedRef`. In `setSharedCode` and `setSharedLanguage`, checked `if (isLockedRef.current) return;` before any `Y.Doc` transaction, ensuring programmatic or UI mutations are rejected when locked.
+     - In `client/src/App.tsx`, disabled `LanguageSelector` and `Reset` button when `collab.isLocked` is true (`disabled={isRunning || collab.isLocked}`). Guarded `handleReset` and `handleLanguageChange` against running while locked.
+     - Added unit test in `useCollaboration.test.ts` verifying that `setSharedCode` and `setSharedLanguage` no-op without mutating `Y.Doc` or sending updates when locked.
+     - Added unit test in `App.test.tsx` verifying that `LanguageSelector` and `Reset` button are disabled and warning banner is shown upon `COLLAB_HISTORY_FULL`.
+  3. Test Evidence:
+     - `make -C sandbox-daemon test`: 22/22 passed.
+     - `(cd worker && gradle test --rerun-tasks)`: 19/19 passed.
+     - `(cd gateway && gradle test --rerun-tasks)`: 44/44 passed.
+     - `(cd client && npm test)`: 33/33 passed (7/7 test suites).
+     - `(cd client && npm run build)`: built distribution cleanly with TypeScript validation.
+     - `bash client/tests/verify_e2e_browser.sh 8080 50051 5173`: all 5 Playwright tests passed (including two-browser concurrent collaboration).
+- Files: `PROGRESS.md`, `client/src/App.tsx`, `client/src/hooks/useCollaboration.ts`, `client/src/__tests__/App.test.tsx`, `client/src/__tests__/useCollaboration.test.ts`.
+- Linked: LOG-0178.
+- Tutor review: pending
+
+
+## [LOG-0180] 2026-11-16 13:43 IST | DECISION | actor: agent
+- Reason: Record architectural protocol decision to authoritatively bind Yjs Awareness clientIDs via server-assigned clientId in AssignedUserDto and convey room history full state in CollabSyncEvent.
+- Details / Change:
+  1. Context & Need:
+     - Client-side first-claim caching of Yjs Awareness clientIDs is vulnerable to packet arrival order races: if an attacker's spoofed awareness update reaches a receiver before the legitimate peer's first update, the receiver would bind the victim's clientID to the attacker and reject the real peer.
+     - Furthermore, clearing the `isLocked` flag upon disconnect permits offline edits before reconnect/sync, creating an unlock window and diverging clients when re-entering a full room.
+  2. Alternatives Considered:
+     - *Alternative A (Client-side first-claim map)*: Rejected because asynchronous WebSocket relays and reconnects cannot guarantee message arrival order across independent peers.
+     - *Alternative B (Client-side hashing of session ID)*: Rejected due to potential 32-bit hash collisions between independent session UUIDs in long-running instances.
+     - *Alternative C (Separate post-sync notification only)*: Rejected because an asynchronous error/event after sync leaves an unlock window during which Monaco or user edits could slip in.
+  3. Chosen Decision:
+     - Gateway assigns an authoritative positive 32-bit `clientId` to each session upon joining a room in `Room.java` / `RoomManager.java`, included in `AssignedUserDto` (`RoomJoinedEvent` and `CollabAwarenessEvent`).
+     - The receiving client maps and forces all incoming awareness updates for a session to that session's authoritative server-assigned `clientId`, completely eliminating first-claim races and client-controlled ID spoofing.
+     - Add `historyFull: boolean` to `CollabSyncEvent` so that when a client reconnects and syncs, the document updates and room locked status are applied atomically in a single event, eliminating any unlock window.
+     - Preserve the `isLocked` state across disconnect/reconnect until authoritative server confirmation via `CollabSyncEvent`.
+  4. Maintenance & Compatibility Impact:
+     - Adds `Integer clientId` to `AssignedUserDto` and `boolean historyFull` to `CollabSyncEvent`.
+     - 100% backward compatible (JSON defaults preserve old behavior if omitted).
+     - Keeps payload bounds strictly enforced (no unbounded data added).
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/protocol/*`, `gateway/src/main/java/pes/gateway/service/*`, `client/src/types/protocol.ts`, `client/src/hooks/useCollaboration.ts`.
+- Linked: LOG-0179.
+- Tutor review: pending
+
+
+## [LOG-0181] 2026-11-16 13:44 IST | PLAN | actor: agent
+- Reason: Implement authoritative Awareness clientID binding and reconnect history-lock persistence on branch phase/6-collab.
+- Details / Change:
+  1. Gateway Protocol & State:
+     - In `Room.java`, add `AtomicInteger nextCollabClientId = new AtomicInteger(1)` and `sessionCollabClientIds` map. In `addSession` / `removeSession`, manage authoritative integer client IDs per session.
+     - In `AssignedUserDto.java`, add `Integer clientId` with getter/setter.
+     - In `RoomManager.java`, populate `clientId` in `createAssignedUser`.
+     - In `CollabSyncEvent.java`, add `boolean historyFull` field and constructor.
+     - In `GatewayWebSocketHandler.handleCollabSync`, pass `isFull = roomManager.isCollabHistoryFull(roomId)` into `CollabSyncEvent`.
+  2. Client-side Authoritative Binding & Lock Persistence:
+     - In `client/src/types/protocol.ts`, add `clientId?: number` to `AssignedUser` and `historyFull?: boolean` to `CollabSyncEvent`.
+     - In `client/src/hooks/useCollaboration.ts`, upon `room.joined`, initialize local `awareness.clientID` and `ydoc.clientID` to `assignedUser.clientId`.
+     - When receiving `collab.awareness`, force `entry.clientID` to the sender's authoritative server-assigned `clientId` (derived from `event.assignedUser.clientId` or session mapping). Ignore client-supplied binary clientIDs.
+     - When `joined === false` (disconnect), retain `isLockedRef` and `isLocked` (do not reset them).
+     - In `collab.sync`, set `isLockedRef.current = !!event.historyFull` and `setIsLocked(!!event.historyFull)`, closing the unlock window.
+     - Reset `isLocked` only when explicitly switching to a different room (`roomId` changes).
+  3. Regression Testing:
+     - Add unit test in `useCollaboration.test.ts` verifying that when a room is locked, disconnect occurs, offline edits are attempted and rejected, and upon reconnect/sync with `historyFull: true`, the document remains unchanged and editing remains locked.
+     - Update Gateway integration tests to assert `historyFull` in `CollabSyncEvent` and `clientId` in `AssignedUserDto`.
+     - Request Piyush to author the two-ordering Awareness collision regression test in `useCollaboration.test.ts`.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/*`, `client/src/*`.
+- Linked: LOG-0180.
+- Tutor review: pending
+
+
+## [LOG-0182] 2026-11-16 14:02 IST | DONE | actor: agent
+- Reason: Complete implementation and verification of authoritative Awareness clientID binding and reconnect history-lock persistence on branch phase/6-collab.
+- Details / Change:
+  1. Authoritative Awareness clientID Assignment & Binding:
+     - In `Room.java`, added atomic counter `nextCollabClientId` and `sessionCollabClientIds` map to authoritatively assign unique 32-bit positive integer client IDs per session upon `addSession`.
+     - In `AssignedUserDto.java`, added `Integer clientId` field and updated constructors/getters/setters. Populated in `RoomManager.createAssignedUser`.
+     - In `client/src/types/protocol.ts`, added `clientId?: number` to `AssignedUser`.
+     - In `client/src/hooks/useCollaboration.ts`, upon `room.joined`, local `awareness.clientID` and `ydoc.clientID` adopt `assignedUser.clientId`.
+     - In `collab.awareness`, the receiver extracts the authoritative clientID from `event.assignedUser.clientId` (or deterministic hash fallback) and unconditionally forces all entries in the binary awareness payload to that authoritative ID. Client-supplied untrusted clientIDs in binary packets are discarded, completely eliminating first-claim arrival order races and ID impersonation.
+  2. History-Full Lock Persistence Across Reconnect:
+     - In `CollabSyncEvent.java`, added `boolean historyFull` field and constructors/getters/setters.
+     - In `GatewayWebSocketHandler.handleCollabSync`, passed `isFull = roomManager.isCollabHistoryFull(roomId)` directly in `CollabSyncEvent`.
+     - In `client/src/types/protocol.ts`, added `historyFull?: boolean` to `CollabSyncEvent`.
+     - In `client/src/hooks/useCollaboration.ts`, retained `isLockedRef` and `isLocked` across disconnect (`joined === false`) so offline edits remain rejected.
+     - In `collab.sync`, set `isLockedRef.current = !!event.historyFull` and `setIsLocked(!!event.historyFull)`, closing the unlock window atomically upon sync. Lock resets only when explicitly switching to a different room (`roomId` changes).
+  3. Regression Test & Evidence:
+     - In `useCollaboration.test.ts`, added regression test verifying that when a room is locked, peer disconnects, offline edits (`setSharedCode`, `setSharedLanguage`) are rejected, and upon reconnect/sync with `historyFull: true`, the local document remains identical to the server state and editing remains locked.
+     - In `GatewayIntegrationTest.java`, asserted `historyFull = true` in `CollabSyncEvent` and `clientId > 0` in `AssignedUserDto`.
+     - `make -C sandbox-daemon test`: 22/22 passed.
+     - `(cd worker && gradle test --rerun-tasks)`: 19/19 passed.
+     - `(cd gateway && gradle test --rerun-tasks)`: 44/44 passed.
+     - `(cd client && npm test)`: 34/34 passed (7/7 suites).
+     - `(cd client && npm run build)`: production build succeeded with TypeScript validation.
+     - `bash client/tests/verify_e2e_browser.sh 8080 50051 5173`: all 5 Playwright tests passed (including two-browser concurrent collaboration).
+  4. Pedagogical Hand-off:
+     - Owner-authored Awareness collision test covering both arrival orderings remains pending for Piyush in `client/src/__tests__/useCollaboration.test.ts`.
+- Files: `PROGRESS.md`, `client/src/__tests__/useCollaboration.test.ts`, `client/src/hooks/useCollaboration.ts`, `client/src/types/protocol.ts`, `gateway/src/main/java/pes/gateway/protocol/AssignedUserDto.java`, `gateway/src/main/java/pes/gateway/protocol/CollabSyncEvent.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`.
+- Linked: LOG-0181.
+- Tutor review: pending
+
+
+## [LOG-0183] 2026-11-16 14:25 IST | DECISION | actor: agent
+- Reason: Resolve peer room.joined identity corruption by separating unicast join acknowledgement from peer joined notification in WebSocket protocol.
+- Context:
+  - In Phase 6 collaboration, when peer B joins a room, the Gateway previously broadcast `room.joined` with B's `sessionId` and `assignedUser` to all members in the room.
+  - In `client/src/hooks/useExecutionSocket.ts`, the `room.joined` handler did not distinguish between the local session's join ACK and incoming peer events. Page A received B's `room.joined` and overwrote its own `sessionId` and `assignedUser.clientId` with B's values.
+  - Page A's `useCollaboration` hook then changed its `awareness.clientID` and `ydoc.clientID` to match B's, resulting in shared clientIDs, self-suppression of remote awareness, and one-way cursor rendering.
+- Decision:
+  1. Unicast Join Acknowledgement: The Gateway sends `room.joined` exclusively to the joining session via `roomManager.sendToSession(session.getId(), joinedEvent)`. It conveys the joining session's own assigned ID, display name, color, and collaboration clientID.
+  2. Broadcast Peer Join Notification: The Gateway broadcasts a new event type, `room.peer_joined`, to all other members in the room via `roomManager.broadcastToRoomExcept(roomId, session.getId(), peerJoinedEvent)`.
+  3. Client Identity Safeguards: In `useExecutionSocket.ts`, track `sessionIdRef` and accept `room.joined` only if the local session identity is not yet established or matches the event's `sessionId`. Never adopt identity from `room.peer_joined`.
+  4. Awareness Publishing: In `useCollaboration.ts`, listen for `room.peer_joined` (and fallback `room.joined` for other sessions) to immediately publish local awareness (`encodeAwarenessUpdate(awareness, [awareness.clientID])`), ensuring both newcomers and established peers see each other's cursor immediately.
+- Alternatives Considered:
+  - Alternative 1 (Client-side filtering of `room.joined` without protocol change): Keep single `room.joined` broadcast and check if `sessionId` is already set. Rejected because overloading `room.joined` for both self-ACK and peer announcements violates truthful protocol semantics, causes ambiguity during reconnection when `sessionId` is null, and risks race conditions.
+  - Alternative 2 (Nonce/token in `room.join`): Include a client-generated nonce in `room.join` and echo in `room.joined`. Rejected as unnecessary complexity since WebSocket connections are stateful and point-to-point.
+- Maintenance Cost:
+  - Minimal: One new Java event class (`RoomPeerJoinedEvent`), one TypeScript event interface (`RoomPeerJoinedEvent`), and targeted updates to integration tests.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/protocol/RoomPeerJoinedEvent.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `client/src/types/protocol.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/hooks/useCollaboration.ts`.
+- Linked: LOG-0182.
+- Tutor review: pending
+
+
+## [LOG-0184] 2026-11-16 14:26 IST | PLAN | actor: agent
+- Reason: Implement separate room.peer_joined relay, client join identity protection, and bidirectional cursor E2E verification.
+- Details / Plan:
+  1. Gateway Protocol Implementation:
+     - Create `RoomPeerJoinedEvent.java` with type `room.peer_joined`, `roomId`, `sessionId`, `members`, and `assignedUser`.
+     - In `GatewayWebSocketHandler.handleRoomJoin`, send `RoomJoinedEvent` directly to `session.getId()` via `roomManager.sendToSession`.
+     - Broadcast `RoomPeerJoinedEvent` to all other room sessions via `roomManager.broadcastToRoomExcept`.
+     - Update `GatewayIntegrationTest` multi-session join tests to assert that joiner gets `room.joined` and peers get `room.peer_joined` with correct authoritative clientIDs.
+  2. Client Session & Collaboration Updates:
+     - In `client/src/types/protocol.ts`, add `RoomPeerJoinedEvent` and include it in `IncomingServerEvent`.
+     - In `client/src/hooks/useExecutionSocket.ts`, track `sessionIdRef`. Only adopt `sessionId` and `assignedUser` on local join ACK. Ignore `room.peer_joined` so it never overwrites local identity. Clear `sessionIdRef` on `ws.onclose`.
+     - In `client/src/hooks/useCollaboration.ts`, handle `room.peer_joined` to broadcast local awareness immediately to the newcomer.
+     - Add unit tests in `useExecutionSocket.test.ts` verifying that peer join events never overwrite established session identity or assigned user.
+     - Add unit tests in `useCollaboration.test.ts` verifying that `room.peer_joined` triggers local awareness publication.
+  3. Bidirectional Cursor End-to-End Testing:
+     - In `client/tests/collab.spec.ts`, expand two-browser E2E test to verify bidirectional cursor presence:
+       - Page 1 selects text -> Page 2 observes remote selection decoration (`.yRemoteSelectionHead-1` / `.yRemoteSelection-1`).
+       - Page 2 selects text -> Page 1 observes remote selection decoration (`.yRemoteSelectionHead-2` / `.yRemoteSelection-2`).
+       - Page 1 and Page 2 retain distinct server-assigned clientIDs throughout.
+       - Disconnecting either page removes that specific peer's cursor decoration from the other.
+       - Concurrent edits from both sides continue to converge to identical text.
+  4. Owner Pedagogical Task:
+     - Keep Piyush's owner-authored awareness collision test pending in `client/src/__tests__/useCollaboration.test.ts` per tutor instructions.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/protocol/RoomPeerJoinedEvent.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`, `client/src/types/protocol.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/hooks/useCollaboration.ts`, `client/src/__tests__/useExecutionSocket.test.ts`, `client/src/__tests__/useCollaboration.test.ts`, `client/tests/collab.spec.ts`.
+- Linked: LOG-0183.
+- Tutor review: pending
+
+
+## [LOG-0185] 2026-11-16 16:10 IST | DONE | actor: agent
+- Reason: Complete implementation and verification of room.peer_joined event relay, client join identity protection, and bidirectional cursor E2E test suite.
+- Details / Change:
+  1. Gateway Protocol Separation:
+     - Created `RoomPeerJoinedEvent.java` with type `room.peer_joined`, containing `roomId`, newcomer's `sessionId`, `members`, and authoritative `assignedUser` (`name`, `color`, `clientId`).
+     - In `GatewayWebSocketHandler.handleRoomJoin`, delivered `RoomJoinedEvent` exclusively to the joining socket via `roomManager.sendToSession(session.getId(), joinedEvent)`.
+     - Broadcast `RoomPeerJoinedEvent` to all existing room members via `roomManager.broadcastToRoomExcept(roomId, session.getId(), peerJoinedEvent)`.
+     - In `GatewayIntegrationTest.java`, updated `testCollabUpdateRelayedToRoomAndExcludedFromSender` to verify that joining Session B receives its own `room.joined`, while existing Session A receives `room.peer_joined` with Session B's session ID and server-assigned clientID (2). All 44 gateway tests pass.
+  2. Client Join Identity Safeguards & Monotonic Awareness Clock:
+     - In `client/src/types/protocol.ts`, defined `RoomPeerJoinedEvent` and added it to `IncomingServerEvent`.
+     - In `client/src/hooks/useExecutionSocket.ts`, added `sessionIdRef` tracking. In `room.joined`, only accepted identity if unestablished (`!sessionIdRef.current`) or matching the local session, preventing peer join events from corrupting local identity. Cleared `sessionIdRef` on `ws.onclose` for clean reconnects. Handled `room.peer_joined` without altering local identity.
+     - In `client/src/hooks/useCollaboration.ts`, upon `room.peer_joined`, broadcast local awareness update immediately to the newcomer. Removed `room.joined` awareness broadcast trigger so newly joining clients do not prematurely emit uninitialized empty awareness.
+     - When adopting server-assigned `assignedUser.clientId`, initialized `awareness.meta.set(clientId, { clock: 0, lastUpdated })` so `awareness.setLocalState` increments `clock` to 1.
+     - In `processServerMessage` under `collab.awareness`, guaranteed remote updates carry monotonic, strictly positive clocks (`targetClock = clock > currClock ? clock : currClock + 1`), preventing Yjs `applyAwarenessUpdate` from dropping remote presence updates with clock 0.
+     - In `client/src/App.tsx`, added `data-client-id` and `data-is-local` attributes to collaborator pills.
+     - In `client/src/__tests__/useExecutionSocket.test.ts`, added test verifying that `room.peer_joined` and unmatching `room.joined` events never overwrite established local session ID or assigned user.
+     - In `client/src/__tests__/useCollaboration.test.ts`, added test verifying that `room.peer_joined` triggers local awareness broadcast. All 36 Vitest client tests pass (7/7 suites).
+  3. Bidirectional Playwright E2E Suite:
+     - Expanded `client/tests/collab.spec.ts` to assert full bidirectional presence and cursor decoration visibility:
+       - Page 1 receives clientID 1 (isLocal=true); Page 2 receives clientID 2 (isLocal=true).
+       - Page 1 retains clientID 1 as local and displays clientID 2 as remote peer; Page 2 displays clientID 1 as remote peer.
+       - Direction 1: Page 1 selects text -> Page 2 observes `.yRemoteSelectionHead-1` and `.yRemoteSelection-1`.
+       - Direction 2: Page 2 selects text -> Page 1 observes `.yRemoteSelectionHead-2` and `.yRemoteSelection-2`.
+       - Both pages perform concurrent edits and converge to identical text.
+       - Closing Page 2 purges its cursor decoration and removes clientID 2 from Page 1's collaborator list.
+       - Execution run from Page 1 succeeds with complete truthful timeline.
+  4. Test Evidence:
+     - `bash client/tests/verify_e2e_browser.sh 8080 50051 5173`: all 5 tests passed (19.6s).
+     - `(cd gateway && gradle test --rerun-tasks)`: 44/44 passed.
+     - `(cd client && npm test)`: 36/36 passed (7/7 suites).
+     - `(cd worker && gradle test --rerun-tasks)`: 19/19 passed.
+     - `make -C sandbox-daemon test`: 22/22 passed.
+     - `(cd client && npm run build)`: production build succeeded with TypeScript validation.
+     - `./scripts/check_progress_append_only.sh` and `./scripts/check_repo_hygiene.sh`: passed cleanly.
+  5. Owner Pedagogical Task:
+     - Piyush's owner-authored Awareness collision test covering both arrival orderings remains pending in `client/src/__tests__/useCollaboration.test.ts` per tutor instructions.
+- Files: `PROGRESS.md`, `client/src/App.tsx`, `client/src/__tests__/useCollaboration.test.ts`, `client/src/__tests__/useExecutionSocket.test.ts`, `client/src/hooks/useCollaboration.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/types/protocol.ts`, `client/tests/collab.spec.ts`, `gateway/src/main/java/pes/gateway/protocol/RoomPeerJoinedEvent.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`.
+- Linked: LOG-0184.
+- Tutor review: pending
+
+
+## [LOG-0186] 2026-11-16 17:06 IST | DECISION | actor: Piyush + agent
+- Reason: Formally record tutor review approval and sign-off for Phase 6 Yjs real-time collaboration, close Phase 6 Definition of Done, and authorize non-fast-forward merge into `main` with tag `phase-6-done`.
+- Details / Change:
+  1. Record tutor review approval and Piyush's explicit authorization to merge `phase/6-collab` into `main` and create tag `phase-6-done`.
+  2. Phase 6 Definition of Done in `docs/04_BUILD_PLAN.md` ("Yjs collaboration — Two browsers converge; cursors visible") is fully satisfied with verified end-to-end evidence:
+     - Real two-browser interaction: Playwright drives two independent browser contexts connected to the Java Gateway over WebSocket without artificial test hooks in production paths.
+     - Document convergence: Concurrent and sequential edits in Monaco via Yjs text binding converge deterministically to the identical document across both browsers.
+     - Remote cursor/selection presence: Ephemeral Yjs Awareness updates are broadcast and rendered as Monaco decorations (`.yRemoteSelectionHead-N`, `.yRemoteSelection-N`) with distinct server-assigned clientIDs and collaborator pills (`data-client-id`, `data-is-local`).
+     - Room isolation: Gateway isolates WebSocket relay strictly to participants joined to the target room.
+     - Disconnect & cleanup: Browser disconnects immediately remove remote cursor decorations and clear collaborator state without lingering stale cursors or document corruption.
+     - Truthful execution: Single-user and collaborative code executions run cleanly end-to-end with full status timeline and metrics.
+  3. All suites verified:
+     - `gateway` integration & unit tests: 44/44 passed (`gradle test --rerun-tasks`).
+     - `client` Vitest unit tests: 36/36 passed (`npm test`, 7/7 suites).
+     - `client` full-stack browser E2E: 5/5 passed (`bash client/tests/verify_e2e_browser.sh 8080 50051 5173`).
+     - `worker` gRPC tests: 19/19 passed (`gradle test --rerun-tasks`).
+     - `sandbox-daemon`: 22/22 integration tests passed (18 Phase 1 + 4 Phase 2).
+     - `client` production build: succeeded cleanly with TypeScript validation (`npm run build`).
+     - Hygiene and progress append-only checks: clean pass (`./scripts/check_progress_append_only.sh && ./scripts/check_repo_hygiene.sh && git diff --check`).
+  4. Phase 6 DoD status is marked CLOSED and APPROVED.
+  5. Action authorized: Update `README.md` to mark Phase 6 Complete (`phase-6-done`), commit to `phase/6-collab`, merge `phase/6-collab` into `main` using `git merge --no-ff`, and tag `phase-6-done` per AI_RULES.md §10.
+- Verification: `(cd gateway && gradle test --rerun-tasks)` (44/44 passed); `(cd client && npm test)` (36/36 passed); `bash client/tests/verify_e2e_browser.sh 8080 50051 5173` (5/5 passed); `(cd worker && gradle test)` (19/19 passed); `make -C sandbox-daemon test` (22/22 passed); `(cd client && npm run build)` (clean); `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0185, LOG-0184, LOG-0183.
+- Tutor review: approved for Phase 6 sign-off and merge into main

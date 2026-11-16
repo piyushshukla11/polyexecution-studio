@@ -515,3 +515,88 @@ body {
   background-color: var(--bg-secondary);
   border-top: 1px solid var(--border-color);
 }
+
+/* Collaboration & Room Styles */
+.header-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.room-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.room-input {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  width: 130px;
+}
+
+.room-input:focus {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.collaborators-list {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+}
+
+.collaborator-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+}
+
+.collaborator-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* Yjs Remote Selection & Cursor Styles */
+.yRemoteSelection {
+  background-color: rgba(97, 175, 239, 0.35);
+  position: absolute;
+  pointer-events: none;
+}
+
+.yRemoteSelectionHead {
+  position: absolute;
+  border-left: 2px solid #61afef;
+  border-top: 2px solid #61afef;
+  border-bottom: 2px solid #61afef;
+  height: 100%;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.yRemoteSelectionHead::after {
+  content: '';
+  border: 3px solid #61afef;
+  border-radius: 4px;
+  left: -4px;
+  top: -5px;
+  position: absolute;
+}

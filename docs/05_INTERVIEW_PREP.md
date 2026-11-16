@@ -75,6 +75,9 @@ This is the project-wide final learning checklist. Piyush asked to finish techni
 - [ ] **Truthful execution state transitions:** Why must the client status transitions (`Idle` -> `Accepted` -> `Compiling` -> `Running` -> `Completed` / `Compile Error` / `Timed Out`) strictly reflect asynchronous backend worker milestones rather than client-side synthetic timers? What vulnerability or user deception does timer-based estimation introduce?
 - [ ] **Compilation error halting:** When sandboxed GCC compilation fails with a syntax error, why must the worker and gateway halt immediately with `COMPILE_ERROR` and never emit a `Running` progress event? How does the frontend ensure that compiler diagnostics are rendered in stderr without executing malicious or incomplete code?
 - [ ] **WebSocket client request correlation:** How does the single-page React client correlate asynchronous server events (`run.accepted`, `run.progress`, `run.completed`, `run.rejected`) to the user's specific execution submission across connection hiccups, and why is tying reservations to `requestId` critical?
+- [ ] **Yjs convergence:** How do Yjs document updates allow two browsers editing concurrently to converge without one browser simply overwriting the other's whole document?
+- [ ] **Document versus awareness state:** What is the difference between `Y.Doc` updates and Yjs `Awareness` updates, and why should cursor/selection state disappear when a participant disconnects?
+- [ ] **Collaboration trust boundaries:** How does the Gateway prove a message belongs to a joined session and room, and what size/rate limits prevent collaboration traffic from becoming a resource-exhaustion path?
 
 The existing 25 interview questions above are also required: answer every one without relying on the sketched answer. These added questions cover topics that came up during tutoring and agent review.
 

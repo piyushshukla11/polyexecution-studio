@@ -18,6 +18,7 @@ import pes.gateway.config.GatewayProperties;
 import pes.gateway.protocol.*;
 import pes.gateway.service.*;
 
+import java.util.List;
 import java.util.concurrent.CompletionException;
 
 @Component
@@ -80,6 +81,9 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
             case "room.join" -> handleRoomJoin(session, root);
             case "room.leave" -> handleRoomLeave(session, root);
             case "run" -> handleRun(session, root);
+            case "collab.sync" -> handleCollabSync(session);
+            case "collab.update" -> handleCollabUpdate(session, root);
+            case "collab.awareness" -> handleCollabAwareness(session, root);
             default -> roomManager.sendToSession(session.getId(),
                 new ErrorEvent("UNKNOWN_MESSAGE_TYPE", "Unknown message type: " + type));
         }
@@ -109,8 +113,11 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        RoomJoinedEvent joinedEvent = new RoomJoinedEvent(roomId, session.getId(), result.members());
-        roomManager.broadcastToRoom(roomId, joinedEvent);
+        RoomJoinedEvent joinedEvent = new RoomJoinedEvent(roomId, session.getId(), result.members(), result.assignedUser());
+        roomManager.sendToSession(session.getId(), joinedEvent);
+
+        RoomPeerJoinedEvent peerJoinedEvent = new RoomPeerJoinedEvent(roomId, session.getId(), result.members(), result.assignedUser());
+        roomManager.broadcastToRoomExcept(roomId, session.getId(), peerJoinedEvent);
     }
 
     private void handleRoomLeave(WebSocketSession session, JsonNode root) {
@@ -136,6 +143,112 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
 
         roomManager.leaveRoom(roomId, session.getId());
         roomManager.broadcastToRoom(roomId, new RoomLeftEvent(roomId, session.getId()));
+    }
+
+    private void handleCollabSync(WebSocketSession session) {
+        String roomId = roomManager.getRoomForSession(session.getId());
+        if (roomId == null) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("NOT_IN_ROOM", "Session is not a member of any room"));
+            return;
+        }
+
+        if (!roomManager.checkCollabSyncRateLimit(roomId, session.getId())) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("RATE_LIMIT_EXCEEDED", "Collab sync rate limit exceeded for session"));
+            return;
+        }
+
+        List<String> updates = roomManager.getCollabUpdates(roomId);
+        boolean isFull = roomManager.isCollabHistoryFull(roomId);
+        roomManager.sendToSession(session.getId(), new CollabSyncEvent(roomId, updates, isFull));
+        if (isFull) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("COLLAB_HISTORY_FULL", "Room collaboration history limit reached. Editing has been locked."));
+        }
+    }
+
+    private void handleCollabUpdate(WebSocketSession session, JsonNode root) {
+        String roomId = roomManager.getRoomForSession(session.getId());
+        if (roomId == null) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("NOT_IN_ROOM", "Session is not a member of any room"));
+            return;
+        }
+
+        JsonNode updateNode = root.get("update");
+        if (updateNode == null || !updateNode.isTextual() || updateNode.asText().isBlank()) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("BAD_REQUEST", "Field 'update' is required and must be non-empty base64 string"));
+            return;
+        }
+
+        String update = updateNode.asText();
+        if (update.length() > properties.getMaxCollabUpdateBytes()) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("MESSAGE_TOO_LARGE", "Collaboration update exceeds allowed limit"));
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        if (!roomManager.checkCollabUpdateRateLimit(roomId, session.getId(), now)) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("RATE_LIMITED", "Collaboration message rate limit exceeded"));
+            return;
+        }
+
+        boolean saved = roomManager.addCollabUpdate(roomId, update);
+        if (!saved) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("COLLAB_HISTORY_FULL", "Room collaboration history limit reached. Editing has been locked."));
+            return;
+        }
+
+        // Relay to all other members in the room (strictly excluding sender)
+        CollabUpdateEvent event = new CollabUpdateEvent(roomId, update);
+        roomManager.broadcastToRoomExcept(roomId, session.getId(), event);
+
+        // If this update was the one that filled the history cap, notify entire room to lock editing
+        if (roomManager.isCollabHistoryFull(roomId)) {
+            roomManager.broadcastToRoom(roomId,
+                new ErrorEvent("COLLAB_HISTORY_FULL", "Room collaboration history limit reached. Editing has been locked."));
+        }
+    }
+
+    private void handleCollabAwareness(WebSocketSession session, JsonNode root) {
+        String roomId = roomManager.getRoomForSession(session.getId());
+        if (roomId == null) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("NOT_IN_ROOM", "Session is not a member of any room"));
+            return;
+        }
+
+        JsonNode awarenessNode = root.get("awareness");
+        if (awarenessNode == null || !awarenessNode.isTextual() || awarenessNode.asText().isBlank()) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("BAD_REQUEST", "Field 'awareness' is required and must be non-empty base64 string"));
+            return;
+        }
+
+        String awareness = awarenessNode.asText();
+        if (awareness.length() > properties.getMaxAwarenessBytes()) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("MESSAGE_TOO_LARGE", "Awareness update exceeds allowed limit"));
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        if (!roomManager.checkCollabAwarenessRateLimit(roomId, session.getId(), now)) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("RATE_LIMITED", "Collaboration awareness rate limit exceeded"));
+            return;
+        }
+
+        // Ephemeral awareness: NOT stored in durable room update history
+        // Relay to other members in room with server-verified senderSessionId and assignedUser
+        AssignedUserDto assignedUser = roomManager.getAssignedUser(session.getId());
+        CollabAwarenessEvent event = new CollabAwarenessEvent(roomId, session.getId(), awareness, assignedUser);
+        roomManager.broadcastToRoomExcept(roomId, session.getId(), event);
     }
 
     private void handleRun(WebSocketSession session, JsonNode root) {

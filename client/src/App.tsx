@@ -1,32 +1,37 @@
-import React, { useState } from 'react';
-import { SupportedLanguage } from './types/protocol.ts';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import type { OnMount } from '@monaco-editor/react';
+import { SupportedLanguage, IncomingServerEvent } from './types/protocol.ts';
 import { useExecutionSocket } from './hooks/useExecutionSocket.ts';
+import { useCollaboration, C_STARTER, PYTHON_STARTER } from './hooks/useCollaboration.ts';
 import { LanguageSelector } from './components/LanguageSelector.tsx';
 import { CodeEditor } from './components/CodeEditor.tsx';
 import { OutputPanel } from './components/OutputPanel.tsx';
 import { MetricsPanel } from './components/MetricsPanel.tsx';
 import { StatusBadge } from './components/StatusBadge.tsx';
 
-const C_STARTER = `#include <stdio.h>
-
-int main(void) {
-    printf("Hello from PolyExecution Studio!\\n");
-    return 0;
+function getInitialRoomId(): string {
+  if (typeof window !== 'undefined' && window.location) {
+    const params = new URLSearchParams(window.location.search);
+    const roomParam = params.get('room');
+    if (roomParam && /^[a-zA-Z0-9_-]{1,64}$/.test(roomParam)) {
+      return roomParam;
+    }
+  }
+  return `room-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
-`;
-
-const PYTHON_STARTER = `print("Hello from PolyExecution Studio!")
-`;
 
 export const App: React.FC = () => {
-  const [language, setLanguage] = useState<SupportedLanguage>('c');
-  const [sourceCode, setSourceCode] = useState<string>(C_STARTER);
+  const [roomId, setRoomId] = useState<string>(getInitialRoomId);
+  const [roomInput, setRoomInput] = useState<string>('');
   const [stdin, setStdin] = useState<string>('');
 
+  const collabHandlerRef = useRef<(event: IncomingServerEvent) => void>();
+
   const {
-    roomId,
     connected,
     joined,
+    sessionId,
+    assignedUser,
     connectionError,
     reconnectAttempt,
     uiStatus,
@@ -36,8 +41,25 @@ export const App: React.FC = () => {
     metrics,
     errorMessage,
     runCode,
-    resetState
-  } = useExecutionSocket();
+    sendMessage,
+    resetState: resetSocketState
+  } = useExecutionSocket({
+    roomId,
+    onServerMessage: (event) => collabHandlerRef.current?.(event)
+  });
+
+  const collab = useCollaboration({
+    roomId,
+    joined,
+    sessionId,
+    assignedUser,
+    sendMessage,
+    initialLanguage: 'c'
+  });
+
+  useEffect(() => {
+    collabHandlerRef.current = collab.processServerMessage;
+  }, [collab.processServerMessage]);
 
   const isRunning =
     uiStatus === 'SUBMITTING' ||
@@ -46,22 +68,41 @@ export const App: React.FC = () => {
     uiStatus === 'RUNNING';
 
   const handleLanguageChange = (newLang: SupportedLanguage) => {
-    if (newLang === language) return;
-
-    // If code is either starter code, update to the other language's starter code
-    if (sourceCode === C_STARTER || sourceCode === PYTHON_STARTER || sourceCode.trim() === '') {
-      setSourceCode(newLang === 'c' ? C_STARTER : PYTHON_STARTER);
-    }
-    setLanguage(newLang);
+    if (isRunning || collab.isLocked) return;
+    collab.setSharedLanguage(newLang);
   };
 
   const handleRun = () => {
-    runCode(language, sourceCode, stdin);
+    runCode(collab.language, collab.sourceCode, stdin);
   };
 
   const handleReset = () => {
-    resetState();
+    if (isRunning || collab.isLocked) return;
+    resetSocketState();
+    const starter = collab.language === 'c' ? C_STARTER : PYTHON_STARTER;
+    collab.setSharedCode(starter);
   };
+
+  const handleJoinRoom = (e?: React.FormEvent) => {
+    e?.preventDefault();
+    const targetRoom = roomInput.trim();
+    if (targetRoom && /^[a-zA-Z0-9_-]{1,64}$/.test(targetRoom)) {
+      if (typeof window !== 'undefined' && window.location) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('room', targetRoom);
+        window.history.pushState({}, '', url.toString());
+      }
+      setRoomId(targetRoom);
+      setRoomInput('');
+    }
+  };
+
+  const handleEditorMount: OnMount = useCallback(
+    (editor) => {
+      return collab.bindEditor(editor);
+    },
+    [collab.bindEditor]
+  );
 
   return (
     <div className="pes-app" data-testid="pes-app">
@@ -71,6 +112,24 @@ export const App: React.FC = () => {
           <span className="header-subtitle">Linux-isolated Multi-language Execution Environment</span>
         </div>
         <div className="header-status">
+          {collab.collaborators.length > 0 && (
+            <div className="collaborators-list" data-testid="collaborators-list">
+              {collab.collaborators.map((c) => (
+                <span
+                  key={c.clientId}
+                  className="collaborator-pill"
+                  data-testid={`collaborator-${c.name}`}
+                  data-client-id={c.clientId}
+                  data-is-local={c.isLocal ? 'true' : 'false'}
+                  style={{ borderColor: c.color }}
+                >
+                  <span className="collaborator-dot" style={{ backgroundColor: c.color }} />
+                  {c.name}{c.isLocal ? ' (You)' : ''}
+                </span>
+              ))}
+            </div>
+          )}
+
           <span
             className={`connection-indicator ${connected && joined ? 'connected' : 'disconnected'}`}
             data-testid="connection-status"
@@ -81,6 +140,25 @@ export const App: React.FC = () => {
               ? `Reconnecting (${reconnectAttempt})...`
               : 'Disconnected'}
           </span>
+
+          <form className="room-control" onSubmit={handleJoinRoom}>
+            <input
+              type="text"
+              className="room-input"
+              data-testid="room-input"
+              placeholder="Join room..."
+              value={roomInput}
+              onChange={(e) => setRoomInput(e.target.value)}
+            />
+            <button
+              type="submit"
+              className="btn btn-secondary btn-sm"
+              data-testid="join-room-button"
+              disabled={!roomInput.trim()}
+            >
+              Join
+            </button>
+          </form>
         </div>
       </header>
 
@@ -96,12 +174,18 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      {collab.isLocked && (
+        <div className="alert-banner alert-warning" data-testid="collab-history-full-banner">
+          Room collaboration history limit reached. Editing has been locked to prevent document divergence.
+        </div>
+      )}
+
       <div className="controls-bar">
         <div className="controls-left">
           <LanguageSelector
-            language={language}
+            language={collab.language}
             onChange={handleLanguageChange}
-            disabled={isRunning}
+            disabled={isRunning || collab.isLocked}
           />
         </div>
 
@@ -120,7 +204,7 @@ export const App: React.FC = () => {
             type="button"
             className="btn btn-secondary"
             onClick={handleReset}
-            disabled={isRunning}
+            disabled={isRunning || collab.isLocked}
             data-testid="reset-button"
           >
             Reset
@@ -141,13 +225,14 @@ export const App: React.FC = () => {
         <section className="editor-section" aria-label="Editor Section">
           <div className="section-header">
             <span className="section-title">Source Editor</span>
-            <span className="file-badge">{language === 'c' ? 'main.c' : 'main.py'}</span>
+            <span className="file-badge">{collab.language === 'c' ? 'main.c' : 'main.py'}</span>
           </div>
           <CodeEditor
-            language={language}
-            value={sourceCode}
-            onChange={setSourceCode}
-            readOnly={isRunning}
+            language={collab.language}
+            value={collab.sourceCode}
+            onChange={collab.setSharedCode}
+            onMount={handleEditorMount}
+            readOnly={isRunning || collab.isLocked}
           />
         </section>
 
