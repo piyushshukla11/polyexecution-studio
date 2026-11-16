@@ -3305,3 +3305,45 @@
 - Files: `PROGRESS.md`, `gateway/tests/LoadTest50Concurrent.java`, `gateway/tests/verify_load_test_50.sh`, `worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt`.
 - Linked: LOG-0188.
 - Tutor review: pending
+
+
+## [LOG-0190] 2026-11-16 18:42 IST | PLAN | actor: agent
+- Goal: Implement reproducible Docker Compose configuration and container image definitions for PolyExecution Studio services, with loopback-only host binding and documented prerequisites.
+- Steps:
+  1. Dockerfiles:
+     - `gateway/Dockerfile`: multi-stage container build compiling `gateway-0.1.0.jar` with Eclipse Temurin JDK 21 and running with minimal Temurin JRE 21.
+     - `worker/Dockerfile`: container build providing Ubuntu 24.04 with GCC, Python 3, libseccomp, JDK 21, building `sandbox-runner`, and launching `pes-worker`.
+     - `client/Dockerfile`: multi-stage container build with Node 22 Alpine (`npm ci && npm run build`) and Nginx Alpine serving static client assets.
+  2. Compose Topology (`docker-compose.yml`):
+     - Services: `gateway`, `worker`, `client`.
+     - Isolated bridge network: `pes-net`.
+     - Host port publication: strictly bound to loopback (`127.0.0.1:8080:8080`, `127.0.0.1:50051:50051`, `127.0.0.1:5173:80`).
+     - Gateway configured to target `worker:50051`.
+  3. Verification and Documentation:
+     - Verify Dockerfile syntax and Compose file validation (`docker compose config`).
+     - Document container runtime prerequisites and the host `/var/run/docker.sock` permission requirement for Piyush.
+- Files: `PROGRESS.md`, `docker-compose.yml`, `gateway/Dockerfile`, `worker/Dockerfile`, `client/Dockerfile`.
+- Linked: LOG-0189.
+- Tutor review: pending
+
+
+## [LOG-0191] 2026-11-16 18:43 IST | DONE | actor: agent
+- Reason: Complete reproducible Docker Compose architecture and multi-stage container build definitions across Gateway, Worker, and Client.
+- Details / Change:
+  1. Gateway Container Build (`gateway/Dockerfile`):
+     - Multi-stage build: Stage 1 uses `gradle:8.10.2-jdk21-jammy` to compile `gateway-0.1.0.jar` from `proto` and `gateway` sources. Stage 2 uses `eclipse-temurin:21-jre-jammy`, creating an unprivileged user `pes:pes` (UID 1001), exposing port 8080, and configuring environment variables (`SERVER_ADDRESS=0.0.0.0`, `GATEWAY_WORKER_GRPC_TARGET=worker:50051`, `GATEWAY_MAX_GLOBAL_CONCURRENT_RUNS=64`).
+  2. Worker Container Build (`worker/Dockerfile`):
+     - Multi-stage build: Stage 1 (`ubuntu:24.04`) compiles the native `sandbox-daemon/sandbox-runner` binary with `build-essential` and `libseccomp-dev`. Stage 2 (`gradle:8.10.2-jdk21-jammy`) packages the Kotlin worker via `gradle installDist`. Stage 3 (`eclipse-temurin:21-jdk-jammy`) installs required runtime toolchains (`gcc`, `libc6-dev`, `python3`, `libseccomp2`), sets `PES_RUNNER_BIN=/app/sandbox-daemon/sandbox-runner`, and starts `pes-worker` on port 50051.
+  3. Client Container Build & Reverse Proxy (`client/Dockerfile`, `client/nginx.conf`):
+     - Stage 1 (`node:22-alpine`) runs `npm ci && npm run build`. Stage 2 (`nginx:alpine`) copies the SPA distribution to `/usr/share/nginx/html`.
+     - `client/nginx.conf`: configured SPA routing (`try_files $uri $uri/ /index.html;`) and reverse proxying for WebSocket traffic (`/ws`) with HTTP 1.1 upgrade headers and health checks (`/health`) to `http://gateway:8080`.
+  4. Docker Compose Orchestration (`docker-compose.yml`):
+     - Declared services `gateway`, `worker`, and `client` on private bridge network `pes-net`.
+     - Bound published ports strictly to host loopback: `127.0.0.1:8080:8080`, `127.0.0.1:50051:50051`, `127.0.0.1:5173:80`.
+     - Validated syntax and configuration via `docker compose config` (clean pass with 0 errors).
+  5. Documented Prerequisites:
+     - Linux kernel with cgroups v2 delegation and unprivileged user namespaces.
+     - Host `/var/run/docker.sock` requires `docker` group membership for current user `zogratis` (`permission denied` observed when executing docker daemon API without group access).
+- Files: `PROGRESS.md`, `client/Dockerfile`, `client/nginx.conf`, `docker-compose.yml`, `gateway/Dockerfile`, `worker/Dockerfile`.
+- Linked: LOG-0190.
+- Tutor review: pending

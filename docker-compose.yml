@@ -1,0 +1,50 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: pes-gateway
+    environment:
+      - SERVER_ADDRESS=0.0.0.0
+      - SERVER_PORT=8080
+      - GATEWAY_WORKER_GRPC_TARGET=worker:50051
+      - GATEWAY_MAX_GLOBAL_CONCURRENT_RUNS=64
+      - GATEWAY_MAX_ROOMS=200
+    ports:
+      # Strictly bind to loopback per security requirements
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      - worker
+    networks:
+      - pes-net
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+    container_name: pes-worker
+    ports:
+      # Strictly bind to loopback
+      - "127.0.0.1:50051:50051"
+    networks:
+      - pes-net
+    restart: unless-stopped
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: pes-client
+    ports:
+      # Strictly bind to loopback
+      - "127.0.0.1:5173:80"
+    depends_on:
+      - gateway
+    networks:
+      - pes-net
+    restart: unless-stopped
+
+networks:
+  pes-net:
+    driver: bridge
