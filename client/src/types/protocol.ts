@@ -129,6 +129,7 @@ export interface CollabAwarenessEvent {
   roomId: string;
   senderSessionId: string;
   awareness: string;
+  assignedUser?: AssignedUser;
 }
 
 export interface GenericErrorEvent {

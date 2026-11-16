@@ -150,8 +150,18 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
+        if (!roomManager.checkCollabSyncRateLimit(roomId, session.getId())) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("RATE_LIMIT_EXCEEDED", "Collab sync rate limit exceeded for session"));
+            return;
+        }
+
         List<String> updates = roomManager.getCollabUpdates(roomId);
         roomManager.sendToSession(session.getId(), new CollabSyncEvent(roomId, updates));
+        if (roomManager.isCollabHistoryFull(roomId)) {
+            roomManager.sendToSession(session.getId(),
+                new ErrorEvent("COLLAB_HISTORY_FULL", "Room collaboration history limit reached. Editing has been locked."));
+        }
     }
 
     private void handleCollabUpdate(WebSocketSession session, JsonNode root) {
@@ -177,7 +187,7 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
         }
 
         long now = System.currentTimeMillis();
-        if (!roomManager.checkCollabRateLimit(roomId, session.getId(), now)) {
+        if (!roomManager.checkCollabUpdateRateLimit(roomId, session.getId(), now)) {
             roomManager.sendToSession(session.getId(),
                 new ErrorEvent("RATE_LIMITED", "Collaboration message rate limit exceeded"));
             return;
@@ -186,13 +196,19 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
         boolean saved = roomManager.addCollabUpdate(roomId, update);
         if (!saved) {
             roomManager.sendToSession(session.getId(),
-                new ErrorEvent("ROOM_COLLAB_LIMIT", "Room collaboration history limit reached"));
+                new ErrorEvent("COLLAB_HISTORY_FULL", "Room collaboration history limit reached. Editing has been locked."));
             return;
         }
 
         // Relay to all other members in the room (strictly excluding sender)
         CollabUpdateEvent event = new CollabUpdateEvent(roomId, update);
         roomManager.broadcastToRoomExcept(roomId, session.getId(), event);
+
+        // If this update was the one that filled the history cap, notify entire room to lock editing
+        if (roomManager.isCollabHistoryFull(roomId)) {
+            roomManager.broadcastToRoom(roomId,
+                new ErrorEvent("COLLAB_HISTORY_FULL", "Room collaboration history limit reached. Editing has been locked."));
+        }
     }
 
     private void handleCollabAwareness(WebSocketSession session, JsonNode root) {
@@ -218,15 +234,16 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
         }
 
         long now = System.currentTimeMillis();
-        if (!roomManager.checkCollabRateLimit(roomId, session.getId(), now)) {
+        if (!roomManager.checkCollabAwarenessRateLimit(roomId, session.getId(), now)) {
             roomManager.sendToSession(session.getId(),
                 new ErrorEvent("RATE_LIMITED", "Collaboration awareness rate limit exceeded"));
             return;
         }
 
         // Ephemeral awareness: NOT stored in durable room update history
-        // Relay to other members in room with server-verified senderSessionId
-        CollabAwarenessEvent event = new CollabAwarenessEvent(roomId, session.getId(), awareness);
+        // Relay to other members in room with server-verified senderSessionId and assignedUser
+        AssignedUserDto assignedUser = roomManager.getAssignedUser(session.getId());
+        CollabAwarenessEvent event = new CollabAwarenessEvent(roomId, session.getId(), awareness, assignedUser);
         roomManager.broadcastToRoomExcept(roomId, session.getId(), event);
     }
 

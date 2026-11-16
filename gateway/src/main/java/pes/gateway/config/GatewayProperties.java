@@ -29,6 +29,7 @@ public class GatewayProperties {
     private int maxRoomCollabHistory = 2000;      // max 2000 updates in room memory
     private int maxRoomCollabHistoryBytes = 2 * 1024 * 1024; // 2 MiB
     private int collabRateLimitPerSec = 120;      // max 120 collab messages / sec per session
+    private int collabSyncRateLimitPerMinute = 10; // max 10 collab sync requests / min per session
 
     public String getWorkerGrpcTarget() {
         return workerGrpcTarget;
@@ -140,5 +141,13 @@ public class GatewayProperties {
 
     public void setCollabRateLimitPerSec(int collabRateLimitPerSec) {
         this.collabRateLimitPerSec = collabRateLimitPerSec;
+    }
+
+    public int getCollabSyncRateLimitPerMinute() {
+        return collabSyncRateLimitPerMinute;
+    }
+
+    public void setCollabSyncRateLimitPerMinute(int collabSyncRateLimitPerMinute) {
+        this.collabSyncRateLimitPerMinute = collabSyncRateLimitPerMinute;
     }
 }

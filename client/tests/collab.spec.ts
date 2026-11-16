@@ -56,59 +56,83 @@ test.describe('PolyExecution Studio - Phase 6 Real-time Collaboration Suite', ()
     });
 
     // 3. Remote Cursor & Selection Visibility
-    // In Page 1, position cursor on the editor and select text
+    // In Page 1, select printable text on line 1 ("#include")
     const editor1 = page1.getByRole('textbox', { name: 'Editor content' });
     await editor1.focus();
     await page1.keyboard.press('ControlOrMeta+Home');
-    await page1.keyboard.press('ArrowDown');
-    // Select characters to trigger both head and selection decorations
+    // Select characters to trigger both head and selection decorations with visible bounding box
+    await page1.keyboard.press('Shift+ArrowRight');
+    await page1.keyboard.press('Shift+ArrowRight');
     await page1.keyboard.press('Shift+ArrowRight');
     await page1.keyboard.press('Shift+ArrowRight');
     await page1.keyboard.press('Shift+ArrowRight');
 
-    // Page 2 must observe remote cursor head and selection decorations
-    await expect(page2.locator('.yRemoteSelectionHead').first()).toBeAttached({ timeout: 10000 });
-    await expect(page2.locator('.yRemoteSelection').first()).toBeAttached({ timeout: 10000 });
+    // Page 2 must observe remote cursor head and selection decorations are visible
+    await expect(page2.locator('.yRemoteSelectionHead').first()).toBeVisible({ timeout: 10000 });
+    await expect(page2.locator('.yRemoteSelection').first()).toBeVisible({ timeout: 10000 });
 
     // Collapse selection in page 1
     await page1.keyboard.press('ArrowRight');
 
-    // 4. Concurrent Edits from Page 1 and Page 2
-    // Page 1 prepends a top comment
-    await editor1.focus();
-    await page1.keyboard.press('ControlOrMeta+Home');
-    await page1.keyboard.insertText('// Top comment from Peer 1\n');
-    await page1.waitForTimeout(200);
-
-    // Page 2 appends a bottom comment
+    // 4. Truly Concurrent Overlapping Edits from Page 1 and Page 2
+    // Both independent browser pages submit edits simultaneously through Promise.all
+    // before waiting for remote convergence
     const editor2 = page2.getByRole('textbox', { name: 'Editor content' });
-    await editor2.focus();
-    await page2.keyboard.press('ControlOrMeta+End');
-    await page2.keyboard.insertText('// Bottom comment from Peer 2\n');
-    await page2.waitForTimeout(200);
+    await Promise.all([
+      (async () => {
+        await editor1.focus();
+        await page1.keyboard.press('ControlOrMeta+Home');
+        await page1.keyboard.insertText('// Concurrent header from Peer 1\n');
+      })(),
+      (async () => {
+        await editor2.focus();
+        await page2.keyboard.press('ControlOrMeta+End');
+        await page2.keyboard.insertText('// Concurrent footer from Peer 2\n');
+      })()
+    ]);
 
     // Both editors must converge to the same text including both lines
     await expect(page1.locator('.monaco-editor .view-lines')).toContainText(
-      'Top comment from Peer 1',
+      '// Concurrent header from Peer 1',
       { timeout: 10000 }
     );
     await expect(page1.locator('.monaco-editor .view-lines')).toContainText(
-      'Bottom comment from Peer 2',
+      '// Concurrent footer from Peer 2',
       { timeout: 10000 }
     );
     await expect(page2.locator('.monaco-editor .view-lines')).toContainText(
-      'Top comment from Peer 1',
+      '// Concurrent header from Peer 1',
       { timeout: 10000 }
     );
     await expect(page2.locator('.monaco-editor .view-lines')).toContainText(
-      'Bottom comment from Peer 2',
+      '// Concurrent footer from Peer 2',
       { timeout: 10000 }
     );
 
-    // Verify exact document convergence between page1 and page2
-    const lines1 = await page1.locator('.monaco-editor .view-lines').innerText();
-    const lines2 = await page2.locator('.monaco-editor .view-lines').innerText();
-    expect(lines1.replace(/\s+/g, ' ').trim()).toBe(lines2.replace(/\s+/g, ' ').trim());
+    // Verify exact document convergence between page1 and page2 without normalizing whitespace away
+    const getEditorText = async (page: Page): Promise<string> => {
+      return page.evaluate(() => {
+        const monaco = (window as any).monaco;
+        const model = monaco?.editor?.getModels()?.[0];
+        if (model) {
+          return model.getValue();
+        }
+        // Fallback DOM extraction sorted by line position
+        const lines = Array.from(document.querySelectorAll('.monaco-editor .view-lines .view-line'));
+        lines.sort((a, b) => {
+          const topA = parseFloat((a as HTMLElement).style.top || '0');
+          const topB = parseFloat((b as HTMLElement).style.top || '0');
+          return topA - topB;
+        });
+        return lines.map((l) => (l as HTMLElement).innerText.replace(/\u00a0/g, ' ')).join('\n');
+      });
+    };
+
+    const lines1 = await getEditorText(page1);
+    const lines2 = await getEditorText(page2);
+    expect(lines1).toBe(lines2);
+    expect(lines1).toContain('// Concurrent header from Peer 1');
+    expect(lines1).toContain('// Concurrent footer from Peer 2');
 
     // 5. Room Isolation: Third browser joins a completely separate room
     const context3 = await browser.newContext();

@@ -171,4 +171,70 @@ describe('useCollaboration hook', () => {
     // Remote peer presence removed; no stale cursor
     expect(result.current.collaborators.some((c) => c.name === 'Peer-Bob')).toBe(false);
   });
+
+  it('binds awareness identity to server-assigned user and prevents identity spoofing', () => {
+    const { result } = renderHook(() =>
+      useCollaboration({
+        roomId: 'room-collab-test',
+        joined: true,
+        sessionId: 'sess-local',
+        assignedUser: { name: 'Local-User', color: '#30bced' },
+        sendMessage: sendMessageMock
+      })
+    );
+
+    // Impostor tries to claim 'Alice' with sessionId 'sess-alice'
+    const impostorDoc = new Y.Doc();
+    const impostorAwareness = new (result.current.awareness.constructor as any)(impostorDoc);
+    impostorAwareness.setLocalStateField('user', {
+      name: 'Impostor-Alice',
+      color: '#ff0000',
+      sessionId: 'sess-alice'
+    });
+    const update = encodeAwarenessUpdate(impostorAwareness, [impostorAwareness.clientID]);
+
+    act(() => {
+      const awarenessEvent: CollabAwarenessEvent = {
+        type: 'collab.awareness',
+        roomId: 'room-collab-test',
+        senderSessionId: 'sess-real-bob', // Server verified sender
+        assignedUser: { name: 'User-Real-Bob', color: '#e06c75' },
+        awareness: uint8ArrayToBase64(update)
+      };
+      result.current.processServerMessage(awarenessEvent);
+    });
+
+    // Client forces server-assigned user metadata and server-verified sessionId
+    const bob = result.current.collaborators.find((c) => c.sessionId === 'sess-real-bob');
+    expect(bob).toBeDefined();
+    expect(bob?.name).toBe('User-Real-Bob');
+    expect(bob?.color).toBe('#e06c75');
+
+    // Impostor Alice does NOT exist in collaborators list
+    expect(result.current.collaborators.some((c) => c.sessionId === 'sess-alice')).toBe(false);
+  });
+
+  it('locks editing when COLLAB_HISTORY_FULL error is received', () => {
+    const { result } = renderHook(() =>
+      useCollaboration({
+        roomId: 'room-collab-test',
+        joined: true,
+        sessionId: 'sess-local',
+        assignedUser: { name: 'Local-User', color: '#30bced' },
+        sendMessage: sendMessageMock
+      })
+    );
+
+    expect(result.current.isLocked).toBe(false);
+
+    act(() => {
+      result.current.processServerMessage({
+        type: 'error',
+        code: 'COLLAB_HISTORY_FULL',
+        message: 'Room collaboration history limit reached. Editing has been locked.'
+      });
+    });
+
+    expect(result.current.isLocked).toBe(true);
+  });
 });

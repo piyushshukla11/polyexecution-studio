@@ -2914,3 +2914,67 @@
 - Files: `PROGRESS.md`, `README.md`, `docs/05_INTERVIEW_PREP.md`, `client/*`, `gateway/*`.
 - Linked: LOG-0174, LOG-0173.
 - Tutor review: pending
+
+
+## [LOG-0176] 2026-11-16 11:22 IST | PLAN | actor: agent
+- Reason: Address tutor review findings for Phase 6 on branch phase/6-collab: bind awareness identity to server-tracked session, rate-limit collab.sync, prove concurrent convergence in two-browser Playwright test, and prevent silent divergence on history cap.
+- Details / Change:
+  1. Awareness Identity Binding:
+     - Update `CollabAwarenessEvent` to include server-assigned `assignedUser` (`{ name, color }`) alongside server-verified `senderSessionId`.
+     - In `client/src/hooks/useCollaboration.ts`, bind incoming remote awareness client IDs strictly to `event.senderSessionId` and overwrite `user.sessionId`, `user.name`, and `user.color` with server-assigned values. Prevent spoofed updates and reject cross-session client ID hijacks.
+     - Add integration test in `GatewayIntegrationTest` where a joined session attempts to claim another session's ID in an awareness payload, asserting server attribution and isolation.
+  2. Rate-limit `collab.sync`:
+     - Add `collabSyncRateLimitPerMinute` to `GatewayProperties` (default: 10/min per session).
+     - Track sync request timestamps per session in `Room.java` / `RoomManager.java`.
+     - In `GatewayWebSocketHandler.handleCollabSync`, enforce rate limiting; reject excess requests with `RATE_LIMIT_EXCEEDED` without serializing or sending room history.
+     - Add integration test verifying sync flood rejection on populated room.
+  3. Two-Browser Playwright Test Enhancements:
+     - In `client/tests/collab.spec.ts`, execute overlapping edits concurrently using `Promise.all` across independent browser contexts without sequential waits.
+     - Assert exact document equality `lines1 === lines2` without whitespace normalization, and assert remote cursor head/selection visibility with `toBeVisible()`.
+  4. Collaboration History Cap without Silent Divergence:
+     - In `Room.java`, when `collabUpdates.size() == maxHistoryCount` or byte cap is reached, mark `collabHistoryFull = true`.
+     - When an update reaches the cap, accept that update and broadcast `ErrorEvent("COLLAB_HISTORY_FULL")` to all room sessions.
+     - Reject subsequent updates with `COLLAB_HISTORY_FULL`.
+     - On `room.join` / `collab.sync` to a full room, send `CollabSyncEvent` followed immediately by `COLLAB_HISTORY_FULL`.
+     - In `useCollaboration.ts` and `App.tsx`, upon receiving `COLLAB_HISTORY_FULL`, set editor to `readOnly` and render a warning banner, preventing divergence across existing and new peers.
+     - Add integration test with small history cap verifying convergence and locked behavior for existing peers and reconnecting/new participants.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/*`, `client/src/*`, `client/tests/collab.spec.ts`.
+- Linked: LOG-0175, LOG-0174.
+- Tutor review: pending
+
+
+## [LOG-0177] 2026-11-16 12:42 IST | DONE | actor: agent
+- Reason: Complete implementation and verification of tutor review findings for Phase 6 on branch phase/6-collab.
+- Details / Change:
+  1. Awareness Identity Binding:
+     - Updated `CollabAwarenessEvent.java` to include server-assigned `assignedUser` (`{ name, color }`) alongside server-verified `senderSessionId`.
+     - In `GatewayWebSocketHandler.java`, bound awareness broadcast to `roomManager.getAssignedUser(session.getId())`.
+     - In `client/src/types/protocol.ts`, added `assignedUser?: AssignedUser` to `CollabAwarenessEvent`.
+     - In `client/src/hooks/useCollaboration.ts`, used `modifyAwarenessUpdate` from `y-protocols/awareness` to sanitize incoming awareness payloads before applying to local state: strictly rewrote `state.user.sessionId = event.senderSessionId` and `state.user.name` / `color` from server-assigned metadata. Verified impostor identity spoofing or peer presence eviction is prevented.
+     - Added integration test `testCollabAwarenessSpoofingPreventedByServerAttribution` in `GatewayIntegrationTest.java` and unit test in `useCollaboration.test.ts`.
+  2. Rate-limit `collab.sync`:
+     - Added `collabSyncRateLimitPerMinute = 10` to `GatewayProperties.java`.
+     - Added sliding-window sync rate-limiting queue in `Room.java` (`checkCollabSyncRateLimit`) and `RoomManager.java`.
+     - In `GatewayWebSocketHandler.handleCollabSync`, enforced rate limit before sending updates; rejected excess requests with `RATE_LIMIT_EXCEEDED` without unbounded history re-transmission.
+     - Added integration test `testCollabSyncRateLimitFloodingRejected` in `GatewayIntegrationTest.java`.
+  3. Two-Browser Playwright Test Enhancements:
+     - In `client/tests/collab.spec.ts` Step 3, selected printable characters on line 1 (`#include`), creating a visible selection box with positive dimensions and asserting `.yRemoteSelectionHead` and `.yRemoteSelection` are visible via `toBeVisible()`.
+     - In Step 4, converted sequential typing into simultaneous `Promise.all` overlapping edits on `page1` (header) and `page2` (footer) through the real Gateway before waiting for remote convergence.
+     - Extracted Monaco text model / sorted DOM view lines in `getEditorText` and asserted exact document equality (`expect(lines1).toBe(lines2)`) without whitespace normalization, verifying convergence to identical content with both header and footer.
+     - Retained room isolation (page 3 in separate room receives no collab traffic) and disconnect cleanup (peer presence removed).
+  4. Collaboration History Cap without Silent Divergence:
+     - Added `collabHistoryFull` atomic boolean flag in `Room.java`. Separated update and awareness rate-limiting queues (`sessionCollabUpdateTimestamps` vs `sessionCollabAwarenessTimestamps`) to prevent quota starvation.
+     - When an update reaches the cap, accepted that update and broadcast `COLLAB_HISTORY_FULL` to all room sessions. Subsequent edits are rejected with `COLLAB_HISTORY_FULL`.
+     - On `collab.sync` to a full room, sends `CollabSyncEvent` followed immediately by `COLLAB_HISTORY_FULL`.
+     - In `useCollaboration.ts` and `App.tsx`, `COLLAB_HISTORY_FULL` triggers `isLocked = true`, locking Monaco to `readOnly: true` and rendering a warning banner preventing divergence across existing and new peers.
+     - Added integration test `testCollabHistoryCapPreventsDivergence` in `GatewayIntegrationTest.java` and unit test in `useCollaboration.test.ts`.
+  5. Test Evidence:
+     - `make -C sandbox-daemon test`: 22/22 passed.
+     - `(cd worker && gradle test --rerun-tasks)`: 19/19 passed.
+     - `(cd gateway && gradle test --rerun-tasks)`: 44/44 passed.
+     - `(cd client && npm test)`: 31/31 passed.
+     - `bash gateway/tests/verify_e2e_websocket.sh 8080 50055`: passed against live worker and gateway.
+     - `bash client/tests/verify_e2e_browser.sh 8080 50051 5173`: all 5 Playwright tests passed (including two-browser concurrent collaboration).
+- Files: `PROGRESS.md`, `client/src/App.tsx`, `client/src/hooks/useCollaboration.ts`, `client/src/types/protocol.ts`, `client/src/__tests__/useCollaboration.test.ts`, `client/tests/collab.spec.ts`, `gateway/src/main/java/pes/gateway/config/GatewayProperties.java`, `gateway/src/main/java/pes/gateway/protocol/CollabAwarenessEvent.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`.
+- Linked: LOG-0176.
+- Tutor review: pending

@@ -236,14 +236,37 @@ public class RoomManager {
         return room.addCollabUpdate(updateBase64, properties.getMaxRoomCollabHistory(), properties.getMaxRoomCollabHistoryBytes());
     }
 
+    public boolean isCollabHistoryFull(String roomId) {
+        Room room = rooms.get(roomId);
+        return room != null && room.isCollabHistoryFull();
+    }
+
     public List<String> getCollabUpdates(String roomId) {
         Room room = rooms.get(roomId);
         return (room != null) ? room.getCollabUpdates() : Collections.emptyList();
     }
 
-    public boolean checkCollabRateLimit(String roomId, String sessionId, long nowMs) {
+    public boolean checkCollabUpdateRateLimit(String roomId, String sessionId, long nowMs) {
         Room room = rooms.get(roomId);
-        return room != null && room.checkCollabRateLimit(sessionId, properties.getCollabRateLimitPerSec(), nowMs);
+        return room != null && room.checkCollabUpdateRateLimit(sessionId, properties.getCollabRateLimitPerSec(), nowMs);
+    }
+
+    public boolean checkCollabAwarenessRateLimit(String roomId, String sessionId, long nowMs) {
+        Room room = rooms.get(roomId);
+        return room != null && room.checkCollabAwarenessRateLimit(sessionId, properties.getCollabRateLimitPerSec(), nowMs);
+    }
+
+    public boolean checkCollabRateLimit(String roomId, String sessionId, long nowMs) {
+        return checkCollabUpdateRateLimit(roomId, sessionId, nowMs);
+    }
+
+    public boolean checkCollabSyncRateLimit(String roomId, String sessionId) {
+        Room room = rooms.get(roomId);
+        return room != null && room.checkCollabSyncRateLimit(sessionId, properties.getCollabSyncRateLimitPerMinute(), System.currentTimeMillis());
+    }
+
+    public AssignedUserDto getAssignedUser(String sessionId) {
+        return createAssignedUser(sessionId);
     }
 
     public void sendToSession(String sessionId, ServerEvent event) {

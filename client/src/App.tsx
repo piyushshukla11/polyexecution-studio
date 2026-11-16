@@ -170,6 +170,12 @@ export const App: React.FC = () => {
         </div>
       )}
 
+      {collab.isLocked && (
+        <div className="alert-banner alert-warning" data-testid="collab-history-full-banner">
+          Room collaboration history limit reached. Editing has been locked to prevent document divergence.
+        </div>
+      )}
+
       <div className="controls-bar">
         <div className="controls-left">
           <LanguageSelector
@@ -222,7 +228,7 @@ export const App: React.FC = () => {
             value={collab.sourceCode}
             onChange={collab.setSharedCode}
             onMount={handleEditorMount}
-            readOnly={isRunning}
+            readOnly={isRunning || collab.isLocked}
           />
         </section>
 

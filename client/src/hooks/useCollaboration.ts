@@ -4,7 +4,8 @@ import {
   Awareness,
   encodeAwarenessUpdate,
   applyAwarenessUpdate,
-  removeAwarenessStates
+  removeAwarenessStates,
+  modifyAwarenessUpdate
 } from 'y-protocols/awareness';
 import { MonacoBinding } from 'y-monaco';
 import type * as monacoEditor from 'monaco-editor';
@@ -125,6 +126,7 @@ export function useCollaboration(options: UseCollaborationOptions) {
 
   const defaultStarter = initialLanguage === 'python' ? PYTHON_STARTER : C_STARTER;
   const [synced, setSynced] = useState<boolean>(false);
+  const [isLocked, setIsLocked] = useState<boolean>(false);
   const [collaborators, setCollaborators] = useState<CollaboratorInfo[]>([]);
   const [language, setLanguage] = useState<SupportedLanguage>(initialLanguage);
   const [editorText, setEditorText] = useState<string>(() => ytext.toString() || defaultStarter);
@@ -290,10 +292,22 @@ export function useCollaboration(options: UseCollaborationOptions) {
           break;
 
         case 'collab.awareness':
-          if (event.roomId === roomId) {
+          if (event.roomId === roomId && event.senderSessionId) {
             try {
               const bytes = base64ToUint8Array(event.awareness);
-              applyAwarenessUpdate(awareness, bytes, 'remote');
+              // Sanitize the binary awareness update using modifyAwarenessUpdate:
+              // force state.user to strictly reflect the server-verified senderSessionId and server-assigned user
+              const sanitizedBytes = modifyAwarenessUpdate(bytes, (state) => {
+                if (state?.user) {
+                  state.user.sessionId = event.senderSessionId;
+                  if (event.assignedUser) {
+                    state.user.name = event.assignedUser.name;
+                    state.user.color = event.assignedUser.color;
+                  }
+                }
+                return state;
+              });
+              applyAwarenessUpdate(awareness, sanitizedBytes, 'remote');
             } catch (e) {
               console.error('Failed to apply remote awareness update', e);
             }
@@ -321,6 +335,12 @@ export function useCollaboration(options: UseCollaborationOptions) {
             // New participant joined; broadcast our awareness immediately so they see our cursor
             const update = encodeAwarenessUpdate(awareness, [awareness.clientID]);
             sendMessage({ type: 'collab.awareness', awareness: uint8ArrayToBase64(update) });
+          }
+          break;
+
+        case 'error':
+          if (event.code === 'COLLAB_HISTORY_FULL') {
+            setIsLocked(true);
           }
           break;
 
@@ -402,6 +422,7 @@ export function useCollaboration(options: UseCollaborationOptions) {
     ytext,
     awareness,
     synced,
+    isLocked,
     collaborators,
     language,
     sourceCode: editorText,
