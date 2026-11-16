@@ -2595,3 +2595,231 @@
 - Files: `PROGRESS.md`.
 - Linked: LOG-0163, LOG-0161, LOG-0159.
 - Tutor review: approved for Phase 4 sign-off and merge into main
+
+
+## [LOG-0165] 2026-11-16 01:58 IST | DECISION | actor: agent
+- Reason: Record dependency selections and additive protobuf schema extension for Phase 5 React + Monaco Execution Panel per AI_RULES.md §7.
+- Details / Change:
+  1. Additive Protobuf Progress Event Contract:
+     - Extend `proto/execution.proto` with `ExecutionStage` enum (`STAGE_UNSPECIFIED`, `STAGE_COMPILING`, `STAGE_RUNNING`), `ExecutionProgress` message, `ExecutionStreamEvent` (`oneof event { ExecutionProgress progress = 2; ExecuteResponse result = 3; }`), and an additive RPC `ExecuteProgressStream(ExecuteRequest) returns (stream ExecutionStreamEvent)`.
+     - Preserves existing unary `Execute` and existing `ExecuteStream` without breaking existing Phase 3/4 clients or tests.
+     - Why: Mandated by Phase 5 status truthfulness requirement. Compiling and Running states must reflect actual worker milestones (immediately before invoking sandboxed GCC and before invoking sandboxed target/Python), rather than fabricated timers.
+  2. Frontend build and framework:
+     - React 18 (`react`, `react-dom`) + TypeScript + Vite (`vite`, `@vitejs/plugin-react`): Mandated by `docs/04_BUILD_PLAN.md`. Provides modern, reactive UI and fast development server binding to loopback (`127.0.0.1:5173`). Alternative considered: Create React App (deprecated), Webpack (unnecessary configuration complexity).
+  3. Monaco Editor:
+     - `@monaco-editor/react`: Standard React wrapper for VS Code's Monaco Editor. Provides C and Python syntax highlighting, starter code models, and editing capabilities. Alternative considered: CodeMirror, Ace (rejected because project specification explicitly requires Monaco).
+  4. Component testing:
+     - `vitest`, `@testing-library/react`, `@testing-library/jest-dom`, `jsdom`: Unit testing harness sharing Vite configuration, testing component states, WebSocket message handling, error rendering, and metrics formatting without launching full browsers.
+  5. Browser end-to-end automation:
+     - `@playwright/test`: Browser automation suite to prove full vertical integration (Browser -> WebSocket -> Java Gateway -> Kotlin Worker -> sandbox-runner). Configured to use the existing host Chromium binary (`/usr/bin/chromium`). Alternative considered: Cypress, Selenium (heavier setup, slower execution).
+- Files: `PROGRESS.md`.
+- Linked: LOG-0164.
+- Tutor review: pending
+
+
+## [LOG-0166] 2026-11-16 01:58 IST | PLAN | actor: agent
+- Reason: Implement Phase 5 React + Monaco Single-User Execution Panel meeting the exact Definition of Done in `docs/04_BUILD_PLAN.md` ("React + Monaco, run UI, metrics panel (single user) — Browser run works; statuses Idle, Compiling, Running, Timed Out render").
+- Details / Change:
+  1. Additive Protocol Extension (`proto/execution.proto`):
+     - Add `ExecutionStage` enum (`STAGE_COMPILING`, `STAGE_RUNNING`), `ExecutionProgress` message, `ExecutionStreamEvent` union, and `rpc ExecuteProgressStream`.
+     - Regenerate Kotlin protobuf stubs in `worker/` and Java protobuf stubs in `gateway/`.
+  2. Kotlin Worker Progress Emission (`worker/`):
+     - Implement `ExecuteProgressStream` in `WorkerServer.kt` and `ExecutionPipeline.kt`.
+     - Emit `STAGE_COMPILING` before sandboxed GCC invocation for C requests.
+     - Emit `STAGE_RUNNING` before sandboxed target binary invocation (or `/usr/bin/python3` for Python).
+     - On C compilation failure, emit final `COMPILE_ERROR` result immediately with NO running event.
+     - Add worker unit tests for progress stream ordering and backward-compatibility.
+  3. Java Gateway Progress Relay (`gateway/`):
+     - Extend `WorkerClient` and `WorkerGrpcClient` to subscribe to `ExecuteProgressStream`.
+     - In `GatewayWebSocketHandler`, forward worker progress events as `{ "type": "run.progress", "roomId": "...", "requestId": "...", "stage": "COMPILING" | "RUNNING" }` to room members.
+     - Preserve existing `run.accepted` and `run.completed` events, room isolation, and atomic concurrency guards.
+     - Add gateway unit and integration tests for progress forwarding.
+  4. React Frontend (`client/`):
+     - Initialize Vite + React + TypeScript in `client/`.
+     - Implement layout: header with connection status, language selector (C / Python), Monaco editor with starter code, stdin textarea, Run button, status indicator, separate stdout/stderr view, and truthful worker metrics panel.
+     - Implement `useExecutionSocket` custom hook managing WebSocket connection to `ws://127.0.0.1:8080/ws`, automatic room join (`client-<uuid>`), request correlation via `requestId`, and state machine:
+       `IDLE` -> `ACCEPTED` -> `COMPILING` (on real progress event) -> `RUNNING` (on real progress event) -> `COMPLETED` / `TIMED_OUT` / `ERROR`.
+     - Render `Timed Out` honestly from worker status `TIMEOUT`.
+     - Render worker telemetry fields (`wallMs`, `cpuMs`, `peakMemoryKb`, `exitCode`, `signal`, `status`).
+  5. Testing:
+     - Component unit tests with Vitest: initial Idle, connecting/joined states, C/Python switching, run payload construction, Compiling -> Running progress transitions, Compiling -> Compile Error transition without Running, Python Running transition, Timed Out mapping, separate output rendering, and error handling.
+     - Browser end-to-end integration test with Playwright: launches complete stack (Kotlin worker + Java gateway + Vite client + Chromium), loads UI, runs valid C (observes Compiling -> Running -> OK), invalid C (observes Compiling -> Compile Error), Python (observes Running -> OK), and timeout (observes Timed Out).
+  6. Documentation & Hygiene:
+     - Update `README.md` with Phase 5 UI instructions and honest limitations.
+     - Append Phase 5 interview questions to `docs/05_INTERVIEW_PREP.md`.
+     - Update untracked `LEARNING_NOTES/`.
+     - Run all regression suites (sandbox-daemon 22/22, worker, gateway, frontend, browser e2e).
+- Files: `PROGRESS.md`, `proto/execution.proto`, `worker/*`, `gateway/*`, `client/*`, `README.md`, `docs/05_INTERVIEW_PREP.md`.
+- Linked: LOG-0165, LOG-0164.
+- Tutor review: pending
+
+
+## [LOG-0167] 2026-11-16 02:35 IST | DONE | actor: agent
+- Reason: Record completion of Phase 5 React + Monaco Single-User Execution Panel satisfying the exact Definition of Done in `docs/04_BUILD_PLAN.md` ("React + Monaco, run UI, metrics panel (single user) — Browser run works; statuses Idle, Compiling, Running, Timed Out render").
+- Details / Change:
+  1. Additive Protobuf Progress Event Contract:
+     - Extended `proto/execution.proto` with `ExecutionStage` enum (`STAGE_COMPILING`, `STAGE_RUNNING`), `ExecutionProgress` message, `ExecutionStreamEvent` union, and additive RPC `ExecuteProgressStream(ExecuteRequest) returns (stream ExecutionStreamEvent)`. Existing unary `Execute` and `ExecuteStream` remain intact.
+     - Regenerated Kotlin protobuf bindings in `worker/` and Java protobuf bindings in `gateway/`.
+  2. Kotlin Worker Milestone Event Emission:
+     - Updated `ExecutionPipeline.kt` to accept an optional milestone progress callback `onProgress: (suspend (ExecutionStage) -> Unit)?`.
+     - In C pipeline: emits `STAGE_COMPILING` immediately prior to invoking sandboxed GCC compilation. On compilation error or invalid artifact, halts and returns `COMPILE_ERROR` with compiler diagnostics, without emitting any running milestone. On compilation success, emits `STAGE_RUNNING` immediately prior to executing the target binary.
+     - In Python pipeline: emits `STAGE_RUNNING` immediately prior to invoking sandboxed `/usr/bin/python3`.
+     - Implemented `executeProgressStream` in `ExecutionServiceImpl.kt` using `channelFlow`.
+     - Verified with worker unit tests in `FakeRunnerGrpcTest.kt` (100% pass).
+  3. Java Gateway Progress Relay:
+     - Extended `WorkerClient` and `WorkerGrpcClient` to subscribe to `executeProgressStream` with virtual thread per-task execution.
+     - Created `RunProgressEvent.java` in `gateway/src/main/java/pes/gateway/protocol/`.
+     - In `GatewayWebSocketHandler`, forwarded worker milestones as `{ "type": "run.progress", "roomId": "...", "requestId": "...", "stage": "COMPILING" | "RUNNING" }` exclusively to room members.
+     - Verified with gateway unit and integration tests in `WorkerGrpcClientTest.java` and `GatewayIntegrationTest.java` (100% pass).
+  4. React 18 + Monaco Web Client:
+     - Built `client/` workbench with React 18, TypeScript, Vite, Monaco Editor (`@monaco-editor/react`), Vitest, and Playwright.
+     - Implemented multi-language selector for C (GCC 14 / Linux Sandbox) and Python (3.12 / Linux Sandbox) with automatic starter code switching.
+     - Implemented code editor with dark theme, line numbers, automatic layout, and fallback input binding for testing.
+     - Implemented standard input tab forwarding custom stdin to sandbox execution.
+     - Truthfully renders execution lifecycle status badge: `Idle`, `Accepted`, `Compiling`, `Running`, `Completed`, `Timed Out`, `Compile Error`, and `Error`.
+     - Separated standard output (stdout) and standard error (stderr) viewers with byte counters.
+     - Implemented execution telemetry panel displaying genuine rusage metrics from the Linux sandbox runner (`wallMs`, `cpuMs`, `peakMemoryKb`, `exitCode`, `signal`, `status`).
+     - Implemented `useExecutionSocket` custom hook managing WebSocket connection to `ws://127.0.0.1:8080/ws`, automatic room join, and request correlation.
+  5. Test Evidence & Verification:
+     - Component unit tests: 5 test files, 18 unit tests in `client/` passed with 100% success (`StatusBadge`, `LanguageSelector`, `MetricsPanel`, `useExecutionSocket`, `App`).
+     - Gateway test suite: 100% pass including progress relay and compilation error halting.
+     - Worker test suite: 100% pass including progress stream ordering.
+     - Sandbox runner test suite: 22/22 tests passed (18 Phase 1 regression checks + 4 Phase 2 integration checks).
+     - Full-stack browser E2E suite (`client/tests/verify_e2e_browser.sh`): 4/4 Playwright tests passed driving host Chromium (`/usr/bin/chromium`, v155) through the full vertical stack (Browser -> WebSocket -> Java Gateway -> Kotlin Worker -> Linux Sandbox Runner).
+  6. Documentation & Hygiene:
+     - Updated `README.md` with Phase 5 architecture, build/test commands, and honest limitations.
+     - Appended Phase 5 interview questions to `docs/05_INTERVIEW_PREP.md`.
+     - Updated `.gitignore` to exclude Playwright test artifacts.
+     - Checked repo hygiene and progress append-only rules.
+- Files: `PROGRESS.md`, `README.md`, `docs/05_INTERVIEW_PREP.md`, `.gitignore`, `proto/execution.proto`, `worker/*`, `gateway/*`, `client/*`.
+- Linked: LOG-0166, LOG-0165.
+- Tutor review: pending
+
+
+## [LOG-0168] 2026-11-16 02:45 IST | PLAN | actor: agent
+- Reason: Address Phase 5 tutor review findings across browser E2E Monaco interaction, status truthfulness, WebSocket reconnection, and toolchain version labels.
+- Details / Change:
+  1. [P1] Real Monaco interaction & progress sequence in Browser E2E:
+     - Remove `window.__setEditorCode` test hook from `CodeEditor.tsx`.
+     - In `client/tests/e2e.spec.ts`, interact directly with Monaco via Playwright clicking the editor, clearing with keypresses, and typing/inserting text.
+     - Implement an observed stage tracker (`stageHistory: ExecutionUiStatus[]`) and timeline in `useExecutionSocket.ts` and `App.tsx` (`data-testid="status-timeline"`).
+     - In `e2e.spec.ts`, assert the real progress sequence:
+       - C code: `['SUBMITTING', 'ACCEPTED', 'COMPILING', 'RUNNING', 'COMPLETED']`.
+       - Invalid C code: `['SUBMITTING', 'ACCEPTED', 'COMPILING', 'COMPILE_ERROR']`, strictly verifying `RUNNING` is NEVER present.
+       - Python code: `['SUBMITTING', 'ACCEPTED', 'RUNNING', 'COMPLETED']`, strictly verifying `COMPILING` is NEVER present.
+  2. [P2] Separate `SUBMITTING` status:
+     - In `protocol.ts`, add `'SUBMITTING'` to `ExecutionUiStatus`.
+     - In `useExecutionSocket.ts`, on `runCode()`, transition `uiStatus` to `'SUBMITTING'`.
+     - Only transition to `'ACCEPTED'` when the gateway responds with `run.accepted`.
+     - Update `StatusBadge.tsx` and `index.css` to render `Submitting` state cleanly.
+  3. [P2] Bounded WebSocket reconnect with room rejoin:
+     - In `useExecutionSocket.ts`, implement bounded reconnect (up to 5 attempts with backoff: 1s, 2s, 3s, 4s, 5s).
+     - On reconnect, automatically send `{ type: 'room.join', roomId }` to rejoin the room.
+     - Abort any in-flight run with error upon disconnect without replaying the run.
+     - Provide unit tests verifying bounded reconnect and room rejoin without run replay.
+  4. [P2] Remove unpinned toolchain version claims:
+     - In `LanguageSelector.tsx`, update option labels to "C (GCC / Linux Sandbox)" and "Python 3 (Linux Sandbox)", removing unpinned claims of "GCC 14" and "Python 3.12".
+  5. Verification:
+     - Run client unit tests, worker tests, gateway tests, sandbox tests, and full browser E2E test.
+- Files: `PROGRESS.md`, `client/src/types/protocol.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/components/CodeEditor.tsx`, `client/src/components/LanguageSelector.tsx`, `client/src/components/StatusBadge.tsx`, `client/src/App.tsx`, `client/src/index.css`, `client/src/__tests__/*`, `client/tests/e2e.spec.ts`.
+- Linked: LOG-0167.
+- Tutor review: pending
+
+
+## [LOG-0169] 2026-11-16 02:52 IST | DONE | actor: agent
+- Reason: Record completion of Phase 5 tutor review fixes addressing browser E2E real Monaco interaction, progress sequence assertions, separate Submitting state, bounded reconnect with room rejoin, and unpinned toolchain labels.
+- Details / Change:
+  1. [P1] Real Monaco interaction & progress sequence assertions in Browser E2E:
+     - Removed `window.__setEditorCode` test hook and hidden fallback textarea from `CodeEditor.tsx`.
+     - In `client/tests/e2e.spec.ts`, updated `setMonacoContent` to focus Monaco's standard accessible editor textbox (`page.getByRole('textbox', { name: 'Editor content' })`), select all, clear, and insert text directly via Playwright user input.
+     - Added `stageHistory` state in `useExecutionSocket.ts` and rendered `<span data-testid="status-timeline">{stageHistory.join(' -> ')}</span>` in `App.tsx`.
+     - In `e2e.spec.ts`:
+       - Verified valid C real progress sequence: `SUBMITTING -> ACCEPTED -> COMPILING -> RUNNING -> COMPLETED`.
+       - Verified invalid C halts at compile error: `SUBMITTING -> ACCEPTED -> COMPILING -> COMPILE_ERROR`, and explicitly asserted that `RUNNING` is strictly NEVER present.
+       - Verified Python real progress sequence: `SUBMITTING -> ACCEPTED -> RUNNING -> COMPLETED`, asserting `COMPILING` is strictly NEVER present.
+       - Verified Timeout real progress sequence: `SUBMITTING -> ACCEPTED -> RUNNING -> TIMED_OUT`.
+  2. [P2] Separate `SUBMITTING` state before gateway acceptance:
+     - Added `'SUBMITTING'` to `ExecutionUiStatus` in `protocol.ts`.
+     - In `useExecutionSocket.ts`, `runCode()` now transitions immediately to `'SUBMITTING'`; only transitions to `'ACCEPTED'` when the gateway responds with `run.accepted`.
+     - Updated `StatusBadge.tsx` and `index.css` to render `Submitting` status with clean styling.
+  3. [P2] Bounded WebSocket reconnect with room rejoin:
+     - In `useExecutionSocket.ts`, implemented bounded reconnect (up to 5 attempts with backoff: 1s, 2s, 3s, 4s, 5s).
+     - When connection opens, automatically sends `{ type: 'room.join', roomId }` to rejoin the same room.
+     - Aborts any in-flight run immediately with `ERROR` upon disconnect, and strictly does NOT replay the run on reconnect.
+     - Added unit test in `useExecutionSocket.test.ts` verifying bounded reconnect and room rejoin without run replay.
+  4. [P2] Removed unpinned toolchain version labels:
+     - Updated `LanguageSelector.tsx` option labels from "C (GCC 14 / Linux Sandbox)" and "Python (3.12 / Linux Sandbox)" to "C (GCC / Linux Sandbox)" and "Python 3 (Linux Sandbox)".
+  5. Test Evidence & Verification:
+     - Client unit tests: 5 test files, 20 unit tests passed (100% pass).
+     - Full-stack browser E2E suite (`client/tests/verify_e2e_browser.sh`): all 4 Playwright tests passed in 12.1s driving host Chromium through Browser -> WebSocket -> Gateway -> Worker -> Linux Sandbox Runner.
+     - Sandbox runner test suite: 22/22 passed.
+     - Worker unit tests: 100% passed.
+     - Gateway unit and integration tests: 100% passed.
+     - Repo hygiene and progress append-only checks passed.
+- Files: `PROGRESS.md`, `client/src/types/protocol.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/components/CodeEditor.tsx`, `client/src/components/LanguageSelector.tsx`, `client/src/components/StatusBadge.tsx`, `client/src/App.tsx`, `client/src/index.css`, `client/src/__tests__/*`, `client/tests/e2e.spec.ts`.
+- Linked: LOG-0168, LOG-0167.
+- Tutor review: pending
+
+
+## [LOG-0170] 2026-11-16 08:38 IST | PLAN | actor: agent
+- Reason: Fix WebSocket retry counter reset timing to prevent infinite reconnect loops during repeated open-then-close flapping per tutor review.
+- Details / Change:
+  1. In `client/src/hooks/useExecutionSocket.ts`:
+     - Remove `attempts = 0` and `setReconnectAttempt(0)` from `ws.onopen`.
+     - Reset `attempts = 0` and `setReconnectAttempt(0)` strictly inside `handleServerEvent` when a confirmed `room.joined` event matching `roomId` is received.
+     - Ensure repeated open-then-close cycles where `room.joined` is never confirmed increment `attempts` up to `maxReconnectAttempts` (5) and halt with `"Connection lost; maximum reconnect attempts exceeded"`.
+  2. In `client/src/__tests__/useExecutionSocket.test.ts`:
+     - Add a unit test exercising repeated open-then-close cycles without `room.joined`, verifying that exactly 5 reconnection attempts are made and execution halts with the expected error message.
+  3. Verification:
+     - Run `(cd client && npm test)` for all 5 test files.
+     - Run `bash client/tests/verify_e2e_browser.sh 8080 50051 5173`.
+     - Run `./scripts/check_progress_append_only.sh` and `./scripts/check_repo_hygiene.sh`.
+- Files: `PROGRESS.md`, `client/src/hooks/useExecutionSocket.ts`, `client/src/__tests__/useExecutionSocket.test.ts`.
+- Linked: LOG-0169.
+- Tutor review: pending
+
+
+## [LOG-0171] 2026-11-16 08:45 IST | DONE | actor: agent
+- Reason: Completed WebSocket retry counter reset timing fix and verified bounded retry ceiling under connection flapping.
+- Details / Change:
+  1. Updated `client/src/hooks/useExecutionSocket.ts`:
+     - Removed premature reset of `attempts` and `reconnectAttempt` on raw WebSocket open (`ws.onopen`).
+     - Placed retry counter reset (`attempts = 0`, `setReconnectAttempt(0)`, `setConnectionError(null)`) strictly inside `handleServerEvent` upon receiving a confirmed `room.joined` event for the current room.
+     - Rapid open-then-close cycles without `room.joined` now strictly count toward the 5-attempt retry limit and halt with `"Connection lost; maximum reconnect attempts exceeded"`.
+  2. Added test in `client/src/__tests__/useExecutionSocket.test.ts`:
+     - `halts after reaching the reconnect limit during repeated open-then-close flapping cycles`: simulates 5 successive open-then-close cycles without `room.joined`, verifies that backoff timers fire appropriately, exactly 5 retry instances (6 WebSocket instances total) are created, and execution halts at the attempt ceiling with no further timers scheduled.
+  3. Verification:
+     - Client unit tests: 5 test files, 21/21 tests passed (`npm test`).
+     - Browser E2E verification (`client/tests/verify_e2e_browser.sh`): all 4 Playwright tests passed (C compile+run sequence, invalid C compilation failure without running, Python run sequence, execution timeout).
+     - Sandbox daemon tests: 22/22 passed (`tests/test_runner.py`).
+     - Worker unit tests: 100% passed (`gradle test --rerun-tasks`).
+     - Gateway unit/integration tests: 100% passed (`gradle test --rerun-tasks`).
+     - Progress append-only check and repo hygiene check passed with 0 warnings.
+     - `git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `client/src/hooks/useExecutionSocket.ts`, `client/src/__tests__/useExecutionSocket.test.ts`.
+- Linked: LOG-0170.
+- Tutor review: pending
+
+
+## [LOG-0172] 2026-11-16 08:48 IST | DECISION | actor: Piyush + tutor
+- Reason: Formally record tutor review approval and sign-off for Phase 5 React Monaco single-user execution panel, close Phase 5 Definition of Done, and authorize non-fast-forward merge into `main` with tag `phase-5-done`.
+- Details / Change:
+  1. Tutor reviewed the Phase 5 implementation, browser test evidence, Monaco interaction via accessible input, Submitting state separation, bounded reconnect with confirmed room-joined counter reset, and unpinned toolchain labels. The tutor found no remaining Phase 5 DoD blocker, signed off on Phase 5, and approved merging `phase/5-client` into `main` under the project's normal process.
+  2. Phase 5 Definition of Done in `docs/04_BUILD_PLAN.md` ("React + Monaco, run UI, metrics panel (single user) — Browser run works; statuses Idle, Compiling, Running, Timed Out render") is fully satisfied with verified end-to-end evidence:
+     - Real browser interaction: Playwright drives Monaco through standard accessible input without test hooks in production code.
+     - Truthful execution milestones: renders SUBMITTING -> ACCEPTED -> COMPILING -> RUNNING -> COMPLETED sequence driven strictly by backend events. Invalid C stops at COMPILE_ERROR without entering the running state.
+     - Single-user execution panel: supports C and Python 3 with syntax highlighting, stdin forwarding, stream-separated stdout/stderr viewers, and authentic sandbox telemetry (`wallMs`, `cpuMs`, `peakMemoryKb`, `exitCode`, `signal`, `status`).
+     - Bounded reconnect: reconnects automatically on socket close with exponential backoff; resets retry counter strictly upon confirmed room join; halts at 5-attempt ceiling during flapping.
+  3. All suites verified:
+     - `client` unit tests: 21/21 passed (`npm test`).
+     - `client` full-stack browser E2E: 4/4 passed (`verify_e2e_browser.sh`).
+     - `sandbox-daemon`: 22/22 integration tests passed (18 Phase 1 + 4 Phase 2).
+     - `worker`: 100% passed (`gradle test --rerun-tasks`).
+     - `gateway`: 100% passed (`gradle test --rerun-tasks`).
+     - Hygiene and progress append-only checks: clean pass.
+  4. Phase 5 DoD status is marked CLOSED and APPROVED.
+  5. Action authorized: Update `README.md` to mark Phase 5 Complete (`phase-5-done`), commit to `phase/5-client`, merge `phase/5-client` into `main` using `git merge --no-ff`, and tag `phase-5-done` per AI_RULES.md §10.
+- Verification: `(cd client && npm test)` (21/21 passed); `bash client/tests/verify_e2e_browser.sh 8080 50051 5173` (4/4 passed); `make -C sandbox-daemon test` (22/22 passed); `(cd worker && gradle test)` (100% passed); `(cd gateway && gradle test)` (100% passed); `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0171, LOG-0170, LOG-0169.
+- Tutor review: approved for Phase 5 sign-off and merge into main

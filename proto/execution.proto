@@ -50,7 +50,27 @@ message ExecuteResponse {
   int64 peak_memory_kb = 9;
 }
 
+enum ExecutionStage {
+  STAGE_UNSPECIFIED = 0;
+  STAGE_COMPILING = 1;
+  STAGE_RUNNING = 2;
+}
+
+message ExecutionProgress {
+  string job_id = 1;
+  ExecutionStage stage = 2;
+}
+
+message ExecutionStreamEvent {
+  string job_id = 1;
+  oneof event {
+    ExecutionProgress progress = 2;
+    ExecuteResponse result = 3;
+  }
+}
+
 service ExecutionService {
   rpc Execute(ExecuteRequest) returns (ExecuteResponse);
   rpc ExecuteStream(ExecuteRequest) returns (stream ExecuteResponse);
+  rpc ExecuteProgressStream(ExecuteRequest) returns (stream ExecutionStreamEvent);
 }

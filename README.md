@@ -4,7 +4,7 @@ PolyExecution Studio is a collaborative multi-language code execution platform u
 
 ---
 
-## Current Implementation State (Phase 4)
+## Current Implementation State (Phase 5)
 
 The project currently implements the bottom four layers of the architecture:
 
@@ -15,18 +15,28 @@ The project currently implements the bottom four layers of the architecture:
 
 2. **Kotlin gRPC Execution Worker (`worker/`)**:
    - A Kotlin coroutine service implementing `pes.execution.v1.ExecutionService` over gRPC and HTTP/2.
+   - Additive progress streaming contract (`ExecuteProgressStream`) emitting truthful milestone events: `STAGE_COMPILING` before sandboxed GCC execution, and `STAGE_RUNNING` before sandboxed target execution (or Python execution). Invalid C emits `COMPILE_ERROR` immediately and halts without emitting a running milestone.
    - Bounded request validation (job ID regex, resource limits, source code size ceiling of 256 KiB, standard input ceiling of 64 KiB).
    - Ephemeral workspace lifecycle: creates private directories (`/tmp/pes-job-<id>-*` with mode `0700`), writes source files, and guarantees recursive unlinking in a `finally` block with validation against symlinks and path traversal.
-   - Sandboxed compilation: routes `/usr/bin/gcc` through `sandbox-runner` with pre-opened descriptor handoff for the output artifact. Invalid source returns `COMPILE_ERROR` with compiler diagnostics and halts before execution.
+   - Sandboxed compilation: routes `/usr/bin/gcc` through `sandbox-runner` with pre-opened descriptor handoff for the output artifact.
    - Sandboxed execution: routes compiled targets or `/usr/bin/python3` through `sandbox-runner` with bounded standard input forwarding.
    - Result classification: translates runner results into typed protobuf statuses (`OK`, `COMPILE_ERROR`, `RUNTIME_ERROR`, `TIMEOUT`, `OUTPUT_LIMIT`, `MEMORY_LIMIT`, `SANDBOX_ERROR`).
 
 3. **Java Spring Boot Gateway (`gateway/`)**:
    - Ingress gateway binding strictly to loopback (`127.0.0.1:8080`) providing a WebSocket endpoint on `/ws` and a REST health check on `/health`.
-   - Structured JSON protocol: handles client messages (`room.join`, `room.leave`, `run`) and emits truthful server events (`room.joined`, `room.left`, `run.accepted`, `run.rejected`, `run.completed`, `error`).
+   - Structured JSON protocol: handles client messages (`room.join`, `room.leave`, `run`) and emits truthful server events (`room.joined`, `room.left`, `run.accepted`, `run.progress`, `run.rejected`, `run.completed`, `error`).
+   - Progress relay: forwards worker progress stream milestones as `{ "type": "run.progress", "roomId": "...", "requestId": "...", "stage": "COMPILING" | "RUNNING" }` exclusively to members of the room.
    - Bounded in-memory room manager: enforces room capacity (max 100 rooms, max 20 sessions per room), sliding-window rate limiting (30 runs/minute), thread-safe session tracking, disconnect cleanup, and strict room isolation with zero cross-room event leakage.
    - Concurrency governance: enforces an explicit single active run per room policy and a global concurrent execution ceiling (16 runs max).
-   - Typed gRPC client: dispatches validated requests to the Kotlin execution worker via generated `pes.execution.v1` stubs, enforces call deadlines, and translates worker responses and transport failures fail-closed.
+   - Origin security: explicit development origin allowlist rejecting cross-site WebSocket hijacking attempts.
+
+4. **React Monaco Web Client (`client/`)**:
+   - Single-user execution workbench built with React 18, TypeScript, Vite, and Monaco Editor.
+   - Multi-language support: interactive language selector for C and Python with syntax highlighting and default starter templates.
+   - Standard input panel: user-configurable stdin textarea forwarded to the sandbox process.
+   - Truthful execution lifecycle state badge rendering: `Idle`, `Accepted`, `Compiling`, `Running`, `Completed`, `Timed Out`, and `Compile Error`.
+   - Stream separation: independent, bounded viewers for standard output (stdout) and standard error (stderr).
+   - Real-time telemetry panel: renders truthful metrics reported by the Linux sandbox runner (`wallMs`, `cpuMs`, `peakMemoryKb`, `exitCode`, `signal`, `status`).
 
 ---
 
@@ -39,7 +49,7 @@ The project currently implements the bottom four layers of the architecture:
 | **Phase 2** | C Sandbox v2 (Linux Isolation & Defences) | Complete (`phase-2-done`) | Fork bomb containment (`pids.max`), filesystem snooping defense, network denial via seccomp; cgroup cleanup verified; 0 stray processes |
 | **Phase 3** | Kotlin Worker & Sandboxed Compilation | Complete (`phase-3-done`) | C and Python run end-to-end from a gRPC client (`grpcurl`), with C compilation running inside the sandbox |
 | **Phase 4** | Java Gateway & WebSocket Server | Complete (`phase-4-done`) | WebSocket client triggers run and receives status events |
-| **Phase 5** | Browser Web Client (Monaco Editor) | Planned | Browser editor executes code; renders Idle, Compiling, Running, Timed Out states |
+| **Phase 5** | Browser Web Client (Monaco Editor) | Complete (`phase-5-done`) | Browser editor executes code; renders Idle, Compiling, Running, Timed Out states |
 | **Phase 6** | Real-Time Collaboration (Yjs CRDT) | Planned | Concurrent multi-user edits converge deterministically |
 | **Phase 7** | Multi-Language Runtimes & Load Benchmarks | Planned | 50 concurrent runs without host instability; documented resource limits |
 
@@ -49,9 +59,10 @@ The project currently implements the bottom four layers of the architecture:
 
 In accordance with project governance rules, the following limitations reflect current functionality:
 
-- **Loopback binding only**: Both the gateway (`127.0.0.1:8080`) and worker (`127.0.0.1:50055`) bind strictly to loopback. Public network ingress, TLS termination, and external identity provider authentication are deferred.
+- **Loopback binding only**: All services (client at `127.0.0.1:5173`, gateway at `127.0.0.1:8080`, and worker at `127.0.0.1:50051`) bind strictly to loopback. Public ingress, TLS termination, and external identity provider authentication are deferred.
+- **Single-user execution**: The web client currently operates as a single-user execution workbench per room. Concurrent multi-user collaborative editing via CRDT is scheduled for Phase 6.
 - **In-memory room state**: Collaboration rooms and session memberships are stored entirely in JVM memory and are not persisted across server restarts. Empty rooms are pruned upon disconnection.
-- **Event truthfulness (no fake intermediate states)**: Because the worker returns a single final execution response after compilation and execution, the gateway emits truthful lifecycle events (`run.accepted` upon dispatch, followed by `run.completed`). It does not fabricate artificial compiling or running progress states.
+- **Truthful milestone events (no fake timers)**: Progress states (`Compiling`, `Running`) reflect actual worker milestone emissions immediately before sandboxed GCC compilation and before sandboxed execution. Compilation failures immediately halt and emit `Compile Error` without entering the running state.
 - **Unauthenticated sessions**: WebSocket sessions use server-assigned random UUIDs. Client-supplied user identifiers are untrusted and used only for room display metadata.
 - **Language support**: The pipeline currently supports C (compiled and executed inside the sandbox) and Python 3 (interpreted inside the sandbox). Runtimes for Rust, Java, and Node.js are planned for Phase 7.
 - **Linux host requirements**: Production sandbox execution requires a Linux kernel with cgroups v2 delegation (`cpu`, `memory`, `pids`) and unprivileged user namespaces. If these prerequisites are absent, the runner strictly fails closed (`SANDBOX_ERROR`).
@@ -97,15 +108,32 @@ make -C sandbox-daemon test-workspace-handoff test-setup-protocol test-phase2-st
 (cd gateway && gradle bootJar)
 ```
 
-### 4. End-to-End WebSocket Verification
-Run the complete stack verification (WebSocket Client -> Java Gateway -> Kotlin Worker -> Sandbox Runner):
+### 4. Build and Test the React Monaco Client
+```bash
+# Run client unit and component tests (from repository root)
+(cd client && npm test)
+
+# Build the production frontend distribution (from repository root)
+(cd client && npm run build)
+```
+
+### 5. Phase 5 Browser End-to-End Verification
+Run the complete vertical slice (Chromium Browser -> Vite -> WebSocket Gateway -> Kotlin Worker -> Sandbox Runner):
+
+```bash
+# Run the automated Playwright browser test suite across all services
+bash client/tests/verify_e2e_browser.sh 8080 50051 5173
+```
+
+### 6. Phase 4 End-to-End WebSocket Verification
+Run the Java gateway to Kotlin worker verification:
 
 ```bash
 # Verify end-to-end WebSocket execution with real sandboxed C and Python
 bash gateway/tests/verify_e2e_websocket.sh 8080 50055
 ```
 
-### 5. Worker gRPC Direct Verification via `grpcurl`
+### 7. Worker gRPC Direct Verification via `grpcurl`
 ```bash
 # Run live sandbox compilation and execution checks against worker
 bash worker/tests/verify_grpcurl.sh 50055 production-runtime
