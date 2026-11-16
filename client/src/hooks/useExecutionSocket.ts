@@ -64,10 +64,7 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
 
       ws.onopen = () => {
         if (!isMounted) return;
-        attempts = 0;
-        setReconnectAttempt(0);
         setConnected(true);
-        setConnectionError(null);
         // Automatically join / rejoin room upon connection
         ws?.send(JSON.stringify({ type: 'room.join', roomId }));
       };
@@ -125,6 +122,9 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
         case 'room.joined':
           if (event.roomId === roomId) {
             setJoined(true);
+            attempts = 0;
+            setReconnectAttempt(0);
+            setConnectionError(null);
           }
           break;
 

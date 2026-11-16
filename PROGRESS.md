@@ -2759,3 +2759,43 @@
 - Files: `PROGRESS.md`, `client/src/types/protocol.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/components/CodeEditor.tsx`, `client/src/components/LanguageSelector.tsx`, `client/src/components/StatusBadge.tsx`, `client/src/App.tsx`, `client/src/index.css`, `client/src/__tests__/*`, `client/tests/e2e.spec.ts`.
 - Linked: LOG-0168, LOG-0167.
 - Tutor review: pending
+
+
+## [LOG-0170] 2026-11-16 08:38 IST | PLAN | actor: agent
+- Reason: Fix WebSocket retry counter reset timing to prevent infinite reconnect loops during repeated open-then-close flapping per tutor review.
+- Details / Change:
+  1. In `client/src/hooks/useExecutionSocket.ts`:
+     - Remove `attempts = 0` and `setReconnectAttempt(0)` from `ws.onopen`.
+     - Reset `attempts = 0` and `setReconnectAttempt(0)` strictly inside `handleServerEvent` when a confirmed `room.joined` event matching `roomId` is received.
+     - Ensure repeated open-then-close cycles where `room.joined` is never confirmed increment `attempts` up to `maxReconnectAttempts` (5) and halt with `"Connection lost; maximum reconnect attempts exceeded"`.
+  2. In `client/src/__tests__/useExecutionSocket.test.ts`:
+     - Add a unit test exercising repeated open-then-close cycles without `room.joined`, verifying that exactly 5 reconnection attempts are made and execution halts with the expected error message.
+  3. Verification:
+     - Run `(cd client && npm test)` for all 5 test files.
+     - Run `bash client/tests/verify_e2e_browser.sh 8080 50051 5173`.
+     - Run `./scripts/check_progress_append_only.sh` and `./scripts/check_repo_hygiene.sh`.
+- Files: `PROGRESS.md`, `client/src/hooks/useExecutionSocket.ts`, `client/src/__tests__/useExecutionSocket.test.ts`.
+- Linked: LOG-0169.
+- Tutor review: pending
+
+
+## [LOG-0171] 2026-11-16 08:45 IST | DONE | actor: agent
+- Reason: Completed WebSocket retry counter reset timing fix and verified bounded retry ceiling under connection flapping.
+- Details / Change:
+  1. Updated `client/src/hooks/useExecutionSocket.ts`:
+     - Removed premature reset of `attempts` and `reconnectAttempt` on raw WebSocket open (`ws.onopen`).
+     - Placed retry counter reset (`attempts = 0`, `setReconnectAttempt(0)`, `setConnectionError(null)`) strictly inside `handleServerEvent` upon receiving a confirmed `room.joined` event for the current room.
+     - Rapid open-then-close cycles without `room.joined` now strictly count toward the 5-attempt retry limit and halt with `"Connection lost; maximum reconnect attempts exceeded"`.
+  2. Added test in `client/src/__tests__/useExecutionSocket.test.ts`:
+     - `halts after reaching the reconnect limit during repeated open-then-close flapping cycles`: simulates 5 successive open-then-close cycles without `room.joined`, verifies that backoff timers fire appropriately, exactly 5 retry instances (6 WebSocket instances total) are created, and execution halts at the attempt ceiling with no further timers scheduled.
+  3. Verification:
+     - Client unit tests: 5 test files, 21/21 tests passed (`npm test`).
+     - Browser E2E verification (`client/tests/verify_e2e_browser.sh`): all 4 Playwright tests passed (C compile+run sequence, invalid C compilation failure without running, Python run sequence, execution timeout).
+     - Sandbox daemon tests: 22/22 passed (`tests/test_runner.py`).
+     - Worker unit tests: 100% passed (`gradle test --rerun-tasks`).
+     - Gateway unit/integration tests: 100% passed (`gradle test --rerun-tasks`).
+     - Progress append-only check and repo hygiene check passed with 0 warnings.
+     - `git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `client/src/hooks/useExecutionSocket.ts`, `client/src/__tests__/useExecutionSocket.test.ts`.
+- Linked: LOG-0170.
+- Tutor review: pending

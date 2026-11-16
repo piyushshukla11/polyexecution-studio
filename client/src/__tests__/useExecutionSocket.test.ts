@@ -337,4 +337,71 @@ describe('useExecutionSocket', () => {
       vi.useRealTimers();
     }
   });
+
+  it('halts after reaching the reconnect limit during repeated open-then-close flapping cycles', () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() =>
+        useExecutionSocket({ roomId: 'test-room-flap', maxReconnectAttempts: 5 })
+      );
+
+      // Initial connection is instance 0 (1 initial connection)
+      expect(MockWebSocket.instances.length).toBe(1);
+
+      // Perform 5 reconnect attempts (instances 0 through 4 close)
+      for (let i = 0; i < 5; i++) {
+        const currentWs = MockWebSocket.instances[i];
+
+        // WebSocket connects (open), but closes before room.joined is confirmed
+        act(() => {
+          currentWs.simulateOpen();
+        });
+        expect(result.current.connected).toBe(true);
+        expect(result.current.joined).toBe(false);
+
+        // Closes immediately without room.joined
+        act(() => {
+          currentWs.close();
+        });
+        expect(result.current.connected).toBe(false);
+        expect(result.current.reconnectAttempt).toBe(i + 1);
+
+        // Advance timer for reconnect backoff delay (min(1000 * attempt, 5000))
+        act(() => {
+          vi.advanceTimersByTime(Math.min(1000 * (i + 1), 5000));
+        });
+
+        // A new WebSocket instance was created for the retry
+        expect(MockWebSocket.instances.length).toBe(i + 2);
+      }
+
+      // We have now attempted 5 reconnections (total 6 instances: 1 initial + 5 retries)
+      expect(MockWebSocket.instances.length).toBe(6);
+      const fifthRetryWs = MockWebSocket.instances[5];
+
+      // The 5th retry also opens and closes without room.joined
+      act(() => {
+        fifthRetryWs.simulateOpen();
+      });
+      act(() => {
+        fifthRetryWs.close();
+      });
+
+      // Ceiling is reached: no 7th instance should ever be created
+      expect(MockWebSocket.instances.length).toBe(6);
+
+      // Connection error must explicitly report attempt ceiling reached
+      expect(result.current.connectionError).toBe(
+        'Connection lost; maximum reconnect attempts exceeded'
+      );
+
+      // Advance time further to prove no subsequent reconnection timer fires
+      act(() => {
+        vi.advanceTimersByTime(10000);
+      });
+      expect(MockWebSocket.instances.length).toBe(6);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
