@@ -219,7 +219,15 @@ static int install_seccomp_allowlist(void) {
         SCMP_SYS(truncate), SCMP_SYS(ftruncate), SCMP_SYS(fdatasync), SCMP_SYS(fsync),
         SCMP_SYS(getdents), SCMP_SYS(getdents64),
         SCMP_SYS(sched_yield), SCMP_SYS(sched_getaffinity), SCMP_SYS(poll), SCMP_SYS(ppoll),
-        SCMP_SYS(select), SCMP_SYS(pselect6)
+        SCMP_SYS(select), SCMP_SYS(pselect6),
+        SCMP_SYS(epoll_create), SCMP_SYS(epoll_create1), SCMP_SYS(epoll_ctl),
+        SCMP_SYS(epoll_wait), SCMP_SYS(epoll_pwait), SCMP_SYS(eventfd), SCMP_SYS(eventfd2),
+        SCMP_SYS(sched_getscheduler), SCMP_SYS(sched_getparam),
+        SCMP_SYS(sched_get_priority_max), SCMP_SYS(sched_get_priority_min),
+        SCMP_SYS(mincore), SCMP_SYS(getgroups), SCMP_SYS(getresuid), SCMP_SYS(getresgid),
+        SCMP_SYS(getpgid), SCMP_SYS(getsid),
+        SCMP_SYS(openat2), SCMP_SYS(close_range), SCMP_SYS(fadvise64), SCMP_SYS(pwrite64),
+        SCMP_SYS(preadv), SCMP_SYS(pwritev), SCMP_SYS(getpriority), SCMP_SYS(setpriority)
     };
     for (size_t i = 0; i < sizeof(syscalls) / sizeof(syscalls[0]); i++) {
         if (allow_syscall(filter, syscalls[i]) < 0) {

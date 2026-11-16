@@ -20,7 +20,11 @@
 #define PES_WORKSPACE_SOURCE_MAX (256U * 1024U)
 
 static int valid_source_leaf(const char *name) {
-    return name && (strcmp(name, "source.c") == 0 || strcmp(name, "source.py") == 0);
+    return name && (strcmp(name, "source.c") == 0 ||
+                    strcmp(name, "source.py") == 0 ||
+                    strcmp(name, "source.java") == 0 ||
+                    strcmp(name, "source.kt") == 0 ||
+                    strcmp(name, "source.js") == 0);
 }
 
 static int valid_artifact_leaf(const char *name) {
@@ -416,11 +420,29 @@ int phase2_rootfs_prepare(const char *host_binary, const char *root, char *targe
         bind_readonly_directory(root, "/bin", "bin") < 0 ||
         bind_readonly_directory(root, "/sbin", "sbin") < 0) return -1;
 
+    int is_system_binary = (strncmp(host_binary, "/usr/", 5) == 0 ||
+                            strncmp(host_binary, "/bin/", 5) == 0 ||
+                            strncmp(host_binary, "/sbin/", 6) == 0);
     char target_host_path[PATH_MAX];
     char temp_path[PATH_MAX];
-    if (snprintf(target_host_path, sizeof(target_host_path), "%s/run/target", root) >= (int)sizeof(target_host_path) ||
-        snprintf(temp_path, sizeof(temp_path), "%s/tmp", root) >= (int)sizeof(temp_path) ||
-        snprintf(target_path, target_path_size, "/run/target") >= (int)target_path_size) {
+    if (is_system_binary) {
+        struct stat sys_st;
+        if (stat(host_binary, &sys_st) < 0 || !S_ISREG(sys_st.st_mode) || (sys_st.st_mode & 0111) == 0) {
+            errno = ENOENT;
+            return -1;
+        }
+        if (snprintf(target_path, target_path_size, "%s", host_binary) >= (int)target_path_size) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+    } else {
+        if (snprintf(target_host_path, sizeof(target_host_path), "%s/run/target", root) >= (int)sizeof(target_host_path) ||
+            snprintf(target_path, target_path_size, "/run/target") >= (int)target_path_size) {
+            errno = ENAMETOOLONG;
+            return -1;
+        }
+    }
+    if (snprintf(temp_path, sizeof(temp_path), "%s/tmp", root) >= (int)sizeof(temp_path)) {
         errno = ENAMETOOLONG;
         return -1;
     }
@@ -449,7 +471,7 @@ int phase2_rootfs_prepare(const char *host_binary, const char *root, char *targe
         return -1;
     }
     if (close(workspace_fd) < 0) return -1;
-    if (copy_target_binary(host_binary, target_host_path) < 0) return -1;
+    if (!is_system_binary && copy_target_binary(host_binary, target_host_path) < 0) return -1;
     if (chdir(root) < 0) return -1;
     if (syscall(SYS_pivot_root, ".", ".oldroot") < 0) return -1;
     if (chdir("/") < 0) return -1;
