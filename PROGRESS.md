@@ -3347,3 +3347,34 @@
 - Files: `PROGRESS.md`, `client/Dockerfile`, `client/nginx.conf`, `docker-compose.yml`, `gateway/Dockerfile`, `worker/Dockerfile`.
 - Linked: LOG-0190.
 - Tutor review: pending
+
+
+## [LOG-0192] 2026-11-16 18:48 IST | PLAN | actor: agent
+- Goal: Update README.md with Phase 7 implementation state, verified 50-concurrent-runs load benchmark results, Docker Compose instructions, and honest runtime limit documentation.
+- Steps:
+  1. Update `README.md`:
+     - Update implementation state to reflect Phase 7 completion.
+     - Roadmap table: update Phase 7 status to `Complete (phase-7-done pending review)`.
+     - Document 50 concurrent runs benchmark methodology, exact command (`verify_load_test_50.sh`), and empirical latency metrics (min 1105 ms, median 1325 ms, p95 1444 ms, max 1463 ms, 0 leaked cgroups/processes).
+     - Document Docker Compose architecture, loopback-only port bindings, startup/teardown commands, and host kernel / Docker socket prerequisites.
+     - Document honest language runtime scope reconciliation: C and Python are verified inside the sandbox; concrete architectural blockers for Node.js (144MB binary, V8 1.4GB virtual memory, libuv syscalls) and Java/Kotlin (JVM virtual memory, libjli.so dynamic linking) without weakening sandbox seccomp/rlimits.
+  2. Verification:
+     - Verify repo hygiene, append-only checks, and diff check.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0191.
+- Tutor review: pending
+
+
+## [LOG-0193] 2026-11-16 18:49 IST | DONE | actor: agent
+- Reason: Complete documentation update in README.md capturing Phase 7 multi-service architecture, verified 50 concurrent runs load benchmarks, and honest runtime limitations.
+- Details / Change:
+  1. Updated `README.md`:
+     - Updated implementation state header to Phase 7 and added section 5 documenting Docker Compose topology, multi-stage images, loopback-only exposure, and verified 50-room concurrent load test execution.
+     - Roadmap table: marked Phase 7 status as `Complete (phase-7-done pending review)`.
+     - Honest Limitations: documented empirical runtime constraints for heavy runtimes (Node.js 144MB binary / 1.4GB virtual memory / libuv syscalls; Java/Kotlin JVM multi-gigabyte virtual memory reservation and libjli.so dynamic linking). Emphasized that process sandbox controls (seccomp allowlist, cgroup limits, tmpfs size) are preserved fail-closed without weakening.
+     - Quickstart: added command lines for `verify_load_test_50.sh` and `docker compose config`.
+  2. Verification:
+     - Ran `./scripts/check_progress_append_only.sh`, `./scripts/check_repo_hygiene.sh`, and `git diff --check`. All passed cleanly with 0 errors.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0192.
+- Tutor review: pending

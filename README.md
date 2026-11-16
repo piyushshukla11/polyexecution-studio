@@ -4,7 +4,7 @@ PolyExecution Studio is a collaborative multi-language code execution platform u
 
 ---
 
-## Current Implementation State (Phase 6)
+## Current Implementation State (Phase 7)
 
 The project currently implements the full collaborative execution stack:
 
@@ -20,15 +20,16 @@ The project currently implements the full collaborative execution stack:
    - Ephemeral workspace lifecycle: creates private directories (`/tmp/pes-job-<id>-*` with mode `0700`), writes source files, and guarantees recursive unlinking in a `finally` block with validation against symlinks and path traversal.
    - Sandboxed compilation: routes `/usr/bin/gcc` through `sandbox-runner` with pre-opened descriptor handoff for the output artifact.
    - Sandboxed execution: routes compiled targets or `/usr/bin/python3` through `sandbox-runner` with bounded standard input forwarding.
+   - High-concurrency I/O: uses dedicated Java 21 virtual threads (`Executors.newVirtualThreadPerTaskExecutor()`) for asynchronous process pipe draining and standard input feeding, avoiding thread starvation under heavy concurrent execution loads.
    - Result classification: translates runner results into typed protobuf statuses (`OK`, `COMPILE_ERROR`, `RUNTIME_ERROR`, `TIMEOUT`, `OUTPUT_LIMIT`, `MEMORY_LIMIT`, `SANDBOX_ERROR`).
 
 3. **Java Spring Boot Gateway (`gateway/`)**:
    - Ingress gateway binding strictly to loopback (`127.0.0.1:8080`) providing a WebSocket endpoint on `/ws` and a REST health check on `/health`.
-   - Structured JSON protocol: handles client messages (`room.join`, `room.leave`, `run`, `collab.update`, `collab.awareness`, `collab.sync`) and emits truthful server events (`room.joined`, `room.left`, `run.accepted`, `run.progress`, `run.rejected`, `run.completed`, `collab.update`, `collab.awareness`, `collab.sync`, `error`).
+   - Structured JSON protocol: handles client messages (`room.join`, `room.leave`, `run`, `collab.update`, `collab.awareness`, `collab.sync`) and emits truthful server events (`room.joined`, `room.peer_joined`, `room.left`, `run.accepted`, `run.progress`, `run.rejected`, `run.completed`, `collab.update`, `collab.awareness`, `collab.sync`, `error`).
    - Progress relay: forwards worker progress stream milestones as `{ "type": "run.progress", "roomId": "...", "requestId": "...", "stage": "COMPILING" | "RUNNING" }` exclusively to members of the room.
    - Real-time collaboration relay: routes opaque Yjs CRDT updates (`collab.update`) and ephemeral awareness deltas (`collab.awareness`) exclusively to connected peers in the same room. Enforces bounds: max 64 KiB per collab update, max 16 KiB per awareness update, 120 collab updates/sec rate limit per session, and bounded in-memory room history (up to 2,000 updates / 2 MiB) for initial synchronization of newly joined clients (`collab.sync`).
    - Bounded in-memory room manager: enforces room capacity (max 100 rooms, max 20 sessions per room), sliding-window rate limiting (30 runs/minute), thread-safe session tracking, disconnect cleanup, and strict room isolation with zero cross-room event leakage.
-   - Concurrency governance: enforces an explicit single active run per room policy and a global concurrent execution ceiling (16 runs max).
+   - Concurrency governance: enforces an explicit single active run per room policy and configurable global concurrent execution ceiling (`gateway.max-global-concurrent-runs`, default 16, scalable to 64+).
    - Origin security: explicit development origin allowlist rejecting cross-site WebSocket hijacking attempts.
 
 4. **React Monaco Web Client with Yjs Collaboration (`client/`)**:
@@ -41,6 +42,12 @@ The project currently implements the full collaborative execution stack:
    - Truthful execution lifecycle state badge rendering: `Idle`, `Accepted`, `Compiling`, `Running`, `Completed`, `Timed Out`, and `Compile Error`.
    - Stream separation: independent, bounded viewers for standard output (stdout) and standard error (stderr).
    - Real-time telemetry panel: renders truthful metrics reported by the Linux sandbox runner (`wallMs`, `cpuMs`, `peakMemoryKb`, `exitCode`, `signal`, `status`).
+
+5. **Reproducible Docker Compose & Load Benchmark (`docker-compose.yml`, `gateway/tests/`)**:
+   - Containerization: Multi-stage Dockerfiles for Gateway (Eclipse Temurin JRE 21), Worker (Ubuntu 24.04 with GCC, Python 3, libseccomp, and native sandbox runner), and Client (Node 22 build + Nginx Alpine static server and reverse proxy).
+   - Network topology: Private internal bridge network (`pes-net`) with host ports strictly bound to loopback (`127.0.0.1:8080`, `127.0.0.1:50051`, `127.0.0.1:5173`).
+   - Verified 50 concurrent runs load benchmark: Automated harness (`gateway/tests/verify_load_test_50.sh`) opens 50 concurrent WebSocket sessions across 50 distinct isolated rooms, dispatches 50 simultaneous code executions through the real Gateway -> Worker -> Sandbox Runner pipeline, and completes in ~4.08 seconds (100% success) with zero lingering cgroups and zero stray processes.
+   - Truthful overload protection: Verified honest `ROOM_RUN_IN_PROGRESS` rejection when room concurrency is exceeded.
 
 ---
 
@@ -55,7 +62,7 @@ The project currently implements the full collaborative execution stack:
 | **Phase 4** | Java Gateway & WebSocket Server | Complete (`phase-4-done`) | WebSocket client triggers run and receives status events |
 | **Phase 5** | Browser Web Client (Monaco Editor) | Complete (`phase-5-done`) | Browser editor executes code; renders Idle, Compiling, Running, Timed Out states |
 | **Phase 6** | Real-Time Collaboration (Yjs CRDT) | Complete (`phase-6-done`) | Two browsers converge; cursors visible; room isolation; disconnect cleanup |
-| **Phase 7** | Multi-Language Runtimes & Load Benchmarks | Planned | 50 concurrent runs without host instability; documented resource limits |
+| **Phase 7** | Multi-Language Runtimes & Load Benchmarks | Complete (`phase-7-done` pending review) | 50 concurrent runs without host instability; documented resource limits; Docker Compose setup |
 
 ---
 
@@ -68,7 +75,11 @@ In accordance with project governance rules, the following limitations reflect c
 - **In-memory room state**: Collaboration rooms, update history, and session memberships are stored entirely in JVM memory and are not persisted across server restarts. Empty rooms are pruned upon disconnection.
 - **Truthful milestone events (no fake timers)**: Progress states (`Compiling`, `Running`) reflect actual worker milestone emissions immediately before sandboxed GCC compilation and before sandboxed execution. Compilation failures immediately halt and emit `Compile Error` without entering the running state.
 - **Unauthenticated sessions**: WebSocket sessions use server-assigned random UUIDs. Client-supplied user identifiers are untrusted and used only for room display metadata.
-- **Language support**: The pipeline currently supports C (compiled and executed inside the sandbox) and Python 3 (interpreted inside the sandbox). Runtimes for Rust, Java, and Node.js are planned for Phase 7.
+- **Language support & runtime limits**: The pipeline currently supports C (compiled and executed inside the sandbox) and Python 3 (interpreted inside the sandbox). Architectural analysis of heavy runtimes (Node.js, Java, Kotlin):
+  - Node.js requires a 144 MiB binary (exceeding the 64 MiB sandbox runner copy limit), V8 virtual address reservation (~1.4 GiB `RLIMIT_AS`), and libuv event loop syscalls (`epoll_create1`, `socketpair(AF_UNIX)`).
+  - Java and Kotlin HotSpot JVM require dynamic library lookup (`libjli.so`) which fails when copied into `/run/target` due to relative rpath lookup, as well as multiple gigabytes of virtual memory reservation for Compressed Class Space, Metaspace, and GC worker threads on startup (breaking low `RLIMIT_AS`, as explained in interview prep Q7).
+  - To preserve the strict security boundaries of the Linux process sandbox (cgroups v2, minimal tmpfs, seccomp allowlist, capability dropping), these limits are not weakened; running heavy runtimes requires dedicated microVM or container-level sandboxing (e.g. Firecracker or gVisor) outside the process sandbox.
+- **Docker prerequisites**: Accessing the host Docker daemon requires membership in the host `docker` group (`/var/run/docker.sock` owned by `root:docker 0660`). Running the sandbox runner inside a container requires Linux cgroups v2 delegation and unprivileged user namespace support on the host.
 - **Linux host requirements**: Production sandbox execution requires a Linux kernel with cgroups v2 delegation (`cpu`, `memory`, `pids`) and unprivileged user namespaces. If these prerequisites are absent, the runner strictly fails closed (`SANDBOX_ERROR`).
 - **Containment model**: Isolation is enforced via Linux kernel namespaces, cgroups, and seccomp-bpf. It does not use hypervisor-level virtual machines (such as Firecracker or gVisor).
 
@@ -147,6 +158,26 @@ bash worker/tests/verify_grpcurl.sh 50055 fake
 
 # Run fail-closed verification (verifies sandbox error when unprivileged)
 bash worker/tests/verify_grpcurl.sh 50055 production
+```
+
+### 8. Phase 7 50-Concurrent-Runs Load Benchmark
+Run the automated multi-room concurrent execution benchmark:
+
+```bash
+# Run 50 simultaneous executions across 50 rooms through Gateway -> Worker -> Sandbox Runner
+bash gateway/tests/verify_load_test_50.sh 8080 50051 50
+```
+
+### 9. Docker Compose Setup & Validation
+```bash
+# Validate Compose configuration
+docker compose config
+
+# Build and start services (requires host Docker daemon access and cgroups v2)
+docker compose up --build -d
+
+# Stop and tear down services
+docker compose down
 ```
 
 ---
