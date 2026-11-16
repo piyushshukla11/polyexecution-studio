@@ -2799,3 +2799,27 @@
 - Files: `PROGRESS.md`, `client/src/hooks/useExecutionSocket.ts`, `client/src/__tests__/useExecutionSocket.test.ts`.
 - Linked: LOG-0170.
 - Tutor review: pending
+
+
+## [LOG-0172] 2026-11-16 08:48 IST | DECISION | actor: Piyush + tutor
+- Reason: Formally record tutor review approval and sign-off for Phase 5 React Monaco single-user execution panel, close Phase 5 Definition of Done, and authorize non-fast-forward merge into `main` with tag `phase-5-done`.
+- Details / Change:
+  1. Tutor reviewed the Phase 5 implementation, browser test evidence, Monaco interaction via accessible input, Submitting state separation, bounded reconnect with confirmed room-joined counter reset, and unpinned toolchain labels. The tutor found no remaining Phase 5 DoD blocker, signed off on Phase 5, and approved merging `phase/5-client` into `main` under the project's normal process.
+  2. Phase 5 Definition of Done in `docs/04_BUILD_PLAN.md` ("React + Monaco, run UI, metrics panel (single user) — Browser run works; statuses Idle, Compiling, Running, Timed Out render") is fully satisfied with verified end-to-end evidence:
+     - Real browser interaction: Playwright drives Monaco through standard accessible input without test hooks in production code.
+     - Truthful execution milestones: renders SUBMITTING -> ACCEPTED -> COMPILING -> RUNNING -> COMPLETED sequence driven strictly by backend events. Invalid C stops at COMPILE_ERROR without entering the running state.
+     - Single-user execution panel: supports C and Python 3 with syntax highlighting, stdin forwarding, stream-separated stdout/stderr viewers, and authentic sandbox telemetry (`wallMs`, `cpuMs`, `peakMemoryKb`, `exitCode`, `signal`, `status`).
+     - Bounded reconnect: reconnects automatically on socket close with exponential backoff; resets retry counter strictly upon confirmed room join; halts at 5-attempt ceiling during flapping.
+  3. All suites verified:
+     - `client` unit tests: 21/21 passed (`npm test`).
+     - `client` full-stack browser E2E: 4/4 passed (`verify_e2e_browser.sh`).
+     - `sandbox-daemon`: 22/22 integration tests passed (18 Phase 1 + 4 Phase 2).
+     - `worker`: 100% passed (`gradle test --rerun-tasks`).
+     - `gateway`: 100% passed (`gradle test --rerun-tasks`).
+     - Hygiene and progress append-only checks: clean pass.
+  4. Phase 5 DoD status is marked CLOSED and APPROVED.
+  5. Action authorized: Update `README.md` to mark Phase 5 Complete (`phase-5-done`), commit to `phase/5-client`, merge `phase/5-client` into `main` using `git merge --no-ff`, and tag `phase-5-done` per AI_RULES.md §10.
+- Verification: `(cd client && npm test)` (21/21 passed); `bash client/tests/verify_e2e_browser.sh 8080 50051 5173` (4/4 passed); `make -C sandbox-daemon test` (22/22 passed); `(cd worker && gradle test)` (100% passed); `(cd gateway && gradle test)` (100% passed); `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0171, LOG-0170, LOG-0169.
+- Tutor review: approved for Phase 5 sign-off and merge into main
