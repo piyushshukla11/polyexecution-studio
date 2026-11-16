@@ -2823,3 +2823,94 @@
 - Files: `PROGRESS.md`, `README.md`.
 - Linked: LOG-0171, LOG-0170, LOG-0169.
 - Tutor review: approved for Phase 5 sign-off and merge into main
+
+
+## [LOG-0173] 2026-11-16 09:08 IST | DECISION | actor: agent
+- Reason: Record Phase 6 dependency selections (yjs, y-protocols, y-monaco) and WebSocket collaboration protocol design per AI_RULES.md §7.
+- Details / Change:
+  1. Frontend Collaboration Dependencies:
+     - `yjs` (v13.6.33): Core CRDT framework providing conflict-free peer convergence for shared document state without centralized locks or OT servers.
+     - `y-protocols` (v1.0.7): Standard binary awareness and presence protocol handling ephemeral collaborator state (cursors, selections, user info) distinct from durable document CRDT updates.
+     - `y-monaco` (v0.1.6): Official Monaco editor binding translating between `Y.Text` CRDT mutations and Monaco `ITextModel` deltas while rendering remote cursor decorations driven by Awareness.
+     - Alternatives considered: Automerge (larger JSON CRDT, less mature Monaco binding), custom Operational Transformation (requires complex central transform engine and lock serialization, violates architecture goal), CodeMirror native collab (project specifically requires Monaco).
+     - Cost/maintenance: Minimal bundle impact (~40 KiB minified/gzipped for all three packages); mature, zero-dependency except internal `lib0`.
+  2. Protocol Contract for WebSocket Collaboration:
+     - Additive message types on existing `/ws` endpoint:
+       - `collab.update`: `{ "type": "collab.update", "update": "<base64>" }` (opaque CRDT delta; sender and room derived strictly from server session).
+       - `collab.awareness`: `{ "type": "collab.awareness", "awareness": "<base64>" }` (ephemeral presence delta; sender session attached by server).
+       - `collab.sync`: `{ "type": "collab.sync", "roomId": "...", "updates": [ "<base64>", ... ] }` (server-to-client catchup sent on room join).
+  3. Security & Trust Boundaries:
+     - Session-derived authorization: Gateway derives `roomId` and sender identity strictly from server-side session state (`sessionToRoom`). Clients cannot spoof room or sender identity in payloads.
+     - Bounded payloads: Max 64 KiB for collab updates, max 16 KiB for awareness updates. Oversized payloads rejected with `MESSAGE_TOO_LARGE`.
+     - Rate limits: Max 120 collab updates/sec, max 60 awareness updates/sec per session to prevent event flood / DoS.
+     - Room isolation: Updates relayed strictly to sessions in the same room (`broadcastToRoomExcept`); cross-room leakage strictly prevented.
+     - Server-assigned presence identity: `RoomJoinedEvent` provides `assignedUser` `{ name, color }` derived deterministically by Gateway from a distinct color palette.
+     - Ephemeral cleanup: Disconnect/leave immediately triggers `room.left`, removing remote cursors; room teardown frees update history.
+- Files: `PROGRESS.md`.
+- Linked: LOG-0172.
+- Tutor review: pending
+
+
+## [LOG-0174] 2026-11-16 09:08 IST | PLAN | actor: agent
+- Reason: Implement Phase 6 real-time collaboration meeting the exact Definition of Done in docs/04_BUILD_PLAN.md ("Yjs collaboration — Two browsers converge; cursors visible").
+- Details / Change:
+  1. Gateway collaboration relay, rate limiting, and update buffering:
+     - Update `GatewayProperties` with `maxCollabUpdateBytes` (64 KiB), `maxAwarenessBytes` (16 KiB), `maxRoomCollabHistory` (2,000 updates / 2 MiB), `collabRateLimitPerSec` (120).
+     - Extend `Room` with thread-safe `collabUpdates` list, `collabByteCount`, and sliding window collaboration rate counters.
+     - Add `CollabUpdateMessage`, `CollabAwarenessMessage`, `CollabUpdateEvent`, `CollabAwarenessEvent`, `CollabSyncEvent`, and `AssignedUserDto`.
+     - Update `GatewayWebSocketHandler` to handle `collab.update` and `collab.awareness`, validating session room membership, payload size, and rate limits.
+     - In `handleRoomJoin`, emit `collab.sync` directly to newly joined session containing existing room updates.
+     - Add Gateway unit and integration tests verifying room isolation, size limit rejection, rate limit rejection, unauthorized sender rejection, and initial catchup synchronization.
+  2. Client Yjs and Monaco integration:
+     - Install `yjs`, `y-protocols`, and `y-monaco` in `client/package.json`.
+     - Implement collaboration provider hook (`useCollaboration` / update `useExecutionSocket`) managing `Y.Doc`, `Y.Text` ('monaco'), `Y.Map` ('meta' for language), and `Awareness`.
+     - Bind `ytext` and `awareness` to Monaco editor using `MonacoBinding`.
+     - Handle room URL query parameter (`?room=<id>`) and room switcher in UI so multiple browsers can join the same room easily.
+     - Update CSS with styles for `.yRemoteSelection`, `.yRemoteSelectionHead`, and participant name labels.
+     - Add client unit tests for provider lifecycle, update serialization/deserialization, awareness cleanup on `room.left`, and language synchronization.
+  3. Two-Browser Playwright End-to-End Suite:
+     - Implement Playwright test with two independent browser pages connecting to the live Gateway and joining the same room.
+     - Verify concurrent and sequential edits converge to identical text on both pages.
+     - Verify remote cursor decorations and selections are visible across pages.
+     - Verify room isolation: third page in separate room does not receive updates.
+     - Verify disconnect/leave cleanly removes remote cursors without residual stale decorations.
+     - Verify Phase 5 execution flows (C compile+run, C compile error, Python run, timeout) still pass.
+  4. Documentation & Sign-off:
+     - Add 3 required explain-back questions to `docs/05_INTERVIEW_PREP.md` (unchecked).
+     - Update `README.md` to reflect Phase 6 completion with honest limitations.
+     - Run repo hygiene, progress append-only checks, and test suites.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/*`, `client/*`.
+- Linked: LOG-0173, LOG-0172.
+- Tutor review: pending
+
+
+## [LOG-0175] 2026-11-16 10:48 IST | DONE | actor: agent
+- Reason: Complete Phase 6 real-time collaboration implementation and verification meeting Definition of Done ("Two browsers converge; cursors visible").
+- Details / Change:
+  1. Implemented Java Gateway collaboration backend:
+     - `GatewayProperties`: configured bounds (`maxCollabUpdateBytes` 64 KiB, `maxAwarenessBytes` 16 KiB, `maxRoomCollabHistory` 2,000 updates / 2 MiB, `collabRateLimitPerSec` 120).
+     - `Room`: thread-safe opaque collaboration update buffer, byte tracker, and sliding-window rate limiter per session.
+     - `RoomManager`: room-isolated relay (`broadcastToRoomExcept`), deterministic participant color assignment from 8-color palette, initial catchup history retrieval, and session cleanup.
+     - `GatewayWebSocketHandler`: handled `collab.update`, `collab.awareness`, and client-requested `collab.sync`, deriving sender identity and room membership strictly from server-side session state.
+     - Added comprehensive unit and integration tests in `RoomManagerTest` and `GatewayIntegrationTest` covering relay isolation, payload size rejections, rate limiting, and sync catchup (41/41 tests passing).
+  2. Implemented Client Yjs + Monaco collaborative workbench:
+     - Installed `yjs` (v13.6.33), `y-protocols` (v1.0.7), and `y-monaco` (v0.1.6).
+     - Created `codec.ts` for lossless binary `Uint8Array` <-> Base64 conversion with unit tests.
+     - Created `useCollaboration.ts` managing `Y.Doc`, `Awareness`, `ytext` ('monaco'), `ymeta` ('meta' for language), local awareness updates, incoming event dispatch, dynamic participant style injection, and `MonacoBinding`.
+     - In `CodeEditor.tsx`, set Monaco to uncontrolled mode (`value={undefined}`) with `defaultValue` when mounted with `MonacoBinding`, preventing dual-controller feedback loops.
+     - In `App.tsx`, wired collaboration provider, room join form, and collaborator pill badges.
+     - Configured Vite and Vitest aliases for `monaco-editor/esm` and inlined `y-monaco` (29/29 tests passing).
+  3. Two-Browser Playwright End-to-End Suite (`client/tests/collab.spec.ts`):
+     - Opens two independent browser contexts joining the same room through live Gateway.
+     - Sequential edits from Page 1 converge to Page 2.
+     - Remote cursor head and selection decorations are visible across pages.
+     - Concurrent edits from Page 1 and Page 2 converge to identical document text.
+     - Separate room isolation: third page in separate room receives zero updates or cursor decorations.
+     - Disconnect/leave cleans up peer awareness without stale cursors.
+     - Collaborative code execution completes with truthful status progression and stdout (5/5 Playwright tests passing).
+  4. Documentation:
+     - Added 3 required explain-back questions (unchecked) to `docs/05_INTERVIEW_PREP.md`.
+     - Updated `README.md` to reflect Phase 6 completion with honest limitations.
+- Files: `PROGRESS.md`, `README.md`, `docs/05_INTERVIEW_PREP.md`, `client/*`, `gateway/*`.
+- Linked: LOG-0174, LOG-0173.
+- Tutor review: pending

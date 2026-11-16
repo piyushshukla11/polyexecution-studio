@@ -1,18 +1,25 @@
 package pes.gateway.service;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class Room {
     private final String roomId;
     private final Set<String> sessionIds = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean runActive = new AtomicBoolean(false);
     private final ConcurrentLinkedQueue<Long> runTimestamps = new ConcurrentLinkedQueue<>();
+    private final List<String> collabUpdates = new CopyOnWriteArrayList<>();
+    private final AtomicInteger collabByteCount = new AtomicInteger(0);
+    private final Map<String, ConcurrentLinkedQueue<Long>> sessionCollabTimestamps = new ConcurrentHashMap<>();
     private volatile String activeRequestId = null;
 
     public Room(String roomId) {
@@ -36,6 +43,7 @@ public class Room {
     }
 
     public boolean removeSession(String sessionId) {
+        sessionCollabTimestamps.remove(sessionId);
         return sessionIds.remove(sessionId);
     }
 
@@ -90,5 +98,42 @@ public class Room {
 
     public String getActiveRequestId() {
         return activeRequestId;
+    }
+
+    public synchronized boolean addCollabUpdate(String updateBase64, int maxHistoryCount, int maxHistoryBytes) {
+        if (updateBase64 == null || updateBase64.isBlank()) {
+            return false;
+        }
+        int updateLength = updateBase64.length();
+        if (collabUpdates.size() >= maxHistoryCount || collabByteCount.get() + updateLength > maxHistoryBytes) {
+            return false;
+        }
+        collabUpdates.add(updateBase64);
+        collabByteCount.addAndGet(updateLength);
+        return true;
+    }
+
+    public List<String> getCollabUpdates() {
+        return new ArrayList<>(collabUpdates);
+    }
+
+    public boolean checkCollabRateLimit(String sessionId, int maxPerSec, long nowMs) {
+        long windowStart = nowMs - 1000L;
+        ConcurrentLinkedQueue<Long> queue = sessionCollabTimestamps.computeIfAbsent(
+            sessionId, k -> new ConcurrentLinkedQueue<>()
+        );
+        while (!queue.isEmpty()) {
+            Long first = queue.peek();
+            if (first != null && first < windowStart) {
+                queue.poll();
+            } else {
+                break;
+            }
+        }
+        if (queue.size() < maxPerSec) {
+            queue.offer(nowMs);
+            return true;
+        }
+        return false;
     }
 }

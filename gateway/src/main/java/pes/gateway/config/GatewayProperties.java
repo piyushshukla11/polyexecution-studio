@@ -24,6 +24,11 @@ public class GatewayProperties {
     private int maxMessageBytes = 512 * 1024; // 512 KiB
     private int maxSourceBytes = 256 * 1024;  // 256 KiB
     private int maxStdinBytes = 64 * 1024;    // 64 KiB
+    private int maxCollabUpdateBytes = 64 * 1024; // 64 KiB
+    private int maxAwarenessBytes = 16 * 1024;    // 16 KiB
+    private int maxRoomCollabHistory = 2000;      // max 2000 updates in room memory
+    private int maxRoomCollabHistoryBytes = 2 * 1024 * 1024; // 2 MiB
+    private int collabRateLimitPerSec = 120;      // max 120 collab messages / sec per session
 
     public String getWorkerGrpcTarget() {
         return workerGrpcTarget;
@@ -95,5 +100,45 @@ public class GatewayProperties {
 
     public void setMaxStdinBytes(int maxStdinBytes) {
         this.maxStdinBytes = maxStdinBytes;
+    }
+
+    public int getMaxCollabUpdateBytes() {
+        return maxCollabUpdateBytes;
+    }
+
+    public void setMaxCollabUpdateBytes(int maxCollabUpdateBytes) {
+        this.maxCollabUpdateBytes = maxCollabUpdateBytes;
+    }
+
+    public int getMaxAwarenessBytes() {
+        return maxAwarenessBytes;
+    }
+
+    public void setMaxAwarenessBytes(int maxAwarenessBytes) {
+        this.maxAwarenessBytes = maxAwarenessBytes;
+    }
+
+    public int getMaxRoomCollabHistory() {
+        return maxRoomCollabHistory;
+    }
+
+    public void setMaxRoomCollabHistory(int maxRoomCollabHistory) {
+        this.maxRoomCollabHistory = maxRoomCollabHistory;
+    }
+
+    public int getMaxRoomCollabHistoryBytes() {
+        return maxRoomCollabHistoryBytes;
+    }
+
+    public void setMaxRoomCollabHistoryBytes(int maxRoomCollabHistoryBytes) {
+        this.maxRoomCollabHistoryBytes = maxRoomCollabHistoryBytes;
+    }
+
+    public int getCollabRateLimitPerSec() {
+        return collabRateLimitPerSec;
+    }
+
+    public void setCollabRateLimitPerSec(int collabRateLimitPerSec) {
+        this.collabRateLimitPerSec = collabRateLimitPerSec;
     }
 }

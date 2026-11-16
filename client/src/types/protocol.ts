@@ -7,6 +7,11 @@ export interface ResourceLimitsDto {
   maxOutputKb?: number;
 }
 
+export interface AssignedUser {
+  name: string;
+  color: string;
+}
+
 export interface ClientRunMessage {
   type: 'run';
   roomId: string;
@@ -27,13 +32,34 @@ export interface RoomLeaveMessage {
   roomId: string;
 }
 
-export type OutgoingMessage = ClientRunMessage | RoomJoinMessage | RoomLeaveMessage;
+export interface CollabSyncMessage {
+  type: 'collab.sync';
+}
+
+export interface CollabUpdateMessage {
+  type: 'collab.update';
+  update: string; // base64
+}
+
+export interface CollabAwarenessMessage {
+  type: 'collab.awareness';
+  awareness: string; // base64
+}
+
+export type OutgoingMessage =
+  | ClientRunMessage
+  | RoomJoinMessage
+  | RoomLeaveMessage
+  | CollabSyncMessage
+  | CollabUpdateMessage
+  | CollabAwarenessMessage;
 
 export interface RoomJoinedEvent {
   type: 'room.joined';
   roomId: string;
   sessionId: string;
   memberCount: number;
+  assignedUser?: AssignedUser;
 }
 
 export interface RoomLeftEvent {
@@ -86,8 +112,28 @@ export interface RunRejectedEvent {
   message: string;
 }
 
+export interface CollabSyncEvent {
+  type: 'collab.sync';
+  roomId: string;
+  updates: string[];
+}
+
+export interface CollabUpdateEvent {
+  type: 'collab.update';
+  roomId: string;
+  update: string;
+}
+
+export interface CollabAwarenessEvent {
+  type: 'collab.awareness';
+  roomId: string;
+  senderSessionId: string;
+  awareness: string;
+}
+
 export interface GenericErrorEvent {
   type: 'error';
+  code?: string;
   message: string;
 }
 
@@ -98,6 +144,9 @@ export type IncomingServerEvent =
   | RunProgressEvent
   | RunCompletedEvent
   | RunRejectedEvent
+  | CollabSyncEvent
+  | CollabUpdateEvent
+  | CollabAwarenessEvent
   | GenericErrorEvent;
 
 export type ExecutionUiStatus =

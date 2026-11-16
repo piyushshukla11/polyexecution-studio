@@ -4,12 +4,22 @@ import { App } from '../App.tsx';
 
 // Mock Monaco Editor for JSDOM unit test
 vi.mock('@monaco-editor/react', () => ({
-  default: ({ value, onChange, language }: { value: string; onChange: (val: string) => void; language: string }) => (
+  default: ({
+    value,
+    defaultValue,
+    onChange,
+    language
+  }: {
+    value?: string;
+    defaultValue?: string;
+    onChange?: (val: string) => void;
+    language: string;
+  }) => (
     <div data-testid="mock-monaco-editor" data-language={language}>
       <textarea
         data-testid="mock-editor-textarea"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
+        value={value !== undefined ? value : defaultValue ?? ''}
+        onChange={(e) => onChange?.(e.target.value)}
       />
     </div>
   )

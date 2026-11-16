@@ -5,13 +5,16 @@ import {
   ClientRunMessage,
   IncomingServerEvent,
   ExecutionUiStatus,
-  ExecutionMetrics
+  ExecutionMetrics,
+  AssignedUser,
+  OutgoingMessage
 } from '../types/protocol.ts';
 
 export interface UseExecutionSocketOptions {
   url?: string;
   roomId?: string;
   maxReconnectAttempts?: number;
+  onServerMessage?: (event: IncomingServerEvent) => void;
 }
 
 export function useExecutionSocket(options?: UseExecutionSocketOptions) {
@@ -29,6 +32,8 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
 
   const [connected, setConnected] = useState<boolean>(false);
   const [joined, setJoined] = useState<boolean>(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [assignedUser, setAssignedUser] = useState<AssignedUser | null>(null);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [reconnectAttempt, setReconnectAttempt] = useState<number>(0);
 
@@ -41,6 +46,11 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const currentRequestIdRef = useRef<string | null>(null);
+  const onServerMessageRef = useRef(options?.onServerMessage);
+
+  useEffect(() => {
+    onServerMessageRef.current = options?.onServerMessage;
+  });
 
   useEffect(() => {
     let isMounted = true;
@@ -74,6 +84,7 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
         try {
           const data = JSON.parse(event.data) as IncomingServerEvent;
           handleServerEvent(data);
+          onServerMessageRef.current?.(data);
         } catch (e: unknown) {
           console.error('Failed to parse incoming WebSocket message', e);
         }
@@ -88,6 +99,7 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
         if (!isMounted) return;
         setConnected(false);
         setJoined(false);
+        setSessionId(null);
 
         // Abort in-flight run without replaying
         if (currentRequestIdRef.current !== null) {
@@ -122,6 +134,10 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
         case 'room.joined':
           if (event.roomId === roomId) {
             setJoined(true);
+            setSessionId(event.sessionId);
+            if (event.assignedUser) {
+              setAssignedUser(event.assignedUser);
+            }
             attempts = 0;
             setReconnectAttempt(0);
             setConnectionError(null);
@@ -250,6 +266,19 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
     [roomId, joined]
   );
 
+  const sendMessage = useCallback((msg: OutgoingMessage): boolean => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+    try {
+      wsRef.current.send(JSON.stringify(msg));
+      return true;
+    } catch (e) {
+      console.error('Failed to send WebSocket message', e);
+      return false;
+    }
+  }, []);
+
   const resetState = useCallback(() => {
     setUiStatus('IDLE');
     setStageHistory(['IDLE']);
@@ -264,6 +293,8 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
     roomId,
     connected,
     joined,
+    sessionId,
+    assignedUser,
     connectionError,
     reconnectAttempt,
     uiStatus,
@@ -273,6 +304,7 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
     metrics,
     errorMessage,
     runCode,
+    sendMessage,
     resetState
   };
 }

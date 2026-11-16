@@ -4,9 +4,9 @@ PolyExecution Studio is a collaborative multi-language code execution platform u
 
 ---
 
-## Current Implementation State (Phase 5)
+## Current Implementation State (Phase 6)
 
-The project currently implements the bottom four layers of the architecture:
+The project currently implements the full collaborative execution stack:
 
 1. **C Sandbox Runner (`sandbox-daemon/sandbox-runner`)**:
    - Systems programming core implementing low-level process lifecycle management (`fork`, `execve`, `wait4`), resource limit enforcement (`RLIMIT_CPU`, `RLIMIT_AS`, `RLIMIT_FSIZE`, `RLIMIT_CORE`), and non-blocking stream capture (`poll`, pipe draining).
@@ -24,15 +24,19 @@ The project currently implements the bottom four layers of the architecture:
 
 3. **Java Spring Boot Gateway (`gateway/`)**:
    - Ingress gateway binding strictly to loopback (`127.0.0.1:8080`) providing a WebSocket endpoint on `/ws` and a REST health check on `/health`.
-   - Structured JSON protocol: handles client messages (`room.join`, `room.leave`, `run`) and emits truthful server events (`room.joined`, `room.left`, `run.accepted`, `run.progress`, `run.rejected`, `run.completed`, `error`).
+   - Structured JSON protocol: handles client messages (`room.join`, `room.leave`, `run`, `collab.update`, `collab.awareness`, `collab.sync`) and emits truthful server events (`room.joined`, `room.left`, `run.accepted`, `run.progress`, `run.rejected`, `run.completed`, `collab.update`, `collab.awareness`, `collab.sync`, `error`).
    - Progress relay: forwards worker progress stream milestones as `{ "type": "run.progress", "roomId": "...", "requestId": "...", "stage": "COMPILING" | "RUNNING" }` exclusively to members of the room.
+   - Real-time collaboration relay: routes opaque Yjs CRDT updates (`collab.update`) and ephemeral awareness deltas (`collab.awareness`) exclusively to connected peers in the same room. Enforces bounds: max 64 KiB per collab update, max 16 KiB per awareness update, 120 collab updates/sec rate limit per session, and bounded in-memory room history (up to 2,000 updates / 2 MiB) for initial synchronization of newly joined clients (`collab.sync`).
    - Bounded in-memory room manager: enforces room capacity (max 100 rooms, max 20 sessions per room), sliding-window rate limiting (30 runs/minute), thread-safe session tracking, disconnect cleanup, and strict room isolation with zero cross-room event leakage.
    - Concurrency governance: enforces an explicit single active run per room policy and a global concurrent execution ceiling (16 runs max).
    - Origin security: explicit development origin allowlist rejecting cross-site WebSocket hijacking attempts.
 
-4. **React Monaco Web Client (`client/`)**:
-   - Single-user execution workbench built with React 18, TypeScript, Vite, and Monaco Editor.
-   - Multi-language support: interactive language selector for C and Python with syntax highlighting and default starter templates.
+4. **React Monaco Web Client with Yjs Collaboration (`client/`)**:
+   - Real-time collaborative workbench built with React 18, TypeScript, Vite, Monaco Editor, Yjs (`yjs`), Awareness (`y-protocols`), and Monaco Binding (`y-monaco`).
+   - Shared CRDT document: room-scoped `Y.Doc` with `Y.Text` ('monaco') bound to Monaco Editor via `MonacoBinding`, synchronizing edits peer-to-peer through the Gateway with deterministic conflict-free convergence.
+   - Ephemeral presence: renders remote collaborators' colored cursor head indicators and selection highlights in Monaco, with collaborator pill badges in the header, and immediate removal upon participant disconnect (`room.left`).
+   - Room routing: supports URL query param (`?room=<id>`) and room join input bar for switching and sharing rooms.
+   - Multi-language support: interactive language selector for C and Python with shared language synchronization across room peers and default starter templates.
    - Standard input panel: user-configurable stdin textarea forwarded to the sandbox process.
    - Truthful execution lifecycle state badge rendering: `Idle`, `Accepted`, `Compiling`, `Running`, `Completed`, `Timed Out`, and `Compile Error`.
    - Stream separation: independent, bounded viewers for standard output (stdout) and standard error (stderr).
@@ -50,7 +54,7 @@ The project currently implements the bottom four layers of the architecture:
 | **Phase 3** | Kotlin Worker & Sandboxed Compilation | Complete (`phase-3-done`) | C and Python run end-to-end from a gRPC client (`grpcurl`), with C compilation running inside the sandbox |
 | **Phase 4** | Java Gateway & WebSocket Server | Complete (`phase-4-done`) | WebSocket client triggers run and receives status events |
 | **Phase 5** | Browser Web Client (Monaco Editor) | Complete (`phase-5-done`) | Browser editor executes code; renders Idle, Compiling, Running, Timed Out states |
-| **Phase 6** | Real-Time Collaboration (Yjs CRDT) | Planned | Concurrent multi-user edits converge deterministically |
+| **Phase 6** | Real-Time Collaboration (Yjs CRDT) | Complete (`phase-6-done` pending review) | Two browsers converge; cursors visible; room isolation; disconnect cleanup |
 | **Phase 7** | Multi-Language Runtimes & Load Benchmarks | Planned | 50 concurrent runs without host instability; documented resource limits |
 
 ---
@@ -60,8 +64,8 @@ The project currently implements the bottom four layers of the architecture:
 In accordance with project governance rules, the following limitations reflect current functionality:
 
 - **Loopback binding only**: All services (client at `127.0.0.1:5173`, gateway at `127.0.0.1:8080`, and worker at `127.0.0.1:50051`) bind strictly to loopback. Public ingress, TLS termination, and external identity provider authentication are deferred.
-- **Single-user execution**: The web client currently operates as a single-user execution workbench per room. Concurrent multi-user collaborative editing via CRDT is scheduled for Phase 6.
-- **In-memory room state**: Collaboration rooms and session memberships are stored entirely in JVM memory and are not persisted across server restarts. Empty rooms are pruned upon disconnection.
+- **Real-time collaboration**: Concurrent multi-user collaborative editing is implemented using Yjs CRDT (`yjs`), Monaco binding (`y-monaco`), and ephemeral presence (`y-protocols` Awareness). Edits converge deterministically without centralized locks. Updates are buffered up to 2 MiB / 2,000 updates per room, and rate-limited to 120 collab updates/sec per session.
+- **In-memory room state**: Collaboration rooms, update history, and session memberships are stored entirely in JVM memory and are not persisted across server restarts. Empty rooms are pruned upon disconnection.
 - **Truthful milestone events (no fake timers)**: Progress states (`Compiling`, `Running`) reflect actual worker milestone emissions immediately before sandboxed GCC compilation and before sandboxed execution. Compilation failures immediately halt and emit `Compile Error` without entering the running state.
 - **Unauthenticated sessions**: WebSocket sessions use server-assigned random UUIDs. Client-supplied user identifiers are untrusted and used only for room display metadata.
 - **Language support**: The pipeline currently supports C (compiled and executed inside the sandbox) and Python 3 (interpreted inside the sandbox). Runtimes for Rust, Java, and Node.js are planned for Phase 7.
@@ -117,11 +121,11 @@ make -C sandbox-daemon test-workspace-handoff test-setup-protocol test-phase2-st
 (cd client && npm run build)
 ```
 
-### 5. Phase 5 Browser End-to-End Verification
-Run the complete vertical slice (Chromium Browser -> Vite -> WebSocket Gateway -> Kotlin Worker -> Sandbox Runner):
+### 5. Browser End-to-End Verification (Phases 5 & 6)
+Run the complete collaborative vertical slice (Chromium Browser pages -> Vite -> WebSocket Gateway -> Kotlin Worker -> Sandbox Runner):
 
 ```bash
-# Run the automated Playwright browser test suite across all services
+# Run the automated Playwright browser test suite (collab convergence + execution)
 bash client/tests/verify_e2e_browser.sh 8080 50051 5173
 ```
 

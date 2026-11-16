@@ -311,4 +311,87 @@ class RoomManagerTest {
         assertTrue(roomManager.releaseRun("room-stale-test", "req-valid"));
         assertEquals(0, roomManager.getGlobalActiveRuns());
     }
+
+    @Test
+    @DisplayName("Collab updates are stored and bounded by max history count and byte limit")
+    void testCollabUpdateStorageAndBounds() {
+        properties.setMaxRoomCollabHistory(3);
+        properties.setMaxRoomCollabHistoryBytes(50);
+
+        roomManager.joinRoom("collab-room", "s1");
+
+        // Add 2 valid updates
+        assertTrue(roomManager.addCollabUpdate("collab-room", "update-1"));
+        assertTrue(roomManager.addCollabUpdate("collab-room", "update-2"));
+        assertEquals(List.of("update-1", "update-2"), roomManager.getCollabUpdates("collab-room"));
+
+        // Third update reaches count limit (3)
+        assertTrue(roomManager.addCollabUpdate("collab-room", "update-3"));
+        assertEquals(3, roomManager.getCollabUpdates("collab-room").size());
+
+        // Fourth update rejected due to count limit
+        assertFalse(roomManager.addCollabUpdate("collab-room", "update-4"));
+
+        // Non-existent room update returns false
+        assertFalse(roomManager.addCollabUpdate("nonexistent-room", "update-5"));
+    }
+
+    @Test
+    @DisplayName("Collab rate limit throttles messages exceeding per-second budget")
+    void testCollabRateLimitEnforcement() {
+        properties.setCollabRateLimitPerSec(2);
+        roomManager.joinRoom("rate-room", "s1");
+
+        long now = 10000L;
+        assertTrue(roomManager.checkCollabRateLimit("rate-room", "s1", now));
+        assertTrue(roomManager.checkCollabRateLimit("rate-room", "s1", now));
+        // Third message in same second rejected
+        assertFalse(roomManager.checkCollabRateLimit("rate-room", "s1", now));
+
+        // In next second, limit resets
+        assertTrue(roomManager.checkCollabRateLimit("rate-room", "s1", now + 1001L));
+    }
+
+    @Test
+    @DisplayName("broadcastToRoomExcept delivers message to peers and excludes sender")
+    void testBroadcastToRoomExcept() throws IOException {
+        properties.setMaxSessionsPerRoom(10);
+
+        WebSocketSession session1 = mock(WebSocketSession.class);
+        when(session1.getId()).thenReturn("s1");
+        when(session1.isOpen()).thenReturn(true);
+
+        WebSocketSession session2 = mock(WebSocketSession.class);
+        when(session2.getId()).thenReturn("s2");
+        when(session2.isOpen()).thenReturn(true);
+
+        WebSocketSession session3 = mock(WebSocketSession.class);
+        when(session3.getId()).thenReturn("s3");
+        when(session3.isOpen()).thenReturn(true);
+
+        roomManager.registerSession(session1);
+        roomManager.registerSession(session2);
+        roomManager.registerSession(session3);
+
+        roomManager.joinRoom("broadcast-room", "s1");
+        roomManager.joinRoom("broadcast-room", "s2");
+        roomManager.joinRoom("broadcast-room", "s3");
+
+        ErrorEvent testEvent = new ErrorEvent("TEST", "hello");
+        roomManager.broadcastToRoomExcept("broadcast-room", "s2", testEvent);
+
+        verify(session1, times(1)).sendMessage(any(TextMessage.class));
+        verify(session2, never()).sendMessage(any(TextMessage.class));
+        verify(session3, times(1)).sendMessage(any(TextMessage.class));
+    }
+
+    @Test
+    @DisplayName("Session joining room receives assignedUser with deterministic name and color")
+    void testAssignedUserGeneratedOnJoin() {
+        RoomManager.JoinResult res1 = roomManager.joinRoom("user-room", "session-alpha");
+        assertTrue(res1.success());
+        assertNotNull(res1.assignedUser());
+        assertTrue(res1.assignedUser().getName().startsWith("User-"));
+        assertTrue(res1.assignedUser().getColor().startsWith("#"));
+    }
 }
