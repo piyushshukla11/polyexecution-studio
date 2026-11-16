@@ -294,4 +294,81 @@ describe('useCollaboration hook', () => {
     expect(result.current.ytext.toString()).toBe(initialText);
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
+
+  it('preserves history-full lock across disconnect and reconnect until server confirms room state', () => {
+    let joined = true;
+    const { result, rerender } = renderHook(() =>
+      useCollaboration({
+        roomId: 'room-collab-test',
+        joined,
+        sessionId: 'sess-local',
+        assignedUser: { name: 'Local-User', color: '#30bced', clientId: 1 },
+        sendMessage: sendMessageMock
+      })
+    );
+
+    // Initial sync
+    act(() => {
+      result.current.processServerMessage({
+        type: 'collab.sync',
+        roomId: 'room-collab-test',
+        updates: [],
+        historyFull: false
+      });
+    });
+
+    const acceptedDocText = result.current.ytext.toString();
+
+    // 1. History cap reached on server -> COLLAB_HISTORY_FULL
+    act(() => {
+      result.current.processServerMessage({
+        type: 'error',
+        code: 'COLLAB_HISTORY_FULL',
+        message: 'Room collaboration history limit reached. Editing has been locked.'
+      });
+    });
+
+    expect(result.current.isLocked).toBe(true);
+
+    // 2. Peer disconnects (socket closes / offline)
+    joined = false;
+    rerender();
+
+    // Lock must remain preserved while offline to prevent offline edits
+    expect(result.current.isLocked).toBe(true);
+
+    sendMessageMock.mockClear();
+
+    // 3. Attempt offline edits while disconnected
+    act(() => {
+      result.current.setSharedCode('int main() { offline divergence attempt; }');
+      result.current.setSharedLanguage('python');
+    });
+
+    // Offline edits are blocked
+    expect(result.current.ytext.toString()).toBe(acceptedDocText);
+    expect(result.current.language).toBe('c');
+    expect(sendMessageMock).not.toHaveBeenCalled();
+
+    // 4. Peer reconnects to same room
+    joined = true;
+    rerender();
+
+    // Lock remains active during reconnect
+    expect(result.current.isLocked).toBe(true);
+
+    // 5. Server responds to collab.sync with historyFull: true
+    act(() => {
+      result.current.processServerMessage({
+        type: 'collab.sync',
+        roomId: 'room-collab-test',
+        updates: [],
+        historyFull: true
+      });
+    });
+
+    // Local document remains exactly equal to accepted server document, still locked
+    expect(result.current.isLocked).toBe(true);
+    expect(result.current.ytext.toString()).toBe(acceptedDocText);
+  });
 });

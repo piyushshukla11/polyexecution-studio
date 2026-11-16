@@ -20,6 +20,8 @@ public class Room {
     private final List<String> collabUpdates = new CopyOnWriteArrayList<>();
     private final AtomicInteger collabByteCount = new AtomicInteger(0);
     private final AtomicBoolean collabHistoryFull = new AtomicBoolean(false);
+    private final AtomicInteger nextCollabClientId = new AtomicInteger(1);
+    private final Map<String, Integer> sessionCollabClientIds = new ConcurrentHashMap<>();
     private final Map<String, ConcurrentLinkedQueue<Long>> sessionCollabUpdateTimestamps = new ConcurrentHashMap<>();
     private final Map<String, ConcurrentLinkedQueue<Long>> sessionCollabAwarenessTimestamps = new ConcurrentHashMap<>();
     private final Map<String, ConcurrentLinkedQueue<Long>> sessionSyncTimestamps = new ConcurrentHashMap<>();
@@ -42,6 +44,7 @@ public class Room {
     }
 
     public boolean addSession(String sessionId) {
+        sessionCollabClientIds.computeIfAbsent(sessionId, s -> nextCollabClientId.getAndIncrement());
         return sessionIds.add(sessionId);
     }
 
@@ -49,7 +52,12 @@ public class Room {
         sessionCollabUpdateTimestamps.remove(sessionId);
         sessionCollabAwarenessTimestamps.remove(sessionId);
         sessionSyncTimestamps.remove(sessionId);
+        sessionCollabClientIds.remove(sessionId);
         return sessionIds.remove(sessionId);
+    }
+
+    public Integer getSessionCollabClientId(String sessionId) {
+        return sessionCollabClientIds.get(sessionId);
     }
 
     public boolean isEmpty() {

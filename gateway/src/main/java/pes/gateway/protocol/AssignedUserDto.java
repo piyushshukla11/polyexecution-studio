@@ -6,13 +6,19 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 public class AssignedUserDto {
     private String name;
     private String color;
+    private Integer clientId;
 
     public AssignedUserDto() {
     }
 
     public AssignedUserDto(String name, String color) {
+        this(name, color, null);
+    }
+
+    public AssignedUserDto(String name, String color, Integer clientId) {
         this.name = name;
         this.color = color;
+        this.clientId = clientId;
     }
 
     public String getName() {
@@ -29,5 +35,13 @@ public class AssignedUserDto {
 
     public void setColor(String color) {
         this.color = color;
+    }
+
+    public Integer getClientId() {
+        return clientId;
+    }
+
+    public void setClientId(Integer clientId) {
+        this.clientId = clientId;
     }
 }

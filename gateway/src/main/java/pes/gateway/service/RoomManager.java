@@ -38,7 +38,15 @@ public class RoomManager {
     private AssignedUserDto createAssignedUser(String sessionId) {
         int colorIdx = Math.abs(sessionId.hashCode()) % PALETTE.length;
         String shortId = sessionId.length() > 6 ? sessionId.substring(0, 6) : sessionId;
-        return new AssignedUserDto("User-" + shortId, PALETTE[colorIdx]);
+        String roomId = sessionToRoom.get(sessionId);
+        Integer clientId = null;
+        if (roomId != null) {
+            Room room = rooms.get(roomId);
+            if (room != null) {
+                clientId = room.getSessionCollabClientId(sessionId);
+            }
+        }
+        return new AssignedUserDto("User-" + shortId, PALETTE[colorIdx], clientId);
     }
 
     public RoomManager(GatewayProperties properties, ObjectMapper objectMapper) {

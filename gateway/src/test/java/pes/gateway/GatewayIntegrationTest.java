@@ -742,6 +742,8 @@ class GatewayIntegrationTest {
         assertTrue(jsonA.has("assignedUser"));
         assertNotNull(jsonA.get("assignedUser").get("name").asText());
         assertNotNull(jsonA.get("assignedUser").get("color").asText());
+        assertTrue(jsonA.get("assignedUser").has("clientId"));
+        assertTrue(jsonA.get("assignedUser").get("clientId").asInt() > 0);
 
         sessionA.close();
         sessionB.close();
@@ -854,6 +856,8 @@ class GatewayIntegrationTest {
             JsonNode cSyncJson = objectMapper.readTree(cSync);
             assertEquals("collab.sync", cSyncJson.get("type").asText());
             assertEquals(2, cSyncJson.get("updates").size());
+            assertTrue(cSyncJson.has("historyFull"));
+            assertTrue(cSyncJson.get("historyFull").asBoolean());
 
             // Session C receives COLLAB_HISTORY_FULL right after sync so it locks immediately
             String cFull = handlerC.nextMessage(5000);

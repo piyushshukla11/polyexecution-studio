@@ -8,6 +8,7 @@ import java.util.List;
 public class CollabSyncEvent extends ServerEvent {
     private String roomId;
     private List<String> updates;
+    private boolean historyFull;
 
     public CollabSyncEvent() {
         super("collab.sync");
@@ -15,9 +16,14 @@ public class CollabSyncEvent extends ServerEvent {
     }
 
     public CollabSyncEvent(String roomId, List<String> updates) {
+        this(roomId, updates, false);
+    }
+
+    public CollabSyncEvent(String roomId, List<String> updates, boolean historyFull) {
         super("collab.sync");
         this.roomId = roomId;
         this.updates = (updates != null) ? updates : Collections.emptyList();
+        this.historyFull = historyFull;
     }
 
     public String getRoomId() {
@@ -34,5 +40,13 @@ public class CollabSyncEvent extends ServerEvent {
 
     public void setUpdates(List<String> updates) {
         this.updates = updates;
+    }
+
+    public boolean isHistoryFull() {
+        return historyFull;
+    }
+
+    public void setHistoryFull(boolean historyFull) {
+        this.historyFull = historyFull;
     }
 }

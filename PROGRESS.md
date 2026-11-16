@@ -3024,3 +3024,83 @@
 - Files: `PROGRESS.md`, `client/src/App.tsx`, `client/src/hooks/useCollaboration.ts`, `client/src/__tests__/App.test.tsx`, `client/src/__tests__/useCollaboration.test.ts`.
 - Linked: LOG-0178.
 - Tutor review: pending
+
+
+## [LOG-0180] 2026-11-16 13:43 IST | DECISION | actor: agent
+- Reason: Record architectural protocol decision to authoritatively bind Yjs Awareness clientIDs via server-assigned clientId in AssignedUserDto and convey room history full state in CollabSyncEvent.
+- Details / Change:
+  1. Context & Need:
+     - Client-side first-claim caching of Yjs Awareness clientIDs is vulnerable to packet arrival order races: if an attacker's spoofed awareness update reaches a receiver before the legitimate peer's first update, the receiver would bind the victim's clientID to the attacker and reject the real peer.
+     - Furthermore, clearing the `isLocked` flag upon disconnect permits offline edits before reconnect/sync, creating an unlock window and diverging clients when re-entering a full room.
+  2. Alternatives Considered:
+     - *Alternative A (Client-side first-claim map)*: Rejected because asynchronous WebSocket relays and reconnects cannot guarantee message arrival order across independent peers.
+     - *Alternative B (Client-side hashing of session ID)*: Rejected due to potential 32-bit hash collisions between independent session UUIDs in long-running instances.
+     - *Alternative C (Separate post-sync notification only)*: Rejected because an asynchronous error/event after sync leaves an unlock window during which Monaco or user edits could slip in.
+  3. Chosen Decision:
+     - Gateway assigns an authoritative positive 32-bit `clientId` to each session upon joining a room in `Room.java` / `RoomManager.java`, included in `AssignedUserDto` (`RoomJoinedEvent` and `CollabAwarenessEvent`).
+     - The receiving client maps and forces all incoming awareness updates for a session to that session's authoritative server-assigned `clientId`, completely eliminating first-claim races and client-controlled ID spoofing.
+     - Add `historyFull: boolean` to `CollabSyncEvent` so that when a client reconnects and syncs, the document updates and room locked status are applied atomically in a single event, eliminating any unlock window.
+     - Preserve the `isLocked` state across disconnect/reconnect until authoritative server confirmation via `CollabSyncEvent`.
+  4. Maintenance & Compatibility Impact:
+     - Adds `Integer clientId` to `AssignedUserDto` and `boolean historyFull` to `CollabSyncEvent`.
+     - 100% backward compatible (JSON defaults preserve old behavior if omitted).
+     - Keeps payload bounds strictly enforced (no unbounded data added).
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/protocol/*`, `gateway/src/main/java/pes/gateway/service/*`, `client/src/types/protocol.ts`, `client/src/hooks/useCollaboration.ts`.
+- Linked: LOG-0179.
+- Tutor review: pending
+
+
+## [LOG-0181] 2026-11-16 13:44 IST | PLAN | actor: agent
+- Reason: Implement authoritative Awareness clientID binding and reconnect history-lock persistence on branch phase/6-collab.
+- Details / Change:
+  1. Gateway Protocol & State:
+     - In `Room.java`, add `AtomicInteger nextCollabClientId = new AtomicInteger(1)` and `sessionCollabClientIds` map. In `addSession` / `removeSession`, manage authoritative integer client IDs per session.
+     - In `AssignedUserDto.java`, add `Integer clientId` with getter/setter.
+     - In `RoomManager.java`, populate `clientId` in `createAssignedUser`.
+     - In `CollabSyncEvent.java`, add `boolean historyFull` field and constructor.
+     - In `GatewayWebSocketHandler.handleCollabSync`, pass `isFull = roomManager.isCollabHistoryFull(roomId)` into `CollabSyncEvent`.
+  2. Client-side Authoritative Binding & Lock Persistence:
+     - In `client/src/types/protocol.ts`, add `clientId?: number` to `AssignedUser` and `historyFull?: boolean` to `CollabSyncEvent`.
+     - In `client/src/hooks/useCollaboration.ts`, upon `room.joined`, initialize local `awareness.clientID` and `ydoc.clientID` to `assignedUser.clientId`.
+     - When receiving `collab.awareness`, force `entry.clientID` to the sender's authoritative server-assigned `clientId` (derived from `event.assignedUser.clientId` or session mapping). Ignore client-supplied binary clientIDs.
+     - When `joined === false` (disconnect), retain `isLockedRef` and `isLocked` (do not reset them).
+     - In `collab.sync`, set `isLockedRef.current = !!event.historyFull` and `setIsLocked(!!event.historyFull)`, closing the unlock window.
+     - Reset `isLocked` only when explicitly switching to a different room (`roomId` changes).
+  3. Regression Testing:
+     - Add unit test in `useCollaboration.test.ts` verifying that when a room is locked, disconnect occurs, offline edits are attempted and rejected, and upon reconnect/sync with `historyFull: true`, the document remains unchanged and editing remains locked.
+     - Update Gateway integration tests to assert `historyFull` in `CollabSyncEvent` and `clientId` in `AssignedUserDto`.
+     - Request Piyush to author the two-ordering Awareness collision regression test in `useCollaboration.test.ts`.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/*`, `client/src/*`.
+- Linked: LOG-0180.
+- Tutor review: pending
+
+
+## [LOG-0182] 2026-11-16 14:02 IST | DONE | actor: agent
+- Reason: Complete implementation and verification of authoritative Awareness clientID binding and reconnect history-lock persistence on branch phase/6-collab.
+- Details / Change:
+  1. Authoritative Awareness clientID Assignment & Binding:
+     - In `Room.java`, added atomic counter `nextCollabClientId` and `sessionCollabClientIds` map to authoritatively assign unique 32-bit positive integer client IDs per session upon `addSession`.
+     - In `AssignedUserDto.java`, added `Integer clientId` field and updated constructors/getters/setters. Populated in `RoomManager.createAssignedUser`.
+     - In `client/src/types/protocol.ts`, added `clientId?: number` to `AssignedUser`.
+     - In `client/src/hooks/useCollaboration.ts`, upon `room.joined`, local `awareness.clientID` and `ydoc.clientID` adopt `assignedUser.clientId`.
+     - In `collab.awareness`, the receiver extracts the authoritative clientID from `event.assignedUser.clientId` (or deterministic hash fallback) and unconditionally forces all entries in the binary awareness payload to that authoritative ID. Client-supplied untrusted clientIDs in binary packets are discarded, completely eliminating first-claim arrival order races and ID impersonation.
+  2. History-Full Lock Persistence Across Reconnect:
+     - In `CollabSyncEvent.java`, added `boolean historyFull` field and constructors/getters/setters.
+     - In `GatewayWebSocketHandler.handleCollabSync`, passed `isFull = roomManager.isCollabHistoryFull(roomId)` directly in `CollabSyncEvent`.
+     - In `client/src/types/protocol.ts`, added `historyFull?: boolean` to `CollabSyncEvent`.
+     - In `client/src/hooks/useCollaboration.ts`, retained `isLockedRef` and `isLocked` across disconnect (`joined === false`) so offline edits remain rejected.
+     - In `collab.sync`, set `isLockedRef.current = !!event.historyFull` and `setIsLocked(!!event.historyFull)`, closing the unlock window atomically upon sync. Lock resets only when explicitly switching to a different room (`roomId` changes).
+  3. Regression Test & Evidence:
+     - In `useCollaboration.test.ts`, added regression test verifying that when a room is locked, peer disconnects, offline edits (`setSharedCode`, `setSharedLanguage`) are rejected, and upon reconnect/sync with `historyFull: true`, the local document remains identical to the server state and editing remains locked.
+     - In `GatewayIntegrationTest.java`, asserted `historyFull = true` in `CollabSyncEvent` and `clientId > 0` in `AssignedUserDto`.
+     - `make -C sandbox-daemon test`: 22/22 passed.
+     - `(cd worker && gradle test --rerun-tasks)`: 19/19 passed.
+     - `(cd gateway && gradle test --rerun-tasks)`: 44/44 passed.
+     - `(cd client && npm test)`: 34/34 passed (7/7 suites).
+     - `(cd client && npm run build)`: production build succeeded with TypeScript validation.
+     - `bash client/tests/verify_e2e_browser.sh 8080 50051 5173`: all 5 Playwright tests passed (including two-browser concurrent collaboration).
+  4. Pedagogical Hand-off:
+     - Owner-authored Awareness collision test covering both arrival orderings remains pending for Piyush in `client/src/__tests__/useCollaboration.test.ts`.
+- Files: `PROGRESS.md`, `client/src/__tests__/useCollaboration.test.ts`, `client/src/hooks/useCollaboration.ts`, `client/src/types/protocol.ts`, `gateway/src/main/java/pes/gateway/protocol/AssignedUserDto.java`, `gateway/src/main/java/pes/gateway/protocol/CollabSyncEvent.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`.
+- Linked: LOG-0181.
+- Tutor review: pending

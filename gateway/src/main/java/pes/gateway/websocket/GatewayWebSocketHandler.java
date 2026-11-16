@@ -157,8 +157,9 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
         }
 
         List<String> updates = roomManager.getCollabUpdates(roomId);
-        roomManager.sendToSession(session.getId(), new CollabSyncEvent(roomId, updates));
-        if (roomManager.isCollabHistoryFull(roomId)) {
+        boolean isFull = roomManager.isCollabHistoryFull(roomId);
+        roomManager.sendToSession(session.getId(), new CollabSyncEvent(roomId, updates, isFull));
+        if (isFull) {
             roomManager.sendToSession(session.getId(),
                 new ErrorEvent("COLLAB_HISTORY_FULL", "Room collaboration history limit reached. Editing has been locked."));
         }

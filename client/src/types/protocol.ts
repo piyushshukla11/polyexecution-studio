@@ -10,6 +10,7 @@ export interface ResourceLimitsDto {
 export interface AssignedUser {
   name: string;
   color: string;
+  clientId?: number;
 }
 
 export interface ClientRunMessage {
@@ -116,6 +117,7 @@ export interface CollabSyncEvent {
   type: 'collab.sync';
   roomId: string;
   updates: string[];
+  historyFull?: boolean;
 }
 
 export interface CollabUpdateEvent {

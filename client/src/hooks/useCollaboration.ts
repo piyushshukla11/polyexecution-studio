@@ -47,6 +47,18 @@ export interface UseCollaborationOptions {
   onLanguageChange?: (lang: SupportedLanguage) => void;
 }
 
+// Authoritatively derive 31-bit positive integer clientID for session if server omitted it
+function getAuthoritativeClientId(sessionId: string, serverAssignedId?: number): number {
+  if (serverAssignedId !== undefined && serverAssignedId !== null && serverAssignedId > 0) {
+    return serverAssignedId;
+  }
+  let hash = 0;
+  for (let i = 0; i < sessionId.length; i++) {
+    hash = (hash * 31 + sessionId.charCodeAt(i)) & 0x7fffffff;
+  }
+  return hash || 1;
+}
+
 function hexToRgba(hex: string, alpha: number): string {
   let c = hex.replace('#', '');
   if (c.length === 3) {
@@ -221,21 +233,42 @@ export function useCollaboration(options: UseCollaborationOptions) {
     }
 
     if (assignedUser && sessionId) {
-      const current = awareness.getLocalState()?.user;
+      if (assignedUser.clientId && awareness.clientID !== assignedUser.clientId) {
+        const oldClientId = awareness.clientID;
+        awareness.states.delete(oldClientId);
+        awareness.meta.delete(oldClientId);
+        awareness.clientID = assignedUser.clientId;
+        ydoc.clientID = assignedUser.clientId;
+      }
+      const localState = awareness.getLocalState() || {};
+      const current = localState.user;
       if (
         !current ||
         current.name !== assignedUser.name ||
         current.color !== assignedUser.color ||
         current.sessionId !== sessionId
       ) {
-        awareness.setLocalStateField('user', {
-          name: assignedUser.name,
-          color: assignedUser.color,
-          sessionId: sessionId
+        awareness.setLocalState({
+          ...localState,
+          user: {
+            name: assignedUser.name,
+            color: assignedUser.color,
+            sessionId: sessionId
+          }
         });
       }
     }
-  }, [joined, assignedUser?.name, assignedUser?.color, sessionId, awareness]);
+  }, [joined, assignedUser?.name, assignedUser?.color, assignedUser?.clientId, sessionId, awareness, ydoc]);
+
+  // Reset lock state when switching rooms
+  const currentRoomRef = useRef<string>(roomId);
+  useEffect(() => {
+    if (currentRoomRef.current !== roomId) {
+      currentRoomRef.current = roomId;
+      isLockedRef.current = false;
+      setIsLocked(false);
+    }
+  }, [roomId]);
 
   // Request room collaboration document sync once per room join
   const syncedRoomRef = useRef<string | null>(null);
@@ -243,8 +276,7 @@ export function useCollaboration(options: UseCollaborationOptions) {
     if (!joined) {
       syncedRoomRef.current = null;
       setSynced(false);
-      isLockedRef.current = false;
-      setIsLocked(false);
+      // Retain isLockedRef and isLocked across disconnect to prevent offline divergence
       clientIdToSessionRef.current.clear();
       sessionToClientIdsRef.current.clear();
       return;
@@ -262,6 +294,10 @@ export function useCollaboration(options: UseCollaborationOptions) {
       switch (event.type) {
         case 'collab.sync':
           if (event.roomId === roomId) {
+            const isFull = !!event.historyFull;
+            isLockedRef.current = isFull;
+            setIsLocked(isFull);
+
             ydoc.transact(() => {
               for (const updateBase64 of event.updates) {
                 try {
@@ -306,31 +342,28 @@ export function useCollaboration(options: UseCollaborationOptions) {
               const decoder = decoding.createDecoder(bytes);
               const len = decoding.readVarUint(decoder);
               const validEntries: Array<{ clientID: number; clock: number; state: any }> = [];
+              const authoritativeClientId = getAuthoritativeClientId(
+                event.senderSessionId,
+                event.assignedUser?.clientId
+              );
+
+              // 1. Remote session can never claim local user's clientID
+              if (authoritativeClientId === awareness.clientID) {
+                console.warn(
+                  `[useCollaboration] Rejected awareness spoof: remote session ${event.senderSessionId} claimed local clientID ${authoritativeClientId}`
+                );
+                break;
+              }
 
               for (let i = 0; i < len; i++) {
-                const clientID = decoding.readVarUint(decoder);
+                decoding.readVarUint(decoder); // Discard untrusted, client-supplied clientID
                 const clock = decoding.readVarUint(decoder);
                 const stateStr = decoding.readVarString(decoder);
                 const state = JSON.parse(stateStr);
 
-                // 1. Reject if remote session attempts to claim local user's clientID
-                if (clientID === awareness.clientID) {
-                  console.warn(
-                    `[useCollaboration] Rejected awareness spoof: remote session ${event.senderSessionId} claimed local clientID ${clientID}`
-                  );
-                  continue;
-                }
+                // Authoritatively bind and attribute entry to sender's server-assigned clientId
+                const clientID = authoritativeClientId;
 
-                // 2. Reject if clientID is already bound to a different session (preventing eviction/overwrite)
-                const boundSessionId = clientIdToSessionRef.current.get(clientID);
-                if (boundSessionId !== undefined && boundSessionId !== event.senderSessionId) {
-                  console.warn(
-                    `[useCollaboration] Rejected awareness collision: session ${event.senderSessionId} attempted to overwrite clientID ${clientID} owned by session ${boundSessionId}`
-                  );
-                  continue;
-                }
-
-                // 3. Bind clientID to session, or unbind if removed
                 if (state !== null) {
                   clientIdToSessionRef.current.set(clientID, event.senderSessionId);
                   let sessionClientIds = sessionToClientIdsRef.current.get(event.senderSessionId);
@@ -349,13 +382,11 @@ export function useCollaboration(options: UseCollaborationOptions) {
                     }
                   }
                 } else {
-                  // state is null (client removal): only unbind if this session actually owned it
-                  if (boundSessionId === event.senderSessionId) {
-                    clientIdToSessionRef.current.delete(clientID);
-                    const sessionClientIds = sessionToClientIdsRef.current.get(event.senderSessionId);
-                    if (sessionClientIds) {
-                      sessionClientIds.delete(clientID);
-                    }
+                  // state is null (client removal): unbind
+                  clientIdToSessionRef.current.delete(clientID);
+                  const sessionClientIds = sessionToClientIdsRef.current.get(event.senderSessionId);
+                  if (sessionClientIds) {
+                    sessionClientIds.delete(clientID);
                   }
                 }
 
