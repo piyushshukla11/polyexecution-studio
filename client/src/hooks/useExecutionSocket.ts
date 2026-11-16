@@ -46,6 +46,7 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
 
   const wsRef = useRef<WebSocket | null>(null);
   const currentRequestIdRef = useRef<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
   const onServerMessageRef = useRef(options?.onServerMessage);
 
   useEffect(() => {
@@ -97,6 +98,7 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
 
       ws.onclose = () => {
         if (!isMounted) return;
+        sessionIdRef.current = null;
         setConnected(false);
         setJoined(false);
         setSessionId(null);
@@ -133,15 +135,23 @@ export function useExecutionSocket(options?: UseExecutionSocketOptions) {
       switch (event.type) {
         case 'room.joined':
           if (event.roomId === roomId) {
-            setJoined(true);
-            setSessionId(event.sessionId);
-            if (event.assignedUser) {
-              setAssignedUser(event.assignedUser);
+            // Only adopt session identity if not yet established or matching current session
+            if (!sessionIdRef.current || sessionIdRef.current === event.sessionId) {
+              sessionIdRef.current = event.sessionId;
+              setJoined(true);
+              setSessionId(event.sessionId);
+              if (event.assignedUser) {
+                setAssignedUser(event.assignedUser);
+              }
+              attempts = 0;
+              setReconnectAttempt(0);
+              setConnectionError(null);
             }
-            attempts = 0;
-            setReconnectAttempt(0);
-            setConnectionError(null);
           }
+          break;
+
+        case 'room.peer_joined':
+          // Peer join notifications do not alter local session identity or assigned user
           break;
 
         case 'run.accepted':

@@ -39,9 +39,29 @@ test.describe('PolyExecution Studio - Phase 6 Real-time Collaboration Suite', ()
     await expect(page1.locator('.monaco-editor')).toBeVisible({ timeout: 10000 });
     await expect(page2.locator('.monaco-editor')).toBeVisible({ timeout: 10000 });
 
-    // Verify collaborator indicator in UI header reflects presence
+    // Verify collaborator indicator in UI header reflects presence and authoritative IDs
     await expect(page1.getByTestId('collaborators-list')).toBeVisible({ timeout: 10000 });
     await expect(page2.getByTestId('collaborators-list')).toBeVisible({ timeout: 10000 });
+
+    // Page 1 receives server-assigned clientID 1 and retains it as local
+    const user1OnPage1 = page1.locator('.collaborator-pill[data-client-id="1"]');
+    await expect(user1OnPage1).toBeVisible({ timeout: 10000 });
+    await expect(user1OnPage1).toHaveAttribute('data-is-local', 'true');
+
+    // Page 2 receives server-assigned clientID 2 as local
+    const user2OnPage2 = page2.locator('.collaborator-pill[data-client-id="2"]');
+    await expect(user2OnPage2).toBeVisible({ timeout: 10000 });
+    await expect(user2OnPage2).toHaveAttribute('data-is-local', 'true');
+
+    // Page 1 retains User 1 (local) and displays User 2 as remote peer
+    const user2OnPage1 = page1.locator('.collaborator-pill[data-client-id="2"]');
+    await expect(user2OnPage1).toBeVisible({ timeout: 10000 });
+    await expect(user2OnPage1).toHaveAttribute('data-is-local', 'false');
+
+    // Page 2 displays User 1 as remote peer
+    const user1OnPage2 = page2.locator('.collaborator-pill[data-client-id="1"]');
+    await expect(user1OnPage2).toBeVisible({ timeout: 10000 });
+    await expect(user1OnPage2).toHaveAttribute('data-is-local', 'false');
 
     // 2. Sequential / Initial Edit from Page 1 converges to Page 2
     const cCodeSnippet = '#include <stdio.h>\n\nint main(void) {\n    printf("Collab OK\\n");\n    return 0;\n}\n';
@@ -55,8 +75,8 @@ test.describe('PolyExecution Studio - Phase 6 Real-time Collaboration Suite', ()
       timeout: 10000
     });
 
-    // 3. Remote Cursor & Selection Visibility
-    // In Page 1, select printable text on line 1 ("#include")
+    // 3. Bidirectional Remote Cursor & Selection Visibility
+    // Direction A: In Page 1, select printable text on line 1 ("#include")
     const editor1 = page1.getByRole('textbox', { name: 'Editor content' });
     await editor1.focus();
     await page1.keyboard.press('ControlOrMeta+Home');
@@ -67,17 +87,36 @@ test.describe('PolyExecution Studio - Phase 6 Real-time Collaboration Suite', ()
     await page1.keyboard.press('Shift+ArrowRight');
     await page1.keyboard.press('Shift+ArrowRight');
 
-    // Page 2 must observe remote cursor head and selection decorations are visible
-    await expect(page2.locator('.yRemoteSelectionHead').first()).toBeVisible({ timeout: 10000 });
-    await expect(page2.locator('.yRemoteSelection').first()).toBeVisible({ timeout: 10000 });
+    // Page 2 must observe remote cursor head and selection decorations for Client 1
+    await expect(page2.locator('.yRemoteSelectionHead-1, .yRemoteSelectionHead').first()).toBeVisible({ timeout: 10000 });
+    await expect(page2.locator('.yRemoteSelection-1, .yRemoteSelection').first()).toBeVisible({ timeout: 10000 });
 
-    // Collapse selection in page 1
+    // Collapse selection in Page 1
     await page1.keyboard.press('ArrowRight');
+
+    // Direction B: In Page 2, select printable text on line 3 ("printf")
+    const editor2 = page2.getByRole('textbox', { name: 'Editor content' });
+    await editor2.focus();
+    await page2.keyboard.press('ControlOrMeta+Home');
+    await page2.keyboard.press('ArrowDown');
+    await page2.keyboard.press('ArrowDown');
+    await page2.keyboard.press('Shift+ArrowRight');
+    await page2.keyboard.press('Shift+ArrowRight');
+    await page2.keyboard.press('Shift+ArrowRight');
+    await page2.keyboard.press('Shift+ArrowRight');
+    await page2.keyboard.press('Shift+ArrowRight');
+    await page2.keyboard.press('Shift+ArrowRight');
+
+    // Page 1 must observe remote cursor head and selection decorations for Client 2
+    await expect(page1.locator('.yRemoteSelectionHead-2, .yRemoteSelectionHead').first()).toBeVisible({ timeout: 10000 });
+    await expect(page1.locator('.yRemoteSelection-2, .yRemoteSelection').first()).toBeVisible({ timeout: 10000 });
+
+    // Collapse selection in Page 2
+    await page2.keyboard.press('ArrowRight');
 
     // 4. Truly Concurrent Overlapping Edits from Page 1 and Page 2
     // Both independent browser pages submit edits simultaneously through Promise.all
     // before waiting for remote convergence
-    const editor2 = page2.getByRole('textbox', { name: 'Editor content' });
     await Promise.all([
       (async () => {
         await editor1.focus();
@@ -157,6 +196,7 @@ test.describe('PolyExecution Studio - Phase 6 Real-time Collaboration Suite', ()
     // Page 1 receives room.left and purges remote cursor decoration
     await expect(page1.locator('.yRemoteSelectionHead')).toHaveCount(0, { timeout: 10000 });
     await expect(page1.locator('.yRemoteSelection')).toHaveCount(0, { timeout: 10000 });
+    await expect(page1.locator('.collaborator-pill[data-client-id="2"]')).toHaveCount(0, { timeout: 10000 });
 
     // Document in Page 1 remains intact
     await expect(page1.locator('.monaco-editor .view-lines')).toContainText('Collab OK');

@@ -516,9 +516,25 @@ class GatewayIntegrationTest {
         assertNotNull(handlerA.nextMessage(5000));
 
         sessionB.sendMessage(new TextMessage("{\"type\":\"room.join\",\"roomId\":\"collab-relay-room\"}"));
-        assertNotNull(handlerB.nextMessage(5000));
-        // handlerA gets room.joined for sessionB
-        assertNotNull(handlerA.nextMessage(5000));
+        String msgB = handlerB.nextMessage(5000);
+        assertNotNull(msgB, "Session B should receive its own room.joined");
+        JsonNode jsonBJoin = objectMapper.readTree(msgB);
+        assertEquals("room.joined", jsonBJoin.get("type").asText());
+        assertEquals("collab-relay-room", jsonBJoin.get("roomId").asText());
+        String serverSessionIdB = jsonBJoin.get("sessionId").asText();
+        assertNotNull(serverSessionIdB);
+        assertTrue(jsonBJoin.has("assignedUser"));
+        assertEquals(2, jsonBJoin.get("assignedUser").get("clientId").asInt());
+
+        // handlerA gets room.peer_joined for sessionB (strictly not room.joined)
+        String msgAPeer = handlerA.nextMessage(5000);
+        assertNotNull(msgAPeer, "Session A should receive room.peer_joined for newcomer B");
+        JsonNode jsonAPeer = objectMapper.readTree(msgAPeer);
+        assertEquals("room.peer_joined", jsonAPeer.get("type").asText());
+        assertEquals("collab-relay-room", jsonAPeer.get("roomId").asText());
+        assertEquals(serverSessionIdB, jsonAPeer.get("sessionId").asText());
+        assertTrue(jsonAPeer.has("assignedUser"));
+        assertEquals(2, jsonAPeer.get("assignedUser").get("clientId").asInt());
 
         // Session A sends collab.update
         String sampleUpdate = "dGVzdC15anMtdXBkYXRl";

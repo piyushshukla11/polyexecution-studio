@@ -3104,3 +3104,93 @@
 - Files: `PROGRESS.md`, `client/src/__tests__/useCollaboration.test.ts`, `client/src/hooks/useCollaboration.ts`, `client/src/types/protocol.ts`, `gateway/src/main/java/pes/gateway/protocol/AssignedUserDto.java`, `gateway/src/main/java/pes/gateway/protocol/CollabSyncEvent.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`.
 - Linked: LOG-0181.
 - Tutor review: pending
+
+
+## [LOG-0183] 2026-11-16 14:25 IST | DECISION | actor: agent
+- Reason: Resolve peer room.joined identity corruption by separating unicast join acknowledgement from peer joined notification in WebSocket protocol.
+- Context:
+  - In Phase 6 collaboration, when peer B joins a room, the Gateway previously broadcast `room.joined` with B's `sessionId` and `assignedUser` to all members in the room.
+  - In `client/src/hooks/useExecutionSocket.ts`, the `room.joined` handler did not distinguish between the local session's join ACK and incoming peer events. Page A received B's `room.joined` and overwrote its own `sessionId` and `assignedUser.clientId` with B's values.
+  - Page A's `useCollaboration` hook then changed its `awareness.clientID` and `ydoc.clientID` to match B's, resulting in shared clientIDs, self-suppression of remote awareness, and one-way cursor rendering.
+- Decision:
+  1. Unicast Join Acknowledgement: The Gateway sends `room.joined` exclusively to the joining session via `roomManager.sendToSession(session.getId(), joinedEvent)`. It conveys the joining session's own assigned ID, display name, color, and collaboration clientID.
+  2. Broadcast Peer Join Notification: The Gateway broadcasts a new event type, `room.peer_joined`, to all other members in the room via `roomManager.broadcastToRoomExcept(roomId, session.getId(), peerJoinedEvent)`.
+  3. Client Identity Safeguards: In `useExecutionSocket.ts`, track `sessionIdRef` and accept `room.joined` only if the local session identity is not yet established or matches the event's `sessionId`. Never adopt identity from `room.peer_joined`.
+  4. Awareness Publishing: In `useCollaboration.ts`, listen for `room.peer_joined` (and fallback `room.joined` for other sessions) to immediately publish local awareness (`encodeAwarenessUpdate(awareness, [awareness.clientID])`), ensuring both newcomers and established peers see each other's cursor immediately.
+- Alternatives Considered:
+  - Alternative 1 (Client-side filtering of `room.joined` without protocol change): Keep single `room.joined` broadcast and check if `sessionId` is already set. Rejected because overloading `room.joined` for both self-ACK and peer announcements violates truthful protocol semantics, causes ambiguity during reconnection when `sessionId` is null, and risks race conditions.
+  - Alternative 2 (Nonce/token in `room.join`): Include a client-generated nonce in `room.join` and echo in `room.joined`. Rejected as unnecessary complexity since WebSocket connections are stateful and point-to-point.
+- Maintenance Cost:
+  - Minimal: One new Java event class (`RoomPeerJoinedEvent`), one TypeScript event interface (`RoomPeerJoinedEvent`), and targeted updates to integration tests.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/protocol/RoomPeerJoinedEvent.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `client/src/types/protocol.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/hooks/useCollaboration.ts`.
+- Linked: LOG-0182.
+- Tutor review: pending
+
+
+## [LOG-0184] 2026-11-16 14:26 IST | PLAN | actor: agent
+- Reason: Implement separate room.peer_joined relay, client join identity protection, and bidirectional cursor E2E verification.
+- Details / Plan:
+  1. Gateway Protocol Implementation:
+     - Create `RoomPeerJoinedEvent.java` with type `room.peer_joined`, `roomId`, `sessionId`, `members`, and `assignedUser`.
+     - In `GatewayWebSocketHandler.handleRoomJoin`, send `RoomJoinedEvent` directly to `session.getId()` via `roomManager.sendToSession`.
+     - Broadcast `RoomPeerJoinedEvent` to all other room sessions via `roomManager.broadcastToRoomExcept`.
+     - Update `GatewayIntegrationTest` multi-session join tests to assert that joiner gets `room.joined` and peers get `room.peer_joined` with correct authoritative clientIDs.
+  2. Client Session & Collaboration Updates:
+     - In `client/src/types/protocol.ts`, add `RoomPeerJoinedEvent` and include it in `IncomingServerEvent`.
+     - In `client/src/hooks/useExecutionSocket.ts`, track `sessionIdRef`. Only adopt `sessionId` and `assignedUser` on local join ACK. Ignore `room.peer_joined` so it never overwrites local identity. Clear `sessionIdRef` on `ws.onclose`.
+     - In `client/src/hooks/useCollaboration.ts`, handle `room.peer_joined` to broadcast local awareness immediately to the newcomer.
+     - Add unit tests in `useExecutionSocket.test.ts` verifying that peer join events never overwrite established session identity or assigned user.
+     - Add unit tests in `useCollaboration.test.ts` verifying that `room.peer_joined` triggers local awareness publication.
+  3. Bidirectional Cursor End-to-End Testing:
+     - In `client/tests/collab.spec.ts`, expand two-browser E2E test to verify bidirectional cursor presence:
+       - Page 1 selects text -> Page 2 observes remote selection decoration (`.yRemoteSelectionHead-1` / `.yRemoteSelection-1`).
+       - Page 2 selects text -> Page 1 observes remote selection decoration (`.yRemoteSelectionHead-2` / `.yRemoteSelection-2`).
+       - Page 1 and Page 2 retain distinct server-assigned clientIDs throughout.
+       - Disconnecting either page removes that specific peer's cursor decoration from the other.
+       - Concurrent edits from both sides continue to converge to identical text.
+  4. Owner Pedagogical Task:
+     - Keep Piyush's owner-authored awareness collision test pending in `client/src/__tests__/useCollaboration.test.ts` per tutor instructions.
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/protocol/RoomPeerJoinedEvent.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`, `client/src/types/protocol.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/hooks/useCollaboration.ts`, `client/src/__tests__/useExecutionSocket.test.ts`, `client/src/__tests__/useCollaboration.test.ts`, `client/tests/collab.spec.ts`.
+- Linked: LOG-0183.
+- Tutor review: pending
+
+
+## [LOG-0185] 2026-11-16 16:10 IST | DONE | actor: agent
+- Reason: Complete implementation and verification of room.peer_joined event relay, client join identity protection, and bidirectional cursor E2E test suite.
+- Details / Change:
+  1. Gateway Protocol Separation:
+     - Created `RoomPeerJoinedEvent.java` with type `room.peer_joined`, containing `roomId`, newcomer's `sessionId`, `members`, and authoritative `assignedUser` (`name`, `color`, `clientId`).
+     - In `GatewayWebSocketHandler.handleRoomJoin`, delivered `RoomJoinedEvent` exclusively to the joining socket via `roomManager.sendToSession(session.getId(), joinedEvent)`.
+     - Broadcast `RoomPeerJoinedEvent` to all existing room members via `roomManager.broadcastToRoomExcept(roomId, session.getId(), peerJoinedEvent)`.
+     - In `GatewayIntegrationTest.java`, updated `testCollabUpdateRelayedToRoomAndExcludedFromSender` to verify that joining Session B receives its own `room.joined`, while existing Session A receives `room.peer_joined` with Session B's session ID and server-assigned clientID (2). All 44 gateway tests pass.
+  2. Client Join Identity Safeguards & Monotonic Awareness Clock:
+     - In `client/src/types/protocol.ts`, defined `RoomPeerJoinedEvent` and added it to `IncomingServerEvent`.
+     - In `client/src/hooks/useExecutionSocket.ts`, added `sessionIdRef` tracking. In `room.joined`, only accepted identity if unestablished (`!sessionIdRef.current`) or matching the local session, preventing peer join events from corrupting local identity. Cleared `sessionIdRef` on `ws.onclose` for clean reconnects. Handled `room.peer_joined` without altering local identity.
+     - In `client/src/hooks/useCollaboration.ts`, upon `room.peer_joined`, broadcast local awareness update immediately to the newcomer. Removed `room.joined` awareness broadcast trigger so newly joining clients do not prematurely emit uninitialized empty awareness.
+     - When adopting server-assigned `assignedUser.clientId`, initialized `awareness.meta.set(clientId, { clock: 0, lastUpdated })` so `awareness.setLocalState` increments `clock` to 1.
+     - In `processServerMessage` under `collab.awareness`, guaranteed remote updates carry monotonic, strictly positive clocks (`targetClock = clock > currClock ? clock : currClock + 1`), preventing Yjs `applyAwarenessUpdate` from dropping remote presence updates with clock 0.
+     - In `client/src/App.tsx`, added `data-client-id` and `data-is-local` attributes to collaborator pills.
+     - In `client/src/__tests__/useExecutionSocket.test.ts`, added test verifying that `room.peer_joined` and unmatching `room.joined` events never overwrite established local session ID or assigned user.
+     - In `client/src/__tests__/useCollaboration.test.ts`, added test verifying that `room.peer_joined` triggers local awareness broadcast. All 36 Vitest client tests pass (7/7 suites).
+  3. Bidirectional Playwright E2E Suite:
+     - Expanded `client/tests/collab.spec.ts` to assert full bidirectional presence and cursor decoration visibility:
+       - Page 1 receives clientID 1 (isLocal=true); Page 2 receives clientID 2 (isLocal=true).
+       - Page 1 retains clientID 1 as local and displays clientID 2 as remote peer; Page 2 displays clientID 1 as remote peer.
+       - Direction 1: Page 1 selects text -> Page 2 observes `.yRemoteSelectionHead-1` and `.yRemoteSelection-1`.
+       - Direction 2: Page 2 selects text -> Page 1 observes `.yRemoteSelectionHead-2` and `.yRemoteSelection-2`.
+       - Both pages perform concurrent edits and converge to identical text.
+       - Closing Page 2 purges its cursor decoration and removes clientID 2 from Page 1's collaborator list.
+       - Execution run from Page 1 succeeds with complete truthful timeline.
+  4. Test Evidence:
+     - `bash client/tests/verify_e2e_browser.sh 8080 50051 5173`: all 5 tests passed (19.6s).
+     - `(cd gateway && gradle test --rerun-tasks)`: 44/44 passed.
+     - `(cd client && npm test)`: 36/36 passed (7/7 suites).
+     - `(cd worker && gradle test --rerun-tasks)`: 19/19 passed.
+     - `make -C sandbox-daemon test`: 22/22 passed.
+     - `(cd client && npm run build)`: production build succeeded with TypeScript validation.
+     - `./scripts/check_progress_append_only.sh` and `./scripts/check_repo_hygiene.sh`: passed cleanly.
+  5. Owner Pedagogical Task:
+     - Piyush's owner-authored Awareness collision test covering both arrival orderings remains pending in `client/src/__tests__/useCollaboration.test.ts` per tutor instructions.
+- Files: `PROGRESS.md`, `client/src/App.tsx`, `client/src/__tests__/useCollaboration.test.ts`, `client/src/__tests__/useExecutionSocket.test.ts`, `client/src/hooks/useCollaboration.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/types/protocol.ts`, `client/tests/collab.spec.ts`, `gateway/src/main/java/pes/gateway/protocol/RoomPeerJoinedEvent.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`.
+- Linked: LOG-0184.
+- Tutor review: pending

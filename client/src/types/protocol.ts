@@ -59,7 +59,16 @@ export interface RoomJoinedEvent {
   type: 'room.joined';
   roomId: string;
   sessionId: string;
-  memberCount: number;
+  members?: string[];
+  memberCount?: number;
+  assignedUser?: AssignedUser;
+}
+
+export interface RoomPeerJoinedEvent {
+  type: 'room.peer_joined';
+  roomId: string;
+  sessionId: string;
+  members?: string[];
   assignedUser?: AssignedUser;
 }
 
@@ -142,6 +151,7 @@ export interface GenericErrorEvent {
 
 export type IncomingServerEvent =
   | RoomJoinedEvent
+  | RoomPeerJoinedEvent
   | RoomLeftEvent
   | RunAcceptedEvent
   | RunProgressEvent

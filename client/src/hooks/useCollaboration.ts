@@ -239,6 +239,10 @@ export function useCollaboration(options: UseCollaborationOptions) {
         awareness.meta.delete(oldClientId);
         awareness.clientID = assignedUser.clientId;
         ydoc.clientID = assignedUser.clientId;
+        awareness.meta.set(assignedUser.clientId, {
+          clock: 0,
+          lastUpdated: Math.floor(Date.now() / 1000)
+        });
       }
       const localState = awareness.getLocalState() || {};
       const current = localState.user;
@@ -390,7 +394,10 @@ export function useCollaboration(options: UseCollaborationOptions) {
                   }
                 }
 
-                validEntries.push({ clientID, clock, state });
+                // Ensure clock is strictly positive and advances monotonically so applyAwarenessUpdate never drops remote presence
+                const currClock = awareness.meta.get(clientID)?.clock ?? 0;
+                const targetClock = clock > currClock ? clock : currClock + 1;
+                validEntries.push({ clientID, clock: targetClock, state });
               }
 
               if (validEntries.length > 0) {
@@ -434,7 +441,7 @@ export function useCollaboration(options: UseCollaborationOptions) {
           }
           break;
 
-        case 'room.joined':
+        case 'room.peer_joined':
           if (event.roomId === roomId && event.sessionId !== sessionId) {
             // New participant joined; broadcast our awareness immediately so they see our cursor
             const update = encodeAwarenessUpdate(awareness, [awareness.clientID]);

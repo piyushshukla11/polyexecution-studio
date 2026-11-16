@@ -114,7 +114,10 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
         }
 
         RoomJoinedEvent joinedEvent = new RoomJoinedEvent(roomId, session.getId(), result.members(), result.assignedUser());
-        roomManager.broadcastToRoom(roomId, joinedEvent);
+        roomManager.sendToSession(session.getId(), joinedEvent);
+
+        RoomPeerJoinedEvent peerJoinedEvent = new RoomPeerJoinedEvent(roomId, session.getId(), result.members(), result.assignedUser());
+        roomManager.broadcastToRoomExcept(roomId, session.getId(), peerJoinedEvent);
     }
 
     private void handleRoomLeave(WebSocketSession session, JsonNode root) {

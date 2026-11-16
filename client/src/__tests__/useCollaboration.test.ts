@@ -371,4 +371,33 @@ describe('useCollaboration hook', () => {
     expect(result.current.isLocked).toBe(true);
     expect(result.current.ytext.toString()).toBe(acceptedDocText);
   });
+
+  it('broadcasts local awareness when room.peer_joined arrives', () => {
+    const { result } = renderHook(() =>
+      useCollaboration({
+        roomId: 'room-collab-test',
+        joined: true,
+        sessionId: 'sess-local',
+        assignedUser: { name: 'Local-User', color: '#30bced', clientId: 1 },
+        sendMessage: sendMessageMock
+      })
+    );
+
+    sendMessageMock.mockClear();
+
+    act(() => {
+      result.current.processServerMessage({
+        type: 'room.peer_joined',
+        roomId: 'room-collab-test',
+        sessionId: 'sess-remote-peer',
+        assignedUser: { name: 'Remote-Peer', color: '#6eeb83', clientId: 2 }
+      });
+    });
+
+    expect(sendMessageMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'collab.awareness'
+      })
+    );
+  });
 });

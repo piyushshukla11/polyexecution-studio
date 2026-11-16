@@ -404,4 +404,67 @@ describe('useExecutionSocket', () => {
       vi.useRealTimers();
     }
   });
+
+  it('retains local session identity and assignedUser when peer join notifications arrive', () => {
+    const { result } = renderHook(() => useExecutionSocket({ roomId: 'test-room' }));
+    const ws = MockWebSocket.instances[0];
+
+    act(() => {
+      ws.simulateOpen();
+      ws.simulateMessage({
+        type: 'room.joined',
+        roomId: 'test-room',
+        sessionId: 'sess-a',
+        memberCount: 1,
+        assignedUser: {
+          name: 'User 1',
+          color: '#30bced',
+          clientId: 1
+        }
+      });
+    });
+
+    expect(result.current.joined).toBe(true);
+    expect(result.current.sessionId).toBe('sess-a');
+    expect(result.current.assignedUser?.clientId).toBe(1);
+    expect(result.current.assignedUser?.name).toBe('User 1');
+
+    // Peer B joins room and gateway notifies via room.peer_joined
+    act(() => {
+      ws.simulateMessage({
+        type: 'room.peer_joined',
+        roomId: 'test-room',
+        sessionId: 'sess-b',
+        assignedUser: {
+          name: 'User 2',
+          color: '#6eeb83',
+          clientId: 2
+        }
+      });
+    });
+
+    // Local identity must NOT be overwritten by peer join event
+    expect(result.current.sessionId).toBe('sess-a');
+    expect(result.current.assignedUser?.clientId).toBe(1);
+    expect(result.current.assignedUser?.name).toBe('User 1');
+
+    // Even if an errant room.joined arrives for sess-b, established local identity is preserved
+    act(() => {
+      ws.simulateMessage({
+        type: 'room.joined',
+        roomId: 'test-room',
+        sessionId: 'sess-b',
+        memberCount: 2,
+        assignedUser: {
+          name: 'User 2',
+          color: '#6eeb83',
+          clientId: 2
+        }
+      });
+    });
+
+    expect(result.current.sessionId).toBe('sess-a');
+    expect(result.current.assignedUser?.clientId).toBe(1);
+    expect(result.current.assignedUser?.name).toBe('User 1');
+  });
 });

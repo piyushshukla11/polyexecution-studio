@@ -119,6 +119,8 @@ export const App: React.FC = () => {
                   key={c.clientId}
                   className="collaborator-pill"
                   data-testid={`collaborator-${c.name}`}
+                  data-client-id={c.clientId}
+                  data-is-local={c.isLocal ? 'true' : 'false'}
                   style={{ borderColor: c.color }}
                 >
                   <span className="collaborator-dot" style={{ backgroundColor: c.color }} />
