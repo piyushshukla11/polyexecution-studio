@@ -20,6 +20,7 @@ public class GatewayProperties {
     private int maxRooms = 100;
     private int maxSessionsPerRoom = 20;
     private int maxGlobalConcurrentRuns = 16;
+    private long maxAggregateMemoryMb = 8192L;
     private int rateLimitRunsPerMinute = 30;
     private int maxMessageBytes = 512 * 1024; // 512 KiB
     private int maxSourceBytes = 256 * 1024;  // 256 KiB
@@ -69,6 +70,14 @@ public class GatewayProperties {
 
     public void setMaxGlobalConcurrentRuns(int maxGlobalConcurrentRuns) {
         this.maxGlobalConcurrentRuns = maxGlobalConcurrentRuns;
+    }
+
+    public long getMaxAggregateMemoryMb() {
+        return maxAggregateMemoryMb;
+    }
+
+    public void setMaxAggregateMemoryMb(long maxAggregateMemoryMb) {
+        this.maxAggregateMemoryMb = maxAggregateMemoryMb;
     }
 
     public int getRateLimitRunsPerMinute() {

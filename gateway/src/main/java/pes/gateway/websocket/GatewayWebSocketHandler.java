@@ -283,11 +283,17 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
             return;
         }
 
-        AcquireRunResult acquireResult = roomManager.tryAcquireRun(roomId, session.getId(), requestId);
+        long requestedMemoryMb = 64L;
+        if (valResult.protoLimits() != null && valResult.protoLimits().getMemoryMb() > 0) {
+            requestedMemoryMb = valResult.protoLimits().getMemoryMb();
+        }
+
+        AcquireRunResult acquireResult = roomManager.tryAcquireRun(roomId, session.getId(), requestId, requestedMemoryMb);
         if (acquireResult != AcquireRunResult.ACQUIRED) {
             String message = switch (acquireResult) {
                 case ROOM_RUN_IN_PROGRESS -> "Another execution is currently in progress for room " + roomId;
                 case GLOBAL_CONCURRENCY_LIMIT_REACHED -> "Global execution concurrency limit reached; try again shortly";
+                case GLOBAL_MEMORY_LIMIT_REACHED -> "Global aggregate memory budget reached; try again shortly";
                 case RATE_LIMITED -> "Execution rate limit exceeded for room " + roomId;
                 case NOT_IN_ROOM -> "Session is not a member of room " + roomId;
                 default -> "Execution request rejected: " + acquireResult.name();

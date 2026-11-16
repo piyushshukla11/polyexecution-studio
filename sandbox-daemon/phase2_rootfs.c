@@ -20,11 +20,26 @@
 #define PES_WORKSPACE_SOURCE_MAX (256U * 1024U)
 
 static int valid_source_leaf(const char *name) {
-    return name && (strcmp(name, "source.c") == 0 ||
-                    strcmp(name, "source.py") == 0 ||
-                    strcmp(name, "source.java") == 0 ||
-                    strcmp(name, "source.kt") == 0 ||
-                    strcmp(name, "source.js") == 0);
+    if (!name) return 0;
+    if (strcmp(name, "source.c") == 0 ||
+        strcmp(name, "source.py") == 0 ||
+        strcmp(name, "source.java") == 0 ||
+        strcmp(name, "Main.java") == 0 ||
+        strcmp(name, "source.kt") == 0 ||
+        strcmp(name, "source.js") == 0) {
+        return 1;
+    }
+    size_t len = strlen(name);
+    if (len > 5 && strcmp(name + len - 5, ".java") == 0) {
+        for (size_t i = 0; i < len - 5; i++) {
+            char c = name[i];
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+    return 0;
 }
 
 static int valid_artifact_leaf(const char *name) {

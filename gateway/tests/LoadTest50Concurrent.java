@@ -93,19 +93,25 @@ public class LoadTest50Concurrent {
                     }
 
                     // 3. Dispatch execution
-                    // Alternating Python and C executions to exercise multi-runtime concurrency
+                    // Mixed Python, C, and Java executions across the 50 rooms
                     String payload;
                     String expectedMarker;
-                    if (index % 2 == 1) {
+                    if (index % 3 == 1) {
                         expectedMarker = "PYTHON_OK_" + index;
                         payload = String.format(
                             "{\"type\":\"run\",\"roomId\":\"%s\",\"requestId\":\"%s\",\"language\":\"python\",\"sourceCode\":\"print('%s')\\n\"}",
                             roomId, requestId, expectedMarker
                         );
-                    } else {
+                    } else if (index % 3 == 2) {
                         expectedMarker = "C_OK_" + index;
                         payload = String.format(
                             "{\"type\":\"run\",\"roomId\":\"%s\",\"requestId\":\"%s\",\"language\":\"c\",\"sourceCode\":\"#include <stdio.h>\\nint main(void) { printf(\\\"%s\\\\n\\\"); return 0; }\\n\"}",
+                            roomId, requestId, expectedMarker
+                        );
+                    } else {
+                        expectedMarker = "JAVA_OK_" + index;
+                        payload = String.format(
+                            "{\"type\":\"run\",\"roomId\":\"%s\",\"requestId\":\"%s\",\"language\":\"java\",\"sourceCode\":\"public class Main { public static void main(String[] args) { System.out.println(\\\"%s\\\"); } }\\n\",\"limits\":{\"cpuMs\":4000,\"wallMs\":10000}}",
                             roomId, requestId, expectedMarker
                         );
                     }

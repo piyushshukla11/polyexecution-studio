@@ -3476,3 +3476,69 @@
 - Files: `PROGRESS.md`, `README.md`, `client/src/components/CodeEditor.tsx`, `client/src/components/LanguageSelector.tsx`, `client/src/hooks/useCollaboration.ts`, `client/src/types/protocol.ts`, `docker-compose.yml`, `gateway/src/main/java/pes/gateway/service/RequestValidator.java`, `gateway/src/test/java/pes/gateway/RequestValidatorTest.java`, `proto/execution.proto`, `worker/Dockerfile`, `worker/src/main/kotlin/pes/worker/WorkerServer.kt`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`.
 - Linked: LOG-0196.
 - Tutor review: pending
+
+
+## [LOG-0198] 2026-11-16 21:05 IST | PLAN | actor: agent
+- Goal: Remediate Phase 7 tutor review findings: implement aggregate memory admission control in Gateway, enforce truthful compilation milestones (no Running before compilation succeeds) in Worker, and allow fchdir/flock/prctl in sandbox seccomp for real JVM execution.
+- Steps:
+  1. In `sandbox-daemon/phase2_privilege.c`:
+     - Add `fchdir`, `flock`, and `prctl` to `install_seccomp_allowlist` to enable OpenJDK class loading, descriptor locking, and thread naming (`PR_SET_NAME`) under strict seccomp with network denial (`EPERM`).
+     - Rebuild `sandbox-daemon` and run regression test suite `make -C sandbox-daemon test`.
+  2. In `gateway/`:
+     - In `GatewayProperties.java`: add `maxAggregateMemoryMb` (default 8192 MiB).
+     - In `Room.java`: track `activeRunMemoryMb` and return memory on release.
+     - In `RoomManager.java`: track `globalAllocatedMemoryMb` (`AtomicLong`), reject with `GLOBAL_MEMORY_LIMIT_REACHED` if aggregate memory budget is exceeded, and release memory upon run completion/disconnect.
+     - In `GatewayWebSocketHandler.java`: extract requested memory from validated limits, pass to `tryAcquireRun`, and handle rejection truthfully.
+     - Add tests in `RoomManagerTest.java` and `GatewayIntegrationTest.java` for aggregate memory admission.
+  3. In `worker/`:
+     - In `ExecutionPipeline.kt`: separate compilation from execution for Java (`javac` -> `java`), Kotlin (`kotlinc` -> `java -jar`), Node (`node --check` -> `node`), and Python (`py_compile` -> `python3`).
+     - Emitting `STAGE_COMPILING` during compilation; if compilation fails, return `COMPILE_ERROR` immediately without ever emitting `STAGE_RUNNING`.
+     - Emit `STAGE_RUNNING` only when the compiled/verified artifact begins execution.
+     - Add tests in `ExecutionPipelineTest.kt` verifying truthful milestone sequences and error status mapping.
+- Files: `PROGRESS.md`, `sandbox-daemon/phase2_privilege.c`, `gateway/src/main/java/pes/gateway/config/GatewayProperties.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/RoomManagerTest.java`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`.
+- Linked: LOG-0197.
+- Tutor review: pending
+
+
+## [LOG-0199] 2026-11-16 22:58 IST | DONE | actor: agent
+- Goal: Remediate Phase 7 tutor review findings: implement aggregate memory admission control in Gateway, enforce truthful compilation milestones (no Running before compilation succeeds) in Worker, and allow fchdir/flock/prctl in sandbox seccomp for real JVM execution.
+- Outcome:
+  1. Sandbox Daemon Seccomp & Rootfs Hardening:
+     - In `sandbox-daemon/phase2_privilege.c`: allowlisted `fchdir`, `flock`, and `prctl` in `install_seccomp_allowlist`, enabling OpenJDK 27 class loading, jar archive locking, and thread naming (`PR_SET_NAME`) while maintaining outbound network denial (`EPERM`).
+     - In `sandbox-daemon/phase2_rootfs.c`: updated `valid_source_leaf` to recognize `Main.java` and bounded regular Java class source files (`[a-zA-Z0-9_]+\.java`) in addition to `source.c`, `source.py`, `source.java`, `source.kt`, `source.js`.
+     - Verified `make -C sandbox-daemon test`: 22/22 passed (18 Phase 1 + 4 Phase 2).
+  2. Gateway Aggregate Memory Admission Control:
+     - In `GatewayProperties.java`: added `maxAggregateMemoryMb` (default 8192 MiB) with configuration property bindings.
+     - In `AcquireRunResult.java`: added `GLOBAL_MEMORY_LIMIT_REACHED` enum value.
+     - In `Room.java`: tracked `activeRunMemoryMb`, added `tryAcquireRun(requestId, memoryMb)`, and `releaseRunWithMemory(requestId)` to release allocated memory upon completion.
+     - In `RoomManager.java`: tracked `globalAllocatedMemoryMb` via `AtomicLong`, rejected requests exceeding `maxAggregateMemoryMb` with `GLOBAL_MEMORY_LIMIT_REACHED`, and released allocated memory on `releaseRun`.
+     - In `GatewayWebSocketHandler.java`: extracted `memoryMb` from validated request limits, passed to `roomManager.tryAcquireRun`, and broadcasted `RunRejectedEvent` with reason `GLOBAL_MEMORY_LIMIT_REACHED` upon aggregate exhaustion.
+     - Added unit test in `RoomManagerTest.java` verifying admission up to budget and honest rejection when aggregate memory limit is reached. All 46 Gateway tests passed.
+  3. Truthful Two-Stage Milestones & Execution Pipeline:
+     - In `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`:
+       - Java: Stage 1 compiles via `javac` inside the sandbox under `STAGE_COMPILING`. If compilation fails, returns `COMPILE_ERROR` immediately with compiler diagnostics without ever emitting `STAGE_RUNNING`. Stage 2 emits `STAGE_RUNNING` and executes compiled artifact via `java` inside the sandbox.
+       - Python: Stage 1 validates syntax via `python3 -m py_compile` inside the sandbox under `STAGE_COMPILING`. If syntax check fails, returns `COMPILE_ERROR` with `SyntaxError` without emitting `STAGE_RUNNING`. Stage 2 emits `STAGE_RUNNING` and executes script via `python3`.
+       - Node.js: Stage 1 validates syntax via `node --check` inside the sandbox under `STAGE_COMPILING`. If check fails, returns `COMPILE_ERROR` with `SyntaxError` without emitting `STAGE_RUNNING`. Stage 2 emits `STAGE_RUNNING` and executes script via `node`.
+       - Kotlin: Stage 1 compiles via `kotlinc` inside the sandbox under `STAGE_COMPILING`. If compile fails, returns `COMPILE_ERROR` without emitting `STAGE_RUNNING`. Stage 2 emits `STAGE_RUNNING` and executes via `java -jar`.
+     - Updated `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt` and `FakeRunnerGrpcTest.kt` covering two-stage progress sequences and verified syntax/compile failure halting before `STAGE_RUNNING`. All 26 Worker tests passed.
+  4. Live End-to-End WebSocket & 50-Concurrent-Runs Load Benchmark:
+     - Updated `gateway/tests/E2eWebSocketClient.java` and verified live with `verify_e2e_websocket.sh`:
+       - C valid: COMPILING -> RUNNING -> OK
+       - C invalid: COMPILING -> COMPILE_ERROR (0 RUNNING)
+       - Python valid: COMPILING -> RUNNING -> OK
+       - Python invalid: COMPILING -> COMPILE_ERROR (0 RUNNING)
+       - Java valid: COMPILING -> RUNNING -> OK ("Hello from PES E2E Java")
+       - Java invalid: COMPILING -> COMPILE_ERROR (0 RUNNING)
+     - Updated `gateway/tests/LoadTest50Concurrent.java` to test mixed Python, C, and Java runs across 50 rooms.
+     - Executed `verify_load_test_50.sh`: 50/50 concurrent executions passed in 13,801 ms (Min: 4,320 ms, Median: 4,691 ms, p95: 11,076 ms, Max: 11,261 ms) with 0 failures, 0 leaked cgroups, and 0 stray processes. Overload rejection (`ROOM_RUN_IN_PROGRESS`) verified.
+- Verification:
+  - `make -C sandbox-daemon test`: 22/22 passed (18 Phase 1 + 4 Phase 2)
+  - `(cd worker && gradle test)`: 26/26 passed
+  - `(cd gateway && gradle test)`: 46/46 passed
+  - `(cd client && npm test && npm run build)`: 36/36 passed, build clean
+  - `bash gateway/tests/verify_e2e_websocket.sh 8089 50059`: 100% passed
+  - `bash gateway/tests/verify_load_test_50.sh 8089 50059 50`: 50/50 passed, 0 leaked cgroups, 0 stray processes
+  - `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check`: passed cleanly
+- Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/config/GatewayProperties.java`, `gateway/src/main/java/pes/gateway/service/AcquireRunResult.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/RoomManagerTest.java`, `gateway/tests/E2eWebSocketClient.java`, `gateway/tests/LoadTest50Concurrent.java`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/phase2_rootfs.c`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`, `worker/src/test/kotlin/pes/worker/service/FakeRunnerGrpcTest.kt`.
+- Linked: LOG-0198.
+- Tutor review: pending

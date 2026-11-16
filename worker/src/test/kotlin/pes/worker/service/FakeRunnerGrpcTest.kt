@@ -40,7 +40,7 @@ class FakeRunnerGrpcTest {
             assertEquals(1, streamResponses.size, "ExecuteStream currently sends one final response")
             assertEquals(ExecutionStatus.OK, streamResponses.single().status)
             assertTrue(streamResponses.single().stdout.startsWith("FAKE_RUNNER: protocol response only"))
-            assertEquals(3, fake.calls.size, "C protocol path has compile and run calls; Python has one")
+            assertEquals(4, fake.calls.size, "C protocol path has compile and run calls; Python has compile and run calls")
         } finally {
             channel.shutdownNow()
             server.shutdownNow()
@@ -130,11 +130,13 @@ class FakeRunnerGrpcTest {
                 request("grpc-py-progress", Language.LANGUAGE_PYTHON, "print('hello')")
             ).toList()
 
-            assertEquals(2, events.size, "Expected 1 running progress event and 1 result event")
+            assertEquals(3, events.size, "Expected 2 progress events (compiling, running) and 1 result event")
             assertTrue(events[0].hasProgress())
-            assertEquals(ExecutionStage.STAGE_RUNNING, events[0].progress.stage)
-            assertTrue(events[1].hasResult())
-            assertEquals(ExecutionStatus.OK, events[1].result.status)
+            assertEquals(ExecutionStage.STAGE_COMPILING, events[0].progress.stage)
+            assertTrue(events[1].hasProgress())
+            assertEquals(ExecutionStage.STAGE_RUNNING, events[1].progress.stage)
+            assertTrue(events[2].hasResult())
+            assertEquals(ExecutionStatus.OK, events[2].result.status)
         } finally {
             channel.shutdownNow()
             server.shutdownNow()
