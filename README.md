@@ -54,7 +54,7 @@ The project currently implements the full collaborative execution stack:
 | **Phase 3** | Kotlin Worker & Sandboxed Compilation | Complete (`phase-3-done`) | C and Python run end-to-end from a gRPC client (`grpcurl`), with C compilation running inside the sandbox |
 | **Phase 4** | Java Gateway & WebSocket Server | Complete (`phase-4-done`) | WebSocket client triggers run and receives status events |
 | **Phase 5** | Browser Web Client (Monaco Editor) | Complete (`phase-5-done`) | Browser editor executes code; renders Idle, Compiling, Running, Timed Out states |
-| **Phase 6** | Real-Time Collaboration (Yjs CRDT) | Complete (`phase-6-done` pending review) | Two browsers converge; cursors visible; room isolation; disconnect cleanup |
+| **Phase 6** | Real-Time Collaboration (Yjs CRDT) | Complete (`phase-6-done`) | Two browsers converge; cursors visible; room isolation; disconnect cleanup |
 | **Phase 7** | Multi-Language Runtimes & Load Benchmarks | Planned | 50 concurrent runs without host instability; documented resource limits |
 
 ---

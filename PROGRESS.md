@@ -3194,3 +3194,30 @@
 - Files: `PROGRESS.md`, `client/src/App.tsx`, `client/src/__tests__/useCollaboration.test.ts`, `client/src/__tests__/useExecutionSocket.test.ts`, `client/src/hooks/useCollaboration.ts`, `client/src/hooks/useExecutionSocket.ts`, `client/src/types/protocol.ts`, `client/tests/collab.spec.ts`, `gateway/src/main/java/pes/gateway/protocol/RoomPeerJoinedEvent.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`.
 - Linked: LOG-0184.
 - Tutor review: pending
+
+
+## [LOG-0186] 2026-11-16 17:06 IST | DECISION | actor: Piyush + agent
+- Reason: Formally record tutor review approval and sign-off for Phase 6 Yjs real-time collaboration, close Phase 6 Definition of Done, and authorize non-fast-forward merge into `main` with tag `phase-6-done`.
+- Details / Change:
+  1. Record tutor review approval and Piyush's explicit authorization to merge `phase/6-collab` into `main` and create tag `phase-6-done`.
+  2. Phase 6 Definition of Done in `docs/04_BUILD_PLAN.md` ("Yjs collaboration — Two browsers converge; cursors visible") is fully satisfied with verified end-to-end evidence:
+     - Real two-browser interaction: Playwright drives two independent browser contexts connected to the Java Gateway over WebSocket without artificial test hooks in production paths.
+     - Document convergence: Concurrent and sequential edits in Monaco via Yjs text binding converge deterministically to the identical document across both browsers.
+     - Remote cursor/selection presence: Ephemeral Yjs Awareness updates are broadcast and rendered as Monaco decorations (`.yRemoteSelectionHead-N`, `.yRemoteSelection-N`) with distinct server-assigned clientIDs and collaborator pills (`data-client-id`, `data-is-local`).
+     - Room isolation: Gateway isolates WebSocket relay strictly to participants joined to the target room.
+     - Disconnect & cleanup: Browser disconnects immediately remove remote cursor decorations and clear collaborator state without lingering stale cursors or document corruption.
+     - Truthful execution: Single-user and collaborative code executions run cleanly end-to-end with full status timeline and metrics.
+  3. All suites verified:
+     - `gateway` integration & unit tests: 44/44 passed (`gradle test --rerun-tasks`).
+     - `client` Vitest unit tests: 36/36 passed (`npm test`, 7/7 suites).
+     - `client` full-stack browser E2E: 5/5 passed (`bash client/tests/verify_e2e_browser.sh 8080 50051 5173`).
+     - `worker` gRPC tests: 19/19 passed (`gradle test --rerun-tasks`).
+     - `sandbox-daemon`: 22/22 integration tests passed (18 Phase 1 + 4 Phase 2).
+     - `client` production build: succeeded cleanly with TypeScript validation (`npm run build`).
+     - Hygiene and progress append-only checks: clean pass (`./scripts/check_progress_append_only.sh && ./scripts/check_repo_hygiene.sh && git diff --check`).
+  4. Phase 6 DoD status is marked CLOSED and APPROVED.
+  5. Action authorized: Update `README.md` to mark Phase 6 Complete (`phase-6-done`), commit to `phase/6-collab`, merge `phase/6-collab` into `main` using `git merge --no-ff`, and tag `phase-6-done` per AI_RULES.md §10.
+- Verification: `(cd gateway && gradle test --rerun-tasks)` (44/44 passed); `(cd client && npm test)` (36/36 passed); `bash client/tests/verify_e2e_browser.sh 8080 50051 5173` (5/5 passed); `(cd worker && gradle test)` (19/19 passed); `make -C sandbox-daemon test` (22/22 passed); `(cd client && npm run build)` (clean); `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check` passed cleanly.
+- Files: `PROGRESS.md`, `README.md`.
+- Linked: LOG-0185, LOG-0184, LOG-0183.
+- Tutor review: approved for Phase 6 sign-off and merge into main
