@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import * as Y from 'yjs';
+import * as decoding from 'lib0/decoding';
+import * as encoding from 'lib0/encoding';
 import {
   Awareness,
   encodeAwarenessUpdate,
   applyAwarenessUpdate,
-  removeAwarenessStates,
-  modifyAwarenessUpdate
+  removeAwarenessStates
 } from 'y-protocols/awareness';
 import { MonacoBinding } from 'y-monaco';
 import type * as monacoEditor from 'monaco-editor';
@@ -127,6 +128,9 @@ export function useCollaboration(options: UseCollaborationOptions) {
   const defaultStarter = initialLanguage === 'python' ? PYTHON_STARTER : C_STARTER;
   const [synced, setSynced] = useState<boolean>(false);
   const [isLocked, setIsLocked] = useState<boolean>(false);
+  const isLockedRef = useRef<boolean>(false);
+  const clientIdToSessionRef = useRef<Map<number, string>>(new Map());
+  const sessionToClientIdsRef = useRef<Map<string, Set<number>>>(new Map());
   const [collaborators, setCollaborators] = useState<CollaboratorInfo[]>([]);
   const [language, setLanguage] = useState<SupportedLanguage>(initialLanguage);
   const [editorText, setEditorText] = useState<string>(() => ytext.toString() || defaultStarter);
@@ -239,6 +243,10 @@ export function useCollaboration(options: UseCollaborationOptions) {
     if (!joined) {
       syncedRoomRef.current = null;
       setSynced(false);
+      isLockedRef.current = false;
+      setIsLocked(false);
+      clientIdToSessionRef.current.clear();
+      sessionToClientIdsRef.current.clear();
       return;
     }
 
@@ -295,19 +303,76 @@ export function useCollaboration(options: UseCollaborationOptions) {
           if (event.roomId === roomId && event.senderSessionId) {
             try {
               const bytes = base64ToUint8Array(event.awareness);
-              // Sanitize the binary awareness update using modifyAwarenessUpdate:
-              // force state.user to strictly reflect the server-verified senderSessionId and server-assigned user
-              const sanitizedBytes = modifyAwarenessUpdate(bytes, (state) => {
-                if (state?.user) {
-                  state.user.sessionId = event.senderSessionId;
-                  if (event.assignedUser) {
-                    state.user.name = event.assignedUser.name;
-                    state.user.color = event.assignedUser.color;
+              const decoder = decoding.createDecoder(bytes);
+              const len = decoding.readVarUint(decoder);
+              const validEntries: Array<{ clientID: number; clock: number; state: any }> = [];
+
+              for (let i = 0; i < len; i++) {
+                const clientID = decoding.readVarUint(decoder);
+                const clock = decoding.readVarUint(decoder);
+                const stateStr = decoding.readVarString(decoder);
+                const state = JSON.parse(stateStr);
+
+                // 1. Reject if remote session attempts to claim local user's clientID
+                if (clientID === awareness.clientID) {
+                  console.warn(
+                    `[useCollaboration] Rejected awareness spoof: remote session ${event.senderSessionId} claimed local clientID ${clientID}`
+                  );
+                  continue;
+                }
+
+                // 2. Reject if clientID is already bound to a different session (preventing eviction/overwrite)
+                const boundSessionId = clientIdToSessionRef.current.get(clientID);
+                if (boundSessionId !== undefined && boundSessionId !== event.senderSessionId) {
+                  console.warn(
+                    `[useCollaboration] Rejected awareness collision: session ${event.senderSessionId} attempted to overwrite clientID ${clientID} owned by session ${boundSessionId}`
+                  );
+                  continue;
+                }
+
+                // 3. Bind clientID to session, or unbind if removed
+                if (state !== null) {
+                  clientIdToSessionRef.current.set(clientID, event.senderSessionId);
+                  let sessionClientIds = sessionToClientIdsRef.current.get(event.senderSessionId);
+                  if (!sessionClientIds) {
+                    sessionClientIds = new Set();
+                    sessionToClientIdsRef.current.set(event.senderSessionId, sessionClientIds);
+                  }
+                  sessionClientIds.add(clientID);
+
+                  // Sanitize state metadata with server-verified identity
+                  if (state.user) {
+                    state.user.sessionId = event.senderSessionId;
+                    if (event.assignedUser) {
+                      state.user.name = event.assignedUser.name;
+                      state.user.color = event.assignedUser.color;
+                    }
+                  }
+                } else {
+                  // state is null (client removal): only unbind if this session actually owned it
+                  if (boundSessionId === event.senderSessionId) {
+                    clientIdToSessionRef.current.delete(clientID);
+                    const sessionClientIds = sessionToClientIdsRef.current.get(event.senderSessionId);
+                    if (sessionClientIds) {
+                      sessionClientIds.delete(clientID);
+                    }
                   }
                 }
-                return state;
-              });
-              applyAwarenessUpdate(awareness, sanitizedBytes, 'remote');
+
+                validEntries.push({ clientID, clock, state });
+              }
+
+              if (validEntries.length > 0) {
+                const encoder = encoding.createEncoder();
+                encoding.writeVarUint(encoder, validEntries.length);
+                for (const entry of validEntries) {
+                  encoding.writeVarUint(encoder, entry.clientID);
+                  encoding.writeVarUint(encoder, entry.clock);
+                  encoding.writeVarString(encoder, JSON.stringify(entry.state));
+                }
+                const sanitizedBytes = encoding.toUint8Array(encoder);
+                applyAwarenessUpdate(awareness, sanitizedBytes, 'remote');
+              }
             } catch (e) {
               console.error('Failed to apply remote awareness update', e);
             }
@@ -316,17 +381,25 @@ export function useCollaboration(options: UseCollaborationOptions) {
 
         case 'room.left':
           if (event.roomId === roomId) {
-            // Immediately purge departed peer's awareness / cursor state
-            const states = awareness.getStates();
-            const clientsToRemove: number[] = [];
-            states.forEach((state, cId) => {
-              if (state?.user?.sessionId === event.sessionId) {
+            // Immediately purge departed peer's awareness / cursor state using tracked clientIDs
+            const trackedClientIds = sessionToClientIdsRef.current.get(event.sessionId);
+            const clientsToRemove: number[] = trackedClientIds
+              ? Array.from(trackedClientIds)
+              : [];
+
+            awareness.getStates().forEach((state, cId) => {
+              if (state?.user?.sessionId === event.sessionId && !clientsToRemove.includes(cId)) {
                 clientsToRemove.push(cId);
               }
             });
+
             if (clientsToRemove.length > 0) {
               removeAwarenessStates(awareness, clientsToRemove, 'remote-left');
+              for (const cId of clientsToRemove) {
+                clientIdToSessionRef.current.delete(cId);
+              }
             }
+            sessionToClientIdsRef.current.delete(event.sessionId);
           }
           break;
 
@@ -340,6 +413,7 @@ export function useCollaboration(options: UseCollaborationOptions) {
 
         case 'error':
           if (event.code === 'COLLAB_HISTORY_FULL') {
+            isLockedRef.current = true;
             setIsLocked(true);
           }
           break;
@@ -373,6 +447,9 @@ export function useCollaboration(options: UseCollaborationOptions) {
   // Set shared language and adjust code if still at starter code
   const setSharedLanguage = useCallback(
     (newLang: SupportedLanguage) => {
+      if (isLockedRef.current) {
+        return;
+      }
       const starterForNewLang = newLang === 'c' ? C_STARTER : PYTHON_STARTER;
       const starterForOldLang = newLang === 'c' ? PYTHON_STARTER : C_STARTER;
 
@@ -404,6 +481,9 @@ export function useCollaboration(options: UseCollaborationOptions) {
   // Set shared code directly (e.g. reset or typing in mock mode)
   const setSharedCode = useCallback(
     (code: string) => {
+      if (isLockedRef.current) {
+        return;
+      }
       if (!synced) {
         setEditorText(code);
         return;

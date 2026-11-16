@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { App } from '../App.tsx';
 
@@ -99,5 +99,27 @@ describe('App Component', () => {
     const outputTab = screen.getByTestId('tab-output');
     fireEvent.click(outputTab);
     expect(screen.getByTestId('stdout-output')).toBeInTheDocument();
+  });
+
+  it('disables LanguageSelector, Reset button, and displays warning banner when COLLAB_HISTORY_FULL error is received', () => {
+    render(<App />);
+
+    const ws = MockWebSocket.instances[0];
+    expect(ws).toBeDefined();
+
+    act(() => {
+      ws.onopen?.();
+      ws.onmessage?.({
+        data: JSON.stringify({
+          type: 'error',
+          code: 'COLLAB_HISTORY_FULL',
+          message: 'Room collaboration history limit reached. Editing has been locked.'
+        })
+      });
+    });
+
+    expect(screen.getByTestId('collab-history-full-banner')).toBeInTheDocument();
+    expect(screen.getByTestId('reset-button')).toBeDisabled();
+    expect(screen.getByTestId('language-select')).toBeDisabled();
   });
 });

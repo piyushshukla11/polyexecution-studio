@@ -2978,3 +2978,49 @@
 - Files: `PROGRESS.md`, `client/src/App.tsx`, `client/src/hooks/useCollaboration.ts`, `client/src/types/protocol.ts`, `client/src/__tests__/useCollaboration.test.ts`, `client/tests/collab.spec.ts`, `gateway/src/main/java/pes/gateway/config/GatewayProperties.java`, `gateway/src/main/java/pes/gateway/protocol/CollabAwarenessEvent.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`.
 - Linked: LOG-0176.
 - Tutor review: pending
+
+
+## [LOG-0178] 2026-11-16 13:06 IST | PLAN | actor: agent
+- Reason: Address tutor re-review P1 findings on Awareness clientID impersonation/eviction defense and history-full read-only lock bypass prevention on branch phase/6-collab.
+- Details / Change:
+  1. Awareness clientID Session Binding:
+     - In `client/src/hooks/useCollaboration.ts`, maintain mapping between received awareness `clientID`s and server-verified `senderSessionId` (`clientIdToSessionRef` and `sessionToClientIdsRef`).
+     - Decode incoming binary awareness updates using `lib0/decoding` and `lib0/encoding`. For each entry, reject any remote update attempting to claim the local user's `awareness.clientID` or another session's established `clientID`.
+     - When an unowned `clientID` is first observed from a session, bind it to that `senderSessionId`. If a collision is detected from a different session, drop that entry to protect the legitimate peer from eviction or overwrite.
+     - On member disconnect / `room.left`, cleanly remove and unbind all `clientID`s associated with that specific session.
+     - Leave the owner-authored regression test in `client/src/__tests__/useCollaboration.test.ts` pending for Piyush to write independently, per pedagogical review instructions.
+  2. Guard All Document Mutation Paths on History Cap:
+     - In `client/src/hooks/useCollaboration.ts`, check `isLocked` in `setSharedCode` and `setSharedLanguage`: no-op and reject modifications when collaboration history is full, preventing local Y.Doc mutations and subsequent server rejections.
+     - In `client/src/App.tsx`, disable `LanguageSelector` and `Reset` button when `collab.isLocked` is true, and guard `handleReset` and `handleLanguageChange`.
+     - Add unit tests in `client/src/__tests__/useCollaboration.test.ts` proving that after receiving `COLLAB_HISTORY_FULL`, calling `setSharedCode` and `setSharedLanguage` does not mutate `ytext` or `ymeta`, and no updates are sent.
+- Files: `PROGRESS.md`, `client/src/hooks/useCollaboration.ts`, `client/src/App.tsx`, `client/src/__tests__/useCollaboration.test.ts`.
+- Linked: LOG-0177.
+- Tutor review: pending
+
+
+## [LOG-0179] 2026-11-16 13:14 IST | DONE | actor: agent
+- Reason: Complete implementation and verification of tutor re-review findings on Awareness clientID binding and history-lock mutation guards.
+- Details / Change:
+  1. Awareness clientID Session Binding:
+     - In `client/src/hooks/useCollaboration.ts`, added `clientIdToSessionRef` (`Map<number, string>`) and `sessionToClientIdsRef` (`Map<string, Set<number>>`).
+     - Decoded binary awareness updates using `lib0/decoding`.
+     - Validated that remote sessions cannot claim local user's `awareness.clientID` or another participant's previously registered `clientID`. Colliding entries are safely dropped, protecting legitimate peers from eviction or presence overwrite.
+     - Bound unowned `clientID`s to `event.senderSessionId` and sanitized `state.user` with server-assigned metadata (`name`, `color`, `sessionId`).
+     - Re-encoded filtered/sanitized entries via `lib0/encoding` before calling `applyAwarenessUpdate`.
+     - In `room.left`, purged and unbound all `clientID`s associated with the departed session.
+     - Left the owner-authored regression test in `client/src/__tests__/useCollaboration.test.ts` pending for Piyush, per pedagogical instruction.
+  2. Guard All Document Mutation Paths on History Cap:
+     - In `client/src/hooks/useCollaboration.ts`, added `isLockedRef`. In `setSharedCode` and `setSharedLanguage`, checked `if (isLockedRef.current) return;` before any `Y.Doc` transaction, ensuring programmatic or UI mutations are rejected when locked.
+     - In `client/src/App.tsx`, disabled `LanguageSelector` and `Reset` button when `collab.isLocked` is true (`disabled={isRunning || collab.isLocked}`). Guarded `handleReset` and `handleLanguageChange` against running while locked.
+     - Added unit test in `useCollaboration.test.ts` verifying that `setSharedCode` and `setSharedLanguage` no-op without mutating `Y.Doc` or sending updates when locked.
+     - Added unit test in `App.test.tsx` verifying that `LanguageSelector` and `Reset` button are disabled and warning banner is shown upon `COLLAB_HISTORY_FULL`.
+  3. Test Evidence:
+     - `make -C sandbox-daemon test`: 22/22 passed.
+     - `(cd worker && gradle test --rerun-tasks)`: 19/19 passed.
+     - `(cd gateway && gradle test --rerun-tasks)`: 44/44 passed.
+     - `(cd client && npm test)`: 33/33 passed (7/7 test suites).
+     - `(cd client && npm run build)`: built distribution cleanly with TypeScript validation.
+     - `bash client/tests/verify_e2e_browser.sh 8080 50051 5173`: all 5 Playwright tests passed (including two-browser concurrent collaboration).
+- Files: `PROGRESS.md`, `client/src/App.tsx`, `client/src/hooks/useCollaboration.ts`, `client/src/__tests__/App.test.tsx`, `client/src/__tests__/useCollaboration.test.ts`.
+- Linked: LOG-0178.
+- Tutor review: pending

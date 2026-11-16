@@ -68,6 +68,7 @@ export const App: React.FC = () => {
     uiStatus === 'RUNNING';
 
   const handleLanguageChange = (newLang: SupportedLanguage) => {
+    if (isRunning || collab.isLocked) return;
     collab.setSharedLanguage(newLang);
   };
 
@@ -76,6 +77,7 @@ export const App: React.FC = () => {
   };
 
   const handleReset = () => {
+    if (isRunning || collab.isLocked) return;
     resetSocketState();
     const starter = collab.language === 'c' ? C_STARTER : PYTHON_STARTER;
     collab.setSharedCode(starter);
@@ -181,7 +183,7 @@ export const App: React.FC = () => {
           <LanguageSelector
             language={collab.language}
             onChange={handleLanguageChange}
-            disabled={isRunning}
+            disabled={isRunning || collab.isLocked}
           />
         </div>
 
@@ -200,7 +202,7 @@ export const App: React.FC = () => {
             type="button"
             className="btn btn-secondary"
             onClick={handleReset}
-            disabled={isRunning}
+            disabled={isRunning || collab.isLocked}
             data-testid="reset-button"
           >
             Reset

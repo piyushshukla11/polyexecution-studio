@@ -8,7 +8,7 @@ import { OutgoingMessage, CollabSyncEvent, CollabUpdateEvent, CollabAwarenessEve
 
 describe('useCollaboration hook', () => {
   let sentMessages: OutgoingMessage[];
-  let sendMessageMock: (msg: OutgoingMessage) => boolean;
+  let sendMessageMock: ReturnType<typeof vi.fn<(msg: OutgoingMessage) => boolean>>;
 
   beforeEach(() => {
     sentMessages = [];
@@ -236,5 +236,62 @@ describe('useCollaboration hook', () => {
     });
 
     expect(result.current.isLocked).toBe(true);
+  });
+
+  it('guards setSharedCode and setSharedLanguage when locked on COLLAB_HISTORY_FULL', () => {
+    const { result } = renderHook(() =>
+      useCollaboration({
+        roomId: 'room-collab-test',
+        joined: true,
+        sessionId: 'sess-local',
+        assignedUser: { name: 'Local-User', color: '#30bced' },
+        sendMessage: sendMessageMock
+      })
+    );
+
+    // Initial sync
+    act(() => {
+      result.current.processServerMessage({
+        type: 'collab.sync',
+        roomId: 'room-collab-test',
+        updates: []
+      });
+    });
+
+    const initialText = result.current.ytext.toString();
+    expect(result.current.language).toBe('c');
+
+    // Trigger COLLAB_HISTORY_FULL
+    act(() => {
+      result.current.processServerMessage({
+        type: 'error',
+        code: 'COLLAB_HISTORY_FULL',
+        message: 'Room collaboration history limit reached. Editing has been locked.'
+      });
+    });
+
+    expect(result.current.isLocked).toBe(true);
+
+    // Clear sendMessageMock calls from initial sync
+    sendMessageMock.mockClear();
+
+    // Attempt setSharedCode while locked
+    act(() => {
+      result.current.setSharedCode('int main() { return 42; }');
+    });
+
+    // Document must not change, and no outgoing update sent
+    expect(result.current.ytext.toString()).toBe(initialText);
+    expect(sendMessageMock).not.toHaveBeenCalled();
+
+    // Attempt setSharedLanguage while locked
+    act(() => {
+      result.current.setSharedLanguage('python');
+    });
+
+    // Language and doc must not change, and no outgoing update sent
+    expect(result.current.language).toBe('c');
+    expect(result.current.ytext.toString()).toBe(initialText);
+    expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });
