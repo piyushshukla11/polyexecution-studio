@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libc6-dev \
     python3 \
+    nodejs \
     libseccomp2 \
     procps \
     curl \
@@ -45,7 +46,8 @@ RUN chmod 755 /app/sandbox-daemon/sandbox-runner
 COPY --from=worker-builder /workspace/worker/build/install/pes-worker /app/worker
 
 ENV PES_RUNNER_BIN=/app/sandbox-daemon/sandbox-runner
+ENV PES_WORKER_HOST=0.0.0.0
 
 EXPOSE 50051
 
-ENTRYPOINT ["/app/worker/bin/pes-worker", "--port", "50051", "--runner", "/app/sandbox-daemon/sandbox-runner"]
+ENTRYPOINT ["/app/worker/bin/pes-worker", "--port", "50051", "--runner", "/app/sandbox-daemon/sandbox-runner", "--host", "0.0.0.0"]

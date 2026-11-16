@@ -19,7 +19,16 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   onMount,
   readOnly
 }) => {
-  const monacoLanguage = language === 'c' ? 'c' : 'python';
+  const monacoLanguage =
+    language === 'c'
+      ? 'c'
+      : language === 'python'
+      ? 'python'
+      : language === 'java'
+      ? 'java'
+      : language === 'kotlin'
+      ? 'kotlin'
+      : 'javascript';
   const isBound = !!onMount;
 
   return (

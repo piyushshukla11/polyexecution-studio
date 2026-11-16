@@ -132,4 +132,28 @@ class RequestValidatorTest {
         RunMessage r4 = new RunMessage("room-1", "req-1", "c", "int main(){}", "", new ResourceLimitsDto(1000L, 5000L, 1024L, 1024L));
         assertFalse(validator.validateRunRequest(r4).valid());
     }
+
+    @Test
+    @DisplayName("Valid Java, Kotlin, and Node requests pass validation")
+    void testMultiLanguageValidation() {
+        RunMessage javaRun = new RunMessage("room-1", "req-1", "java", "class Main { public static void main(String[] args) {} }", "", null);
+        ValidationResult javaRes = validator.validateRunRequest(javaRun);
+        assertTrue(javaRes.valid());
+        assertEquals(Language.LANGUAGE_JAVA, javaRes.protoLanguage());
+
+        RunMessage kotlinRun = new RunMessage("room-1", "req-2", "kotlin", "fun main() {}", "", null);
+        ValidationResult kotlinRes = validator.validateRunRequest(kotlinRun);
+        assertTrue(kotlinRes.valid());
+        assertEquals(Language.LANGUAGE_KOTLIN, kotlinRes.protoLanguage());
+
+        RunMessage nodeRun = new RunMessage("room-1", "req-3", "node", "console.log(1)", "", null);
+        ValidationResult nodeRes = validator.validateRunRequest(nodeRun);
+        assertTrue(nodeRes.valid());
+        assertEquals(Language.LANGUAGE_NODE, nodeRes.protoLanguage());
+
+        RunMessage jsRun = new RunMessage("room-1", "req-4", "javascript", "console.log(2)", "", null);
+        ValidationResult jsRes = validator.validateRunRequest(jsRun);
+        assertTrue(jsRes.valid());
+        assertEquals(Language.LANGUAGE_NODE, jsRes.protoLanguage());
+    }
 }

@@ -54,7 +54,7 @@ public class RequestValidator {
         }
 
         if (run.getLanguage() == null || run.getLanguage().isBlank()) {
-            return ValidationResult.error("UNSUPPORTED_LANGUAGE", "Language is required (must be 'c' or 'python')");
+            return ValidationResult.error("UNSUPPORTED_LANGUAGE", "Language is required (must be 'c', 'python', 'java', 'kotlin', or 'node')");
         }
 
         Language protoLanguage;
@@ -63,9 +63,15 @@ public class RequestValidator {
             protoLanguage = Language.LANGUAGE_C;
         } else if ("python".equals(langLower)) {
             protoLanguage = Language.LANGUAGE_PYTHON;
+        } else if ("java".equals(langLower)) {
+            protoLanguage = Language.LANGUAGE_JAVA;
+        } else if ("kotlin".equals(langLower)) {
+            protoLanguage = Language.LANGUAGE_KOTLIN;
+        } else if ("node".equals(langLower) || "nodejs".equals(langLower) || "javascript".equals(langLower)) {
+            protoLanguage = Language.LANGUAGE_NODE;
         } else {
             return ValidationResult.error("UNSUPPORTED_LANGUAGE",
-                "Unsupported language '" + run.getLanguage() + "'. Allowed languages are 'c' and 'python'");
+                "Unsupported language '" + run.getLanguage() + "'. Allowed languages are 'c', 'python', 'java', 'kotlin', and 'node'");
         }
 
         if (run.getSourceCode() == null || run.getSourceCode().isEmpty()) {

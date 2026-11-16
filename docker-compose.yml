@@ -24,6 +24,8 @@ services:
       context: .
       dockerfile: worker/Dockerfile
     container_name: pes-worker
+    environment:
+      - PES_WORKER_HOST=0.0.0.0
     ports:
       # Strictly bind to loopback
       - "127.0.0.1:50051:50051"

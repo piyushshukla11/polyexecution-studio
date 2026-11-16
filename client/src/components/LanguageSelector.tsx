@@ -27,6 +27,9 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({
       >
         <option value="c">C (GCC / Linux Sandbox)</option>
         <option value="python">Python 3 (Linux Sandbox)</option>
+        <option value="java">Java 21 (OpenJDK / Linux Sandbox)</option>
+        <option value="kotlin">Kotlin (Linux Sandbox)</option>
+        <option value="node">Node.js (Linux Sandbox)</option>
       </select>
     </div>
   );

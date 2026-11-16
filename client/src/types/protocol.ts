@@ -1,4 +1,4 @@
-export type SupportedLanguage = 'c' | 'python';
+export type SupportedLanguage = 'c' | 'python' | 'java' | 'kotlin' | 'node';
 
 export interface ResourceLimitsDto {
   cpuMs?: number;

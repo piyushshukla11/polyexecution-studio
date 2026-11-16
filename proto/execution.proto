@@ -10,6 +10,9 @@ enum Language {
   LANGUAGE_UNSPECIFIED = 0;
   LANGUAGE_C = 1;
   LANGUAGE_PYTHON = 2;
+  LANGUAGE_JAVA = 3;
+  LANGUAGE_KOTLIN = 4;
+  LANGUAGE_NODE = 5;
 }
 
 enum ExecutionStatus {
