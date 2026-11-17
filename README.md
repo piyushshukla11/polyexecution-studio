@@ -173,15 +173,18 @@ Run the automated multi-room concurrent execution benchmark:
 bash gateway/tests/verify_load_test_50.sh 8080 50051 50
 ```
 
-### 9. Docker Compose Setup & Validation
+### 9. Docker Compose Setup & Verification
 ```bash
-# Validate Compose configuration
+# Validate Compose configuration syntax
 docker compose config
 
-# Build and start services (requires host Docker daemon access and cgroups v2)
-docker compose up --build -d
+# Run automated end-to-end verification through Client reverse proxy port 5173
+# (Requires host Docker daemon access and cgroups v2)
+bash scripts/verify_docker_compose.sh
 
-# Stop and tear down services
+# Or run manually:
+docker compose up --build -d
+java gateway/tests/E2eWebSocketClient.java "ws://127.0.0.1:5173/ws"
 docker compose down
 ```
 

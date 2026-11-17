@@ -3651,3 +3651,34 @@
 - Files: `PROGRESS.md`, `README.md`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/RoomManagerTest.java`, `gateway/tests/E2eWebSocketClient.java`, `sandbox-daemon/phase2_rootfs.c`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`.
 - Linked: LOG-0202.
 - Tutor review: pending
+
+
+## [LOG-0204] 2026-11-17 10:10 IST | PLAN | actor: agent
+- Goal: Implement reproducible Docker Compose verification automation through Client reverse proxy port 5173, document exact execution steps, and report daemon prerequisites.
+- Steps:
+  1. In `gateway/tests/E2eWebSocketClient.java`: dynamically set WebSocket `Origin` header to `http://127.0.0.1:5173` when connecting to port 5173, matching Nginx client ingress.
+  2. Create `scripts/verify_docker_compose.sh`: automate Docker daemon accessibility check, Compose syntax validation (`docker compose config`), container stack launch (`docker compose up --build -d`), health check polling via Nginx on `http://127.0.0.1:5173/health`, multi-runtime WebSocket execution via `java gateway/tests/E2eWebSocketClient.java ws://127.0.0.1:5173/ws`, stack teardown (`docker compose down`), and host cgroup/process leak verification.
+  3. In `README.md`: document `verify_docker_compose.sh` and exact commands for running the Compose verification on a Docker-capable host.
+- Files: `PROGRESS.md`, `README.md`, `gateway/tests/E2eWebSocketClient.java`, `scripts/verify_docker_compose.sh`.
+- Linked: LOG-0203.
+- Tutor review: pending
+
+
+## [LOG-0205] 2026-11-17 10:15 IST | DONE | actor: agent
+- Goal: Implement reproducible Docker Compose verification automation through Client reverse proxy port 5173, document exact execution steps, and report daemon prerequisites.
+- Outcome:
+  1. Dynamic Client Reverse Proxy Ingress Testing:
+     - In `gateway/tests/E2eWebSocketClient.java`: configured Origin header to resolve to `http://127.0.0.1:5173` when `wsUrl` targets port 5173, allowing seamless WebSocket verification through Nginx reverse proxy.
+  2. Automated Docker Compose Verification Script:
+     - Created `scripts/verify_docker_compose.sh` orchestrating daemon availability check, Compose configuration validation, background stack startup, health polling via Nginx on `http://127.0.0.1:5173/health`, full multi-language execution (C, Python, Java with nested/helper classes, Kotlin, Node) via `java gateway/tests/E2eWebSocketClient.java ws://127.0.0.1:5173/ws`, clean teardown via `docker compose down`, and post-test cgroup/process leak assertions.
+     - Executed `scripts/verify_docker_compose.sh`: accurately detected absent `/var/run/docker.sock` in this daemonless container sandbox environment and cleanly reported prerequisites without hanging or mutating permissions.
+  3. Documentation & Governance:
+     - In `README.md`: updated Docker Compose section to document `scripts/verify_docker_compose.sh` and exact manual verification commands through port 5173.
+     - Maintained Phase 7 status as `In Progress` pending owner interview prep completion in `docs/05_INTERVIEW_PREP.md`.
+- Verification:
+  - `docker compose config`: passed cleanly
+  - `bash scripts/verify_docker_compose.sh`: cleanly executed daemon check and reported `/var/run/docker.sock` prerequisite
+  - `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check`: passed cleanly
+- Files: `PROGRESS.md`, `README.md`, `gateway/tests/E2eWebSocketClient.java`, `scripts/verify_docker_compose.sh`.
+- Linked: LOG-0204.
+- Tutor review: pending

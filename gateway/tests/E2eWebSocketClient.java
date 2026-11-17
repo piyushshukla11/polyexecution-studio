@@ -36,8 +36,9 @@ public class E2eWebSocketClient {
         System.out.println("Connecting to " + wsUrl);
 
         BlockingQueue<String> messages = new LinkedBlockingQueue<>();
+        String origin = wsUrl.contains(":5173") ? "http://127.0.0.1:5173" : "http://127.0.0.1:8080";
         CompletableFuture<WebSocket> wsFuture = HttpClient.newHttpClient().newWebSocketBuilder()
-            .header("Origin", "http://127.0.0.1:8080")
+            .header("Origin", origin)
             .connectTimeout(Duration.ofSeconds(5))
             .buildAsync(URI.create(wsUrl), new WebSocket.Listener() {
                 private final StringBuilder sb = new StringBuilder();
