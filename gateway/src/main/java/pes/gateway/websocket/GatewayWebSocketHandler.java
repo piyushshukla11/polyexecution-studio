@@ -343,7 +343,7 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
         String lang = language.trim().toLowerCase();
         return switch (lang) {
             case "java", "kotlin" -> Math.max(3072L, base);
-            case "node", "nodejs", "javascript" -> Math.max(4096L, base);
+            case "node", "nodejs", "javascript" -> Math.max(5120L, base);
             case "c", "python" -> Math.max(512L, base);
             default -> Math.max(512L, base);
         };

@@ -306,6 +306,183 @@ int phase2_workspace_populate(int workspace_dir_fd, int source_fd, const char *s
     return result;
 }
 
+static uint32_t compute_crc32(const unsigned char *buf, size_t len) {
+    uint32_t crc = 0xFFFFFFFFU;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= buf[i];
+        for (int j = 0; j < 8; j++) {
+            crc = (crc >> 1) ^ (0xEDB88320U & -(crc & 1U));
+        }
+    }
+    return ~crc;
+}
+
+struct jar_entry_info {
+    char name[256];
+    uint32_t size;
+    uint32_t crc;
+    uint32_t offset;
+};
+
+static int package_workspace_classes_to_jar(int workspace_dir_fd, int artifact_fd,
+                                            uid_t expected_owner, size_t max_artifact_bytes) {
+    int dup_fd = dup(workspace_dir_fd);
+    if (dup_fd < 0) return -1;
+    DIR *dir = fdopendir(dup_fd);
+    if (!dir) {
+        close(dup_fd);
+        return -1;
+    }
+
+    struct jar_entry_info entries[256];
+    size_t count = 0;
+    size_t total_bytes = 0;
+
+    struct dirent *de;
+    while ((de = readdir(dir)) != NULL) {
+        size_t nlen = strlen(de->d_name);
+        if (nlen <= 6 || strcmp(de->d_name + nlen - 6, ".class") != 0) continue;
+        if (count >= 256) {
+            closedir(dir);
+            errno = E2BIG;
+            return -1;
+        }
+
+        struct stat st;
+        if (fstatat(workspace_dir_fd, de->d_name, &st, AT_SYMLINK_NOFOLLOW) < 0 ||
+            !S_ISREG(st.st_mode) || st.st_uid != expected_owner || st.st_size <= 0) {
+            closedir(dir);
+            errno = EACCES;
+            return -1;
+        }
+        if ((size_t)st.st_size > max_artifact_bytes || total_bytes + (size_t)st.st_size > max_artifact_bytes) {
+            closedir(dir);
+            errno = EFBIG;
+            return -1;
+        }
+
+        snprintf(entries[count].name, sizeof(entries[count].name), "%s", de->d_name);
+        entries[count].size = (uint32_t)st.st_size;
+        total_bytes += (size_t)st.st_size;
+        count++;
+    }
+
+    if (count == 0) {
+        closedir(dir);
+        errno = ENOENT;
+        return -1;
+    }
+
+    // Sort entries for deterministic archive order
+    for (size_t i = 0; i < count - 1; i++) {
+        for (size_t j = i + 1; j < count; j++) {
+            if (strcmp(entries[i].name, entries[j].name) > 0) {
+                struct jar_entry_info tmp = entries[i];
+                entries[i] = entries[j];
+                entries[j] = tmp;
+            }
+        }
+    }
+
+    if (lseek(artifact_fd, 0, SEEK_SET) < 0 || ftruncate(artifact_fd, 0) < 0) {
+        closedir(dir);
+        return -1;
+    }
+
+    uint32_t cur_offset = 0;
+    for (size_t i = 0; i < count; i++) {
+        int efd = openat(workspace_dir_fd, entries[i].name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+        if (efd < 0) {
+            closedir(dir);
+            return -1;
+        }
+        unsigned char *buf = malloc(entries[i].size);
+        if (!buf) {
+            close(efd);
+            closedir(dir);
+            errno = ENOMEM;
+            return -1;
+        }
+        size_t rd = 0;
+        while (rd < entries[i].size) {
+            ssize_t n = read(efd, buf + rd, entries[i].size - rd);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) break;
+            rd += (size_t)n;
+        }
+        close(efd);
+        if (rd != entries[i].size) {
+            free(buf);
+            closedir(dir);
+            errno = EIO;
+            return -1;
+        }
+
+        entries[i].crc = compute_crc32(buf, entries[i].size);
+        entries[i].offset = cur_offset;
+        uint16_t nlen = (uint16_t)strlen(entries[i].name);
+
+        unsigned char lh[30];
+        memset(lh, 0, sizeof(lh));
+        lh[0] = 0x50; lh[1] = 0x4b; lh[2] = 0x03; lh[3] = 0x04; // 0x04034b50
+        lh[4] = 20; // version needed (2.0)
+        memcpy(lh + 14, &entries[i].crc, 4);
+        memcpy(lh + 18, &entries[i].size, 4);
+        memcpy(lh + 22, &entries[i].size, 4);
+        memcpy(lh + 26, &nlen, 2);
+
+        if (write_all(artifact_fd, (const char *)lh, 30) < 0 ||
+            write_all(artifact_fd, entries[i].name, nlen) < 0 ||
+            write_all(artifact_fd, (const char *)buf, entries[i].size) < 0) {
+            free(buf);
+            closedir(dir);
+            return -1;
+        }
+        free(buf);
+        cur_offset += 30 + (uint32_t)nlen + entries[i].size;
+    }
+
+    uint32_t cd_offset = cur_offset;
+    uint32_t cd_size = 0;
+
+    for (size_t i = 0; i < count; i++) {
+        uint16_t nlen = (uint16_t)strlen(entries[i].name);
+        unsigned char cdh[46];
+        memset(cdh, 0, sizeof(cdh));
+        cdh[0] = 0x50; cdh[1] = 0x4b; cdh[2] = 0x01; cdh[3] = 0x02; // 0x02014b50
+        cdh[4] = 20; cdh[6] = 20; // version 2.0
+        memcpy(cdh + 16, &entries[i].crc, 4);
+        memcpy(cdh + 20, &entries[i].size, 4);
+        memcpy(cdh + 24, &entries[i].size, 4);
+        memcpy(cdh + 28, &nlen, 2);
+        memcpy(cdh + 42, &entries[i].offset, 4);
+
+        if (write_all(artifact_fd, (const char *)cdh, 46) < 0 ||
+            write_all(artifact_fd, entries[i].name, nlen) < 0) {
+            closedir(dir);
+            return -1;
+        }
+        cd_size += 46 + (uint32_t)nlen;
+    }
+
+    unsigned char eocd[22];
+    memset(eocd, 0, sizeof(eocd));
+    eocd[0] = 0x50; eocd[1] = 0x4b; eocd[2] = 0x05; eocd[3] = 0x06; // 0x06054b50
+    uint16_t num_ent = (uint16_t)count;
+    memcpy(eocd + 8, &num_ent, 2);
+    memcpy(eocd + 10, &num_ent, 2);
+    memcpy(eocd + 12, &cd_size, 4);
+    memcpy(eocd + 16, &cd_offset, 4);
+
+    if (write_all(artifact_fd, (const char *)eocd, 22) < 0) {
+        closedir(dir);
+        return -1;
+    }
+
+    closedir(dir);
+    return 0;
+}
+
 int phase2_rootfs_copy_artifact(int workspace_dir_fd, const char *artifact_name, int artifact_fd,
                                 uid_t expected_owner, size_t max_artifact_bytes) {
     if (workspace_dir_fd < 0 || !artifact_name || !valid_artifact_leaf(artifact_name) ||
@@ -314,7 +491,12 @@ int phase2_rootfs_copy_artifact(int workspace_dir_fd, const char *artifact_name,
         return -1;
     }
     int source_fd = openat(workspace_dir_fd, artifact_name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
-    if (source_fd < 0) return -1;
+    if (source_fd < 0) {
+        if (strcmp(artifact_name, "target.jar") == 0) {
+            return package_workspace_classes_to_jar(workspace_dir_fd, artifact_fd, expected_owner, max_artifact_bytes);
+        }
+        return -1;
+    }
     struct stat metadata;
     if (fstat(source_fd, &metadata) < 0 || !S_ISREG(metadata.st_mode) || metadata.st_uid != expected_owner ||
         metadata.st_nlink != 1 || metadata.st_size <= 0 || (uint64_t)metadata.st_size > max_artifact_bytes) {

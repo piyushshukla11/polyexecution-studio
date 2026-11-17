@@ -3605,3 +3605,49 @@
 - Files: `PROGRESS.md`, `README.md`, `docker-compose.yml`, `gateway/src/main/java/pes/gateway/service/WorkerGrpcClient.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/RoomManagerTest.java`, `gateway/tests/E2eWebSocketClient.java`, `gateway/tests/LoadTest50Concurrent.java`, `gateway/tests/verify_load_test_50.sh`, `sandbox-daemon/Makefile`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/phase2_rootfs.c`, `sandbox-daemon/phase2_rootfs.h`, `sandbox-daemon/sandbox.c`, `sandbox-daemon/sandbox.h`, `sandbox-daemon/tests/evil/prctl_unauthorized.c`, `sandbox-daemon/tests/test_runner.py`, `worker/Dockerfile`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`.
 - Linked: LOG-0200.
 - Tutor review: pending
+
+
+## [LOG-0202] 2026-11-17 09:15 IST | PLAN | actor: agent
+- Goal: Remediate Phase 7 tutor review findings: align Gateway Node memory admission with Worker limit (5,120 MiB), package and hand off bounded multi-class Java artifact (target.jar) containing all generated class files (including nested and helper classes), and document Docker Compose host runtime requirements.
+- Steps:
+  1. Node Memory Admission Alignment:
+     - In `GatewayWebSocketHandler.java`: update `computeEffectiveMemoryMb` to return 5,120 MiB for Node.js workloads (matching Worker's 5,120 MiB limit).
+     - In `RoomManagerTest.java`: update memory tests and add `testNodeComposeBudgetRejectsFourthJob` asserting 3 Node jobs are admitted under 16,384 MiB budget and a 4th job is rejected with `GLOBAL_MEMORY_LIMIT_REACHED`.
+     - In `README.md`: update documented Node memory admission limit.
+  2. Java Multi-Class Bounded Artifact Handoff:
+     - In `sandbox-daemon/phase2_rootfs.c`: implement `package_workspace_classes_to_jar` to bundle all `.class` files in `/workspace` (including nested `Main$Helper.class` and sibling classes) into a standard uncompressed ZIP/JAR (`target.jar`) when `target.jar` is requested as the artifact output.
+     - In `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`: request `target.jar` as Java compiler artifact output; Stage 2 executes `java -cp /workspace/target.jar <ClassName>` directly from bytecode.
+     - In `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`: add unit test `javaNestedAndHelperClassesExecutionHandsOffTargetJar`.
+     - In `gateway/tests/E2eWebSocketClient.java`: add live multi-class sandbox test with nested `Helper` class and sibling class.
+  3. Docker Compose Verification:
+     - Verify Compose syntax via `docker compose config`.
+     - Document that live container execution requires host Docker daemon access (`/var/run/docker.sock`) and remains unverified in daemonless container sandboxes.
+- Files: `PROGRESS.md`, `README.md`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/RoomManagerTest.java`, `gateway/tests/E2eWebSocketClient.java`, `sandbox-daemon/phase2_rootfs.c`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`.
+- Linked: LOG-0201.
+- Tutor review: pending
+
+
+## [LOG-0203] 2026-11-17 09:22 IST | DONE | actor: agent
+- Goal: Remediate Phase 7 tutor review findings: align Gateway Node memory admission with Worker limit (5,120 MiB), package and hand off bounded multi-class Java artifact (target.jar) containing all generated class files (including nested and helper classes), and document Docker Compose host runtime requirements.
+- Outcome:
+  1. Node Memory Admission Alignment:
+     - In `GatewayWebSocketHandler.java`: updated `computeEffectiveMemoryMb` to reserve 5,120 MiB for Node.js (matching Worker's 5,120 MiB virtual memory allowance for V8 pointer compression cage).
+     - In `RoomManagerTest.java`: added `testNodeComposeBudgetRejectsFourthJob` asserting that under the 16,384 MiB Compose aggregate budget, 3 Node jobs are admitted (15,360 MiB) and a 4th job is rejected with `GLOBAL_MEMORY_LIMIT_REACHED`.
+  2. Java Multi-Class Bounded Artifact Handoff:
+     - In `sandbox-daemon/phase2_rootfs.c`: added `package_workspace_classes_to_jar` to collect all regular `.class` files in `/workspace` and package them into an uncompressed, standard ZIP/JAR archive (`target.jar`) up to 16 MiB.
+     - In `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`: Stage 1 compiles via `javac` and requests `target.jar` artifact output; Stage 2 executes bytecode directly via `java -cp /workspace/target.jar <ClassName>` without recompilation. All nested classes (`Main$Helper.class`), local classes, and sibling helper classes are preserved and load cleanly.
+     - In `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`: added test `javaNestedAndHelperClassesExecutionHandsOffTargetJar` asserting `target.jar` artifact output and bytecode execution. All 27 Worker tests passed.
+     - In `gateway/tests/E2eWebSocketClient.java`: updated Java live test case to execute `Main` calling static nested class `Helper` and sibling class `Sibling`. Verified live execution output: `Hello from Nested Helper and Sibling Helper`.
+  3. Documentation & Compose Status:
+     - In `README.md`: updated Node memory reservation to 5,120 MiB; documented Java `target.jar` multi-class artifact handoff; kept Phase 7 marked `In Progress` pending owner interview prep completion in `docs/05_INTERVIEW_PREP.md`.
+     - Confirmed `docker compose config` syntax validation passes cleanly.
+- Verification:
+  - `make -C sandbox-daemon test`: 23/23 passed (18 Phase 1 + 5 Phase 2)
+  - `(cd worker && gradle test installDist)`: 27/27 passed
+  - `(cd gateway && gradle test bootJar)`: 48/48 passed
+  - `bash gateway/tests/verify_e2e_websocket.sh 8089 50059`: 100% passed (including nested Java helper classes)
+  - `docker compose config`: passed cleanly
+  - `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check`: passed cleanly
+- Files: `PROGRESS.md`, `README.md`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/RoomManagerTest.java`, `gateway/tests/E2eWebSocketClient.java`, `sandbox-daemon/phase2_rootfs.c`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`.
+- Linked: LOG-0202.
+- Tutor review: pending
