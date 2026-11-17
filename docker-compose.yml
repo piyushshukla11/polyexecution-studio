@@ -9,6 +9,7 @@ services:
       - SERVER_PORT=8080
       - GATEWAY_WORKER_GRPC_TARGET=worker:50051
       - GATEWAY_MAX_GLOBAL_CONCURRENT_RUNS=64
+      - GATEWAY_MAX_AGGREGATE_MEMORY_MB=16384
       - GATEWAY_MAX_ROOMS=200
     ports:
       # Strictly bind to loopback per security requirements

@@ -1776,11 +1776,42 @@ PHASE1_TESTS = [
     ("test_process_cleanup", "Host process table cleanup check", test_process_cleanup),
 ]
 
+def test_phase2_prctl_restricted(tc: TestCase):
+    """Phase 2 Check 05: Seccomp restricted prctl filtering (PR_SET_NAME allowed, unauthorized operations killed with SIGSYS)."""
+    cmd = [str(RUNNER_BIN), "--timeout-ms", "2000", "--", "tests/evil/bin/prctl_unauthorized"]
+    tc.command = cmd
+    stdout, stderr, ret, timed_out, _ = run_runner(
+        ["--timeout-ms", "2000", "--", "tests/evil/bin/prctl_unauthorized"]
+    )
+    tc.raw_stdout = stdout
+    tc.raw_stderr = stderr
+
+    try:
+        data = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        tc.status = "FAILED"
+        tc.failure_category = "JSON_PARSE_ERROR"
+        tc.detail = f"Failed to parse JSON output: {exc}"
+        return
+
+    # prctl_unauthorized calls PR_SET_NAME and PR_GET_NAME (allowed),
+    # then calls PR_SET_DUMPABLE (denied by seccomp with SIGSYS / signal 31).
+    if data.get("status") != "RUNTIME_ERROR" or data.get("signal") != 31:
+        tc.status = "FAILED"
+        tc.failure_category = "CONTRACT_VIOLATION"
+        tc.detail = f"Expected RUNTIME_ERROR with signal 31 (SIGSYS); got status={data.get('status')}, signal={data.get('signal')}, exit_code={data.get('exit_code')}"
+        return
+
+    tc.status = "PASSED"
+    tc.detail = "PR_SET_NAME and PR_GET_NAME permitted; unauthorized prctl terminated with SIGSYS (signal 31)"
+
+
 PHASE2_CHECKS = [
     ("test_phase2_fork_bomb", "Fork bomb containment (Phase 2)", test_phase2_fork_bomb),
     ("test_phase2_read_etc_passwd", "Host filesystem snooping defense (Phase 2)", test_phase2_read_etc_passwd),
     ("test_phase2_net_connect", "Outbound network connect defense (Phase 2)", test_phase2_net_connect),
     ("test_phase2_watchdog_cleanup", "Watchdog failure cleanup & target detection (Phase 2)", test_phase2_watchdog_cleanup),
+    ("test_phase2_prctl_restricted", "Restricted prctl thread naming filter (Phase 2)", test_phase2_prctl_restricted),
 ]
 
 

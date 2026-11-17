@@ -88,11 +88,15 @@ public class WorkerGrpcClient implements WorkerClient {
             ? request.getLimits().getWallMs()
             : 5000L;
 
-        // C requires sandboxed compilation before execution.
-        // Worker allows up to 8000 ms compile wall time plus 5000 ms runner setup grace.
-        long compileBudgetMs = (request.getLanguage() == Language.LANGUAGE_C)
-            ? 13000L
-            : 0L;
+        // Compiled and interpreted languages require sandboxed compilation / syntax checking.
+        // Worker allows per-language compile wall time plus runner setup grace.
+        long compileBudgetMs = switch (request.getLanguage()) {
+            case LANGUAGE_KOTLIN -> 45000L;
+            case LANGUAGE_JAVA -> 15000L;
+            case LANGUAGE_C -> 13000L;
+            case LANGUAGE_NODE, LANGUAGE_PYTHON -> 8000L;
+            default -> 0L;
+        };
 
         long runnerGraceMs = 5000L;
         long gatewayMarginMs = 5000L;

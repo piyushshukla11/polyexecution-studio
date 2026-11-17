@@ -287,8 +287,9 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
         if (valResult.protoLimits() != null && valResult.protoLimits().getMemoryMb() > 0) {
             requestedMemoryMb = valResult.protoLimits().getMemoryMb();
         }
+        long effectiveMemoryMb = computeEffectiveMemoryMb(runMsg.getLanguage(), requestedMemoryMb);
 
-        AcquireRunResult acquireResult = roomManager.tryAcquireRun(roomId, session.getId(), requestId, requestedMemoryMb);
+        AcquireRunResult acquireResult = roomManager.tryAcquireRun(roomId, session.getId(), requestId, effectiveMemoryMb);
         if (acquireResult != AcquireRunResult.ACQUIRED) {
             String message = switch (acquireResult) {
                 case ROOM_RUN_IN_PROGRESS -> "Another execution is currently in progress for room " + roomId;
@@ -332,6 +333,20 @@ public class GatewayWebSocketHandler extends TextWebSocketHandler {
                     roomManager.releaseRun(roomId, requestId);
                 }
             });
+    }
+
+    public static long computeEffectiveMemoryMb(String language, long requestedMemoryMb) {
+        long base = requestedMemoryMb > 0 ? requestedMemoryMb : 64L;
+        if (language == null) {
+            return Math.max(512L, base);
+        }
+        String lang = language.trim().toLowerCase();
+        return switch (lang) {
+            case "java", "kotlin" -> Math.max(3072L, base);
+            case "node", "nodejs", "javascript" -> Math.max(4096L, base);
+            case "c", "python" -> Math.max(512L, base);
+            default -> Math.max(512L, base);
+        };
     }
 
     private void handleExecutionSuccess(String roomId, String requestId, ExecuteResponse response) {

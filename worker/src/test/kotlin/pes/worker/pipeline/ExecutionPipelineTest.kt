@@ -207,6 +207,9 @@ class ExecutionPipelineTest {
         assertEquals("hello java", response.stdout)
         assertEquals(2, fake.calls.size)
         assertEquals("Main.java", fake.calls[0].workspace?.sourceName)
+        assertEquals("Main.class", fake.calls[0].workspace?.artifactName)
+        assertEquals("Main.class", fake.calls[1].workspace?.sourceName)
+        assertNull(fake.calls[1].workspace?.artifactName)
         assertEquals(listOf(ExecutionStage.STAGE_COMPILING, ExecutionStage.STAGE_RUNNING), stages)
         assertWorkspaceRemoved(fake.calls.first().workspace)
     }
@@ -325,6 +328,9 @@ class ExecutionPipelineTest {
         assertEquals("hello kotlin", response.stdout)
         assertEquals(2, fake.calls.size)
         assertEquals("source.kt", fake.calls[0].workspace?.sourceName)
+        assertEquals("target.jar", fake.calls[0].workspace?.artifactName)
+        assertEquals("target.jar", fake.calls[1].workspace?.sourceName)
+        assertNull(fake.calls[1].workspace?.artifactName)
         assertEquals(listOf(ExecutionStage.STAGE_COMPILING, ExecutionStage.STAGE_RUNNING), stages)
         assertWorkspaceRemoved(fake.calls.first().workspace)
     }

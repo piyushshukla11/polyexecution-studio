@@ -40,7 +40,7 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
         )
         const val MAX_SOURCE_CODE_BYTES = 262144
         const val MAX_STDIN_BYTES = ProcessSandboxRunner.MAX_STDIN_BYTES
-        const val MAX_ARTIFACT_BYTES = 1024 * 1024
+        const val MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
         const val DEFAULT_CPU_MS = 1000L
         const val MAX_CPU_MS = 10000L
         const val DEFAULT_WALL_MS = 2000L
@@ -247,7 +247,9 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
         val javacBin = System.getenv("PES_JAVAC_BIN") ?: "/usr/bin/javac"
         val javaBin = System.getenv("PES_JAVA_BIN") ?: "/usr/bin/java"
         val publicClassMatch = Regex("public\\s+class\\s+([A-Za-z0-9_]+)").find(request.sourceCode)
-        val sourceLeaf = publicClassMatch?.let { "${it.groupValues[1]}.java" } ?: "Main.java"
+        val className = publicClassMatch?.let { it.groupValues[1] } ?: "Main"
+        val sourceLeaf = "$className.java"
+        val classLeaf = "$className.class"
         val sourceFile = workspace.resolve(sourceLeaf)
         writePrivateSource(sourceFile, request.sourceCode)
 
@@ -263,7 +265,7 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
             binaryPath = javacBin,
             args = listOf("-J-XX:CompressedClassSpaceSize=64m", "-J-XX:MaxMetaspaceSize=64m", "-d", "/workspace", "/workspace/$sourceLeaf"),
             limits = compileLimits,
-            workspace = WorkspaceHandoff(workspace, sourceLeaf)
+            workspace = WorkspaceHandoff(workspace, sourceLeaf, classLeaf)
         )
 
         if (compileResult.status == ExecutionStatus.SANDBOX_ERROR) return buildResponse(request.jobId, compileResult)
@@ -275,6 +277,12 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
             return compileFailureResponse(request.jobId, compileResult, "java compilation failed")
         }
 
+        val classFile = workspace.resolve(classLeaf)
+        if (!isBoundedRegularArtifact(classFile)) {
+            return validationFailure(request, "java compiler did not produce a bounded artifact")
+        }
+        Files.deleteIfExists(sourceFile)
+
         onProgress?.invoke(ExecutionStage.STAGE_RUNNING)
         val javaLimits = ResourceLimits.newBuilder(limits)
             .setMemoryMb(limits.memoryMb.coerceAtLeast(3072L))
@@ -282,12 +290,22 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
         val runResult = runnerClient.run(
             jobId = request.jobId,
             binaryPath = javaBin,
-            args = listOf("-Xmx64m", "-Xms16m", "-XX:CompressedClassSpaceSize=64m", "-XX:MaxMetaspaceSize=64m", "/workspace/$sourceLeaf"),
+            args = listOf("-Xmx64m", "-Xms16m", "-XX:CompressedClassSpaceSize=64m", "-XX:MaxMetaspaceSize=64m", "-cp", "/workspace", className),
             limits = javaLimits,
             stdin = request.stdin,
-            workspace = WorkspaceHandoff(workspace, sourceLeaf)
+            workspace = WorkspaceHandoff(workspace, classLeaf)
         )
         return buildResponse(request.jobId, runResult)
+    }
+
+    private fun resolveNodeBinary(): String {
+        val env = System.getenv("PES_NODE_BIN")
+        if (env != null) return env
+        if (Files.isExecutable(Path.of("/usr/bin/node"))) return "/usr/bin/node"
+        if (Files.isExecutable(Path.of("/home/zogratis/.local/share/mise/installs/node/26.8.2/bin/node"))) {
+            return "/opt/node/bin/node"
+        }
+        return "/usr/bin/node"
     }
 
     private suspend fun executeNode(
@@ -296,14 +314,14 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
         workspace: Path,
         onProgress: (suspend (ExecutionStage) -> Unit)? = null
     ): ExecuteResponse {
-        val nodeBin = System.getenv("PES_NODE_BIN") ?: "/usr/bin/node"
+        val nodeBin = resolveNodeBinary()
         val sourceFile = workspace.resolve("source.js")
         writePrivateSource(sourceFile, request.sourceCode)
 
         val compileLimits = ResourceLimits.newBuilder()
             .setCpuMs(3000L)
             .setWallMs(5000L)
-            .setMemoryMb(512L)
+            .setMemoryMb(5120L)
             .setMaxOutputKb(64L)
             .build()
         onProgress?.invoke(ExecutionStage.STAGE_COMPILING)
@@ -326,7 +344,7 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
 
         onProgress?.invoke(ExecutionStage.STAGE_RUNNING)
         val nodeLimits = ResourceLimits.newBuilder(limits)
-            .setMemoryMb(limits.memoryMb.coerceAtLeast(512L))
+            .setMemoryMb(limits.memoryMb.coerceAtLeast(5120L))
             .build()
         val runResult = runnerClient.run(
             jobId = request.jobId,
@@ -345,24 +363,34 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
         workspace: Path,
         onProgress: (suspend (ExecutionStage) -> Unit)? = null
     ): ExecuteResponse {
-        val kotlincBin = System.getenv("PES_KOTLINC_BIN") ?: "/usr/bin/kotlinc"
         val javaBin = System.getenv("PES_JAVA_BIN") ?: "/usr/bin/java"
         val sourceFile = workspace.resolve("source.kt")
         writePrivateSource(sourceFile, request.sourceCode)
 
         val compileLimits = ResourceLimits.newBuilder()
-            .setCpuMs(8000L)
-            .setWallMs(12000L)
+            .setCpuMs(35000L)
+            .setWallMs(45000L)
             .setMemoryMb(3072L)
             .setMaxOutputKb(64L)
             .build()
         onProgress?.invoke(ExecutionStage.STAGE_COMPILING)
         val compileResult = runnerClient.run(
             jobId = "${request.jobId}-compile",
-            binaryPath = kotlincBin,
-            args = listOf("/workspace/source.kt", "-include-runtime", "-d", "/workspace/target.jar"),
+            binaryPath = javaBin,
+            args = listOf(
+                "-Xmx512m",
+                "-XX:CompressedClassSpaceSize=64m",
+                "-XX:MaxMetaspaceSize=64m",
+                "-cp",
+                "/opt/kotlinc/lib/*",
+                "org.jetbrains.kotlin.cli.jvm.K2JVMCompiler",
+                "/workspace/source.kt",
+                "-include-runtime",
+                "-d",
+                "/workspace/target.jar"
+            ),
             limits = compileLimits,
-            workspace = WorkspaceHandoff(workspace, "source.kt")
+            workspace = WorkspaceHandoff(workspace, "source.kt", "target.jar")
         )
 
         if (compileResult.status == ExecutionStatus.SANDBOX_ERROR) return buildResponse(request.jobId, compileResult)
@@ -374,6 +402,12 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
             return compileFailureResponse(request.jobId, compileResult, "kotlin compilation failed")
         }
 
+        val targetJar = workspace.resolve("target.jar")
+        if (!isBoundedRegularArtifact(targetJar)) {
+            return validationFailure(request, "kotlin compiler did not produce a bounded artifact")
+        }
+        Files.deleteIfExists(sourceFile)
+
         onProgress?.invoke(ExecutionStage.STAGE_RUNNING)
         val kotlinLimits = ResourceLimits.newBuilder(limits)
             .setMemoryMb(limits.memoryMb.coerceAtLeast(3072L))
@@ -384,7 +418,7 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
             args = listOf("-Xmx64m", "-Xms16m", "-XX:CompressedClassSpaceSize=64m", "-XX:MaxMetaspaceSize=64m", "-jar", "/workspace/target.jar"),
             limits = kotlinLimits,
             stdin = request.stdin,
-            workspace = WorkspaceHandoff(workspace, "source.kt")
+            workspace = WorkspaceHandoff(workspace, "target.jar")
         )
         return buildResponse(request.jobId, runResult)
     }

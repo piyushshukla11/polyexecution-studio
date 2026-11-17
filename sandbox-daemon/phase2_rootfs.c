@@ -26,7 +26,9 @@ static int valid_source_leaf(const char *name) {
         strcmp(name, "source.java") == 0 ||
         strcmp(name, "Main.java") == 0 ||
         strcmp(name, "source.kt") == 0 ||
-        strcmp(name, "source.js") == 0) {
+        strcmp(name, "source.js") == 0 ||
+        strcmp(name, "target") == 0 ||
+        strcmp(name, "target.jar") == 0) {
         return 1;
     }
     size_t len = strlen(name);
@@ -39,11 +41,34 @@ static int valid_source_leaf(const char *name) {
         }
         return 1;
     }
+    if (len > 6 && strcmp(name + len - 6, ".class") == 0) {
+        for (size_t i = 0; i < len - 6; i++) {
+            char c = name[i];
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+                return 0;
+            }
+        }
+        return 1;
+    }
     return 0;
 }
 
 static int valid_artifact_leaf(const char *name) {
-    return !name || strcmp(name, "target") == 0;
+    if (!name) return 1;
+    if (strcmp(name, "target") == 0 || strcmp(name, "target.jar") == 0) {
+        return 1;
+    }
+    size_t len = strlen(name);
+    if (len > 6 && strcmp(name + len - 6, ".class") == 0) {
+        for (size_t i = 0; i < len - 6; i++) {
+            char c = name[i];
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')) {
+                return 0;
+            }
+        }
+        return 1;
+    }
+    return 0;
 }
 
 static int write_all(int fd, const char *buffer, size_t length) {
@@ -182,10 +207,16 @@ int phase2_workspace_open(const char *workspace_path, const char *source_name,
         errno = saved_errno;
         return -1;
     }
+    uint64_t allowed_max = (uint64_t)max_source_bytes;
+    size_t s_len = strlen(source_name);
+    if (strcmp(source_name, "target") == 0 || strcmp(source_name, "target.jar") == 0 ||
+        (s_len > 6 && strcmp(source_name + s_len - 6, ".class") == 0)) {
+        allowed_max = 16ULL * 1024ULL * 1024ULL;
+    }
     if (!S_ISREG(source_metadata.st_mode) ||
         source_metadata.st_uid != owner_uid || source_metadata.st_nlink != 1 ||
         (source_metadata.st_mode & 0777) != 0600 || source_metadata.st_size <= 0 ||
-        (uint64_t)source_metadata.st_size > (uint64_t)max_source_bytes) {
+        (uint64_t)source_metadata.st_size > allowed_max) {
         close(source_fd);
         close(dir_fd);
         errno = EACCES;
@@ -275,13 +306,14 @@ int phase2_workspace_populate(int workspace_dir_fd, int source_fd, const char *s
     return result;
 }
 
-int phase2_rootfs_copy_artifact(int workspace_dir_fd, int artifact_fd,
+int phase2_rootfs_copy_artifact(int workspace_dir_fd, const char *artifact_name, int artifact_fd,
                                 uid_t expected_owner, size_t max_artifact_bytes) {
-    if (workspace_dir_fd < 0 || artifact_fd < 0 || max_artifact_bytes == 0) {
+    if (workspace_dir_fd < 0 || !artifact_name || !valid_artifact_leaf(artifact_name) ||
+        artifact_fd < 0 || max_artifact_bytes == 0) {
         errno = EINVAL;
         return -1;
     }
-    int source_fd = openat(workspace_dir_fd, "target", O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+    int source_fd = openat(workspace_dir_fd, artifact_name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
     if (source_fd < 0) return -1;
     struct stat metadata;
     if (fstat(source_fd, &metadata) < 0 || !S_ISREG(metadata.st_mode) || metadata.st_uid != expected_owner ||
@@ -419,7 +451,7 @@ int phase2_rootfs_prepare(const char *host_binary, const char *root, char *targe
     if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL) < 0) return -1;
     if (mount("tmpfs", root, "tmpfs", MS_NOSUID | MS_NODEV, "size=128m,mode=0755") < 0) return -1;
 
-    const char *directories[] = {"proc", "tmp", "dev", "usr", "lib", "lib64", "bin", "sbin", "run", "workspace", ".oldroot"};
+    const char *directories[] = {"proc", "tmp", "dev", "usr", "lib", "lib64", "bin", "sbin", "opt", "run", "workspace", ".oldroot"};
     for (size_t i = 0; i < sizeof(directories) / sizeof(directories[0]); i++) {
         char path[PATH_MAX];
         if (snprintf(path, sizeof(path), "%s/%s", root, directories[i]) >= (int)sizeof(path)) {
@@ -435,14 +467,53 @@ int phase2_rootfs_prepare(const char *host_binary, const char *root, char *targe
         bind_readonly_directory(root, "/bin", "bin") < 0 ||
         bind_readonly_directory(root, "/sbin", "sbin") < 0) return -1;
 
+    const char *kotlin_home = getenv("PES_KOTLIN_HOME");
+    if (!kotlin_home) {
+        struct stat kh_st;
+        if (stat("/home/zogratis/.local/share/mise/installs/kotlin/2.4.21/kotlinc", &kh_st) == 0 && S_ISDIR(kh_st.st_mode)) {
+            kotlin_home = "/home/zogratis/.local/share/mise/installs/kotlin/2.4.21/kotlinc";
+        }
+    }
+    if (kotlin_home && kotlin_home[0] == '/') {
+        char opt_path[PATH_MAX];
+        if (snprintf(opt_path, sizeof(opt_path), "%s/opt", root) < (int)sizeof(opt_path)) {
+            make_directory(opt_path);
+            bind_readonly_directory(root, kotlin_home, "opt/kotlinc");
+        }
+    } else {
+        bind_readonly_directory(root, "/opt", "opt");
+    }
+
+    const char *node_home = getenv("PES_NODE_HOME");
+    if (!node_home) {
+        struct stat nh_st;
+        if (stat("/home/zogratis/.local/share/mise/installs/node/26.8.2", &nh_st) == 0 && S_ISDIR(nh_st.st_mode)) {
+            node_home = "/home/zogratis/.local/share/mise/installs/node/26.8.2";
+        }
+    }
+    if (node_home && node_home[0] == '/') {
+        char opt_path[PATH_MAX];
+        if (snprintf(opt_path, sizeof(opt_path), "%s/opt", root) < (int)sizeof(opt_path)) {
+            make_directory(opt_path);
+            bind_readonly_directory(root, node_home, "opt/node");
+        }
+    }
+
     int is_system_binary = (strncmp(host_binary, "/usr/", 5) == 0 ||
                             strncmp(host_binary, "/bin/", 5) == 0 ||
-                            strncmp(host_binary, "/sbin/", 6) == 0);
+                            strncmp(host_binary, "/sbin/", 6) == 0 ||
+                            strncmp(host_binary, "/opt/", 5) == 0);
     char target_host_path[PATH_MAX];
     char temp_path[PATH_MAX];
     if (is_system_binary) {
+        char check_path[PATH_MAX];
+        if (strncmp(host_binary, "/opt/", 5) == 0) {
+            snprintf(check_path, sizeof(check_path), "%s%s", root, host_binary);
+        } else {
+            snprintf(check_path, sizeof(check_path), "%s", host_binary);
+        }
         struct stat sys_st;
-        if (stat(host_binary, &sys_st) < 0 || !S_ISREG(sys_st.st_mode) || (sys_st.st_mode & 0111) == 0) {
+        if (stat(check_path, &sys_st) < 0 || !S_ISREG(sys_st.st_mode) || (sys_st.st_mode & 0111) == 0) {
             errno = ENOENT;
             return -1;
         }
@@ -478,8 +549,16 @@ int phase2_rootfs_prepare(const char *host_binary, const char *root, char *targe
         errno = saved_errno;
         return -1;
     }
+    size_t max_pop_bytes = PES_WORKSPACE_SOURCE_MAX;
+    if (workspace_source_name) {
+        size_t wsn_len = strlen(workspace_source_name);
+        if (strcmp(workspace_source_name, "target") == 0 || strcmp(workspace_source_name, "target.jar") == 0 ||
+            (wsn_len > 6 && strcmp(workspace_source_name + wsn_len - 6, ".class") == 0)) {
+            max_pop_bytes = 16U * 1024U * 1024U;
+        }
+    }
     if (workspace_source_fd >= 0 && phase2_workspace_populate(workspace_fd, workspace_source_fd,
-            workspace_source_name, 0, workspace_uid, workspace_gid, PES_WORKSPACE_SOURCE_MAX) < 0) {
+            workspace_source_name, 0, workspace_uid, workspace_gid, max_pop_bytes) < 0) {
         int saved_errno = errno;
         close(workspace_fd);
         errno = saved_errno;
