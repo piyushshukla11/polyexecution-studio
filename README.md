@@ -197,5 +197,3 @@ bash scripts/verify_docker_compose.sh
 - [docs/04_BUILD_PLAN.md](docs/04_BUILD_PLAN.md): Phase-by-phase Definitions of Done and dependency rules.
 - [docs/05_INTERVIEW_PREP.md](docs/05_INTERVIEW_PREP.md): Systems engineering questions, trade-offs, and explain-back checklist.
 - [docs/06_LEARNING_RULES.md](docs/06_LEARNING_RULES.md): Pedagogical rules, honest AI statements, and learning sign-off criteria.
-- [PROGRESS.md](PROGRESS.md): Append-only chronological audit log of every change, reason, and test evidence.
-- [AI_RULES.md](AI_RULES.md): Non-negotiable repository engineering rules and coding standards.

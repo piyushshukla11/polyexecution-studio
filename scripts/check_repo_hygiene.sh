@@ -30,9 +30,9 @@ if [ -n "$junk" ]; then
   fail=1
 fi
 
-stray=$(echo "$files" | grep -E '\.md$' | grep -vE '^LEARNING_NOTES/' | grep -vE '^(README|AI_RULES|PROGRESS)\.md$|^docs/|^\.github/' || true)
+stray=$(echo "$files" | grep -E '\.md$' | grep -vE '^LEARNING_NOTES/' | grep -vE '^README\.md$|^docs/|^\.github/' || true)
 if [ -n "$stray" ]; then
-  echo "BLOCKED: stray markdown files (allowed: README.md, AI_RULES.md, PROGRESS.md, docs/*, .github/*):"
+  echo "BLOCKED: stray markdown files (allowed: README.md, docs/*, .github/*):"
   echo "$stray"
   echo "Fix: unstage with 'git restore --staged <file>'."
   fail=1

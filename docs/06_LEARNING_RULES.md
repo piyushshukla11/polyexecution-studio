@@ -1,12 +1,12 @@
 # 06 — Learning Rules (so AI makes you stronger, not weaker)
 
-1. **Predict before you run.** Write one line in PROGRESS.md: "I expect X." Then run. Wrong predictions are where learning happens.
+1. **Predict before you run.** Write one line in Piyush's local-only PROGRESS.md study log: "I expect X." Then run. Wrong predictions are where learning happens.
 2. **Explain-back.** After each AI change, explain it in your own words to the tutor (Claude chat). If you can't, it isn't done.
 3. **Rewrite-from-memory test.** For core code (sandbox), close the file and rewrite the key function roughly. Compare.
 4. **Break it on purpose.** Remove one line (e.g. close of the pipe end) and observe the failure. Understanding = knowing what breaks.
 5. **Small steps.** One concept per change. No 500-line AI dumps.
 6. **Read the man pages.** For every syscall: `man 2 fork`, `man 2 setrlimit`, `man 2 wait4`. The agent must cite which page applies.
-7. **Core zones are yours.** Tier A code (see AI_RULES.md) is typed by you with the agent as reviewer.
+7. **Core zones are yours.** Tier A code is owner-authored by default; any exception must be explicitly authorized before implementation and recorded in the local study log.
 8. **Keep a "Why not?" list.** For each decision, one rejected alternative and why (feeds interview answers).
 9. **Weekly mock interview.** Ask the tutor for 5 random questions from `05_INTERVIEW_PREP.md`.
 10. **Never trust AI on security.** Every security claim must be demonstrated by a failing-then-passing evil test.
@@ -16,6 +16,6 @@
 14. **Teach it.** Explain a phase to a friend or write a short blog note; teaching exposes gaps.
 15. **Be honest in the log.** If you didn't understand something, write "NOT UNDERSTOOD" and revisit.
 16. **Defer learning checks when Piyush asks.** Piyush has asked to complete the planned technical phases first and do the explain-backs and interview questions at the end. Do not block technical phase work on those deferred answers; phase tests, technical review, security evidence, and Git checks still apply.
-17. **Do not call PES complete early.** The whole project cannot be marked finished until Piyush independently answers every required question and completes every required exercise in `docs/05_INTERVIEW_PREP.md`. The tutor reviews completion and records it in a `LEARNING` entry in `PROGRESS.md`.
+17. **Do not call PES complete early.** The whole project cannot be marked finished until Piyush independently answers every required question and completes every required exercise in `docs/05_INTERVIEW_PREP.md`. The tutor reviews completion and records it in a `LEARNING` entry in Piyush's local-only PROGRESS.md study log.
 18. **Owner-authored exercises must be yours.** For exercises marked owner-authored, the agent can explain concepts, give hints, and review the result, but must not write the solution for you. Agent-authored code does not count as your exercise completion.
 19. **Keep the completion list current and finite.** Add every newly assigned required question or exercise to `docs/05_INTERVIEW_PREP.md`. Mark extra practice as optional; optional work does not block project completion.

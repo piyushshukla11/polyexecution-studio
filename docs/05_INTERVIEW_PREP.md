@@ -36,12 +36,12 @@
 22. *What does the gateway store for a room?* The Yjs document state/updates, not parsed text logic.
 
 **Process questions**
-23. *What was the hardest bug?* (Have a real one from PROGRESS.md.)
+23. *What was the hardest bug?* (Have a real one from your local development log.)
 24. *What would you do differently?* (e.g. merge gateway and worker, use Firecracker.)
 25. *How did you test security?* The evil-program suite, plus stray-process checks.
 
 ## Self-test ritual
-After each phase, answer the matching questions out loud with no notes. Log the result in PROGRESS.md as a `LEARNING` entry.
+After each phase, answer the matching questions out loud with no notes. Record the result as a `LEARNING` entry in Piyush's local-only `PROGRESS.md` study log.
 
 ## Required learning sign-off before calling PES complete
 
@@ -98,4 +98,4 @@ The agent has already added test cases for these behaviors. That does not comple
 
 ### Completion rule
 
-PES may be called complete only after every required checkbox in this section and every question in the existing interview-prep list has been answered or performed by Piyush, reviewed by the tutor, and recorded in `PROGRESS.md` with a `LEARNING` entry. Remaining required exercises do not stop authorized project work, but they do keep the overall project status at **in progress**.
+PES may be called complete only after every required checkbox in this section and every question in the existing interview-prep list has been answered or performed by Piyush and reviewed by the tutor. Record the result in Piyush's local-only `PROGRESS.md` study log with a `LEARNING` entry. Remaining required exercises do not stop authorized project work, but they do keep the overall project status at **in progress**.

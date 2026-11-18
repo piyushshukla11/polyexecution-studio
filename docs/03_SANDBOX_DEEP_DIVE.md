@@ -348,7 +348,7 @@ A common pitfall is attempting to write `uid_map`/`gid_map` before the user name
         - The runner must use `execve()`, never `execvp()` or `execvpe()`.
         - Searching `PATH` allows untrusted code to drop a trojan binary in a writable directory earlier in `PATH`, hijacking execution.
    * *Tier Boundary Notice:*
-     `sandbox-daemon/sandbox.c` and `sandbox.h` are Tier A files. Owner authorization for agent-written Tier A changes is recorded in `AI_RULES.md` section 14; this implementation is labeled `AGENT-WROTE-TIER-A` in the Phase 2 change report.
+     `sandbox-daemon/sandbox.c` and `sandbox.h` are Tier A files. Piyush explicitly authorized the historical agent-written Tier A changes; those changes are labeled `AGENT-WROTE-TIER-A` in their local Phase 2 change report.
 
 9. **Capability Dropping Architecture & Open Design Questions (`capabilities(7)`, `prctl(2)`):**
    * *Resolution of the Capability Reduction Ordering Protocol:*
