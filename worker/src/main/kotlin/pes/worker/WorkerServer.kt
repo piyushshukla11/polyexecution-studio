@@ -14,19 +14,20 @@ import java.nio.file.Path
 
 class WorkerServer(
     val port: Int,
-    val runnerClient: RunnerClient
+    val runnerClient: RunnerClient,
+    val host: String = "127.0.0.1"
 ) {
     private val pipeline = ExecutionPipeline(runnerClient)
     private val service = ExecutionServiceImpl(pipeline)
 
-    private val server: Server = NettyServerBuilder.forAddress(InetSocketAddress(InetAddress.getByName("127.0.0.1"), port))
+    private val server: Server = NettyServerBuilder.forAddress(InetSocketAddress(InetAddress.getByName(host), port))
         .addService(service)
         .addService(ProtoReflectionService.newInstance())
         .build()
 
     fun start() {
         server.start()
-        println("PolyExecution Studio Worker listening on loopback port $port")
+        println("PolyExecution Studio Worker listening on $host:$port")
         Runtime.getRuntime().addShutdownHook(Thread {
             println("Shutting down worker gRPC server...")
             this@WorkerServer.stop()
@@ -44,6 +45,7 @@ class WorkerServer(
 }
 
 fun main(args: Array<String>) {
+    var host = System.getenv("PES_WORKER_HOST") ?: "127.0.0.1"
     var port = System.getenv("PORT")?.toIntOrNull() ?: 50051
     var fakeMode = System.getenv("PES_WORKER_MODE")?.equals("fake", ignoreCase = true) == true
     var customRunnerBin: String? = System.getenv("PES_RUNNER_BIN")
@@ -51,6 +53,9 @@ fun main(args: Array<String>) {
     var i = 0
     while (i < args.size) {
         when (args[i]) {
+            "--host", "-h" -> {
+                if (i + 1 < args.size) host = args[++i]
+            }
             "--port", "-p" -> {
                 if (i + 1 < args.size) port = args[++i].toInt()
             }
@@ -81,7 +86,7 @@ fun main(args: Array<String>) {
         ProcessSandboxRunner(runnerPath)
     }
 
-    val server = WorkerServer(port, runnerClient)
+    val server = WorkerServer(port, runnerClient, host)
     server.start()
     server.blockUntilShutdown()
 }

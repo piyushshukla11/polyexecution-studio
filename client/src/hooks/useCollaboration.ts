@@ -29,6 +29,31 @@ int main(void) {
 export const PYTHON_STARTER = `print("Hello from PolyExecution Studio!")
 `;
 
+export const JAVA_STARTER = `public class Main {
+    public static void main(String[] args) {
+        System.out.println("Hello from PolyExecution Studio (Java)!");
+    }
+}
+`;
+
+export const KOTLIN_STARTER = `fun main() {
+    println("Hello from PolyExecution Studio (Kotlin)!")
+}
+`;
+
+export const NODE_STARTER = `console.log("Hello from PolyExecution Studio (Node.js)!");
+`;
+
+export function getStarterForLanguage(lang: SupportedLanguage): string {
+  switch (lang) {
+    case 'c': return C_STARTER;
+    case 'python': return PYTHON_STARTER;
+    case 'java': return JAVA_STARTER;
+    case 'kotlin': return KOTLIN_STARTER;
+    case 'node': return NODE_STARTER;
+  }
+}
+
 export interface CollaboratorInfo {
   clientId: number;
   name: string;
@@ -137,7 +162,7 @@ export function useCollaboration(options: UseCollaborationOptions) {
   const ytext = ydoc.getText('monaco');
   const ymeta = ydoc.getMap('meta');
 
-  const defaultStarter = initialLanguage === 'python' ? PYTHON_STARTER : C_STARTER;
+  const defaultStarter = getStarterForLanguage(initialLanguage);
   const [synced, setSynced] = useState<boolean>(false);
   const [isLocked, setIsLocked] = useState<boolean>(false);
   const isLockedRef = useRef<boolean>(false);
@@ -316,7 +341,7 @@ export function useCollaboration(options: UseCollaborationOptions) {
             // If room had no updates yet, initialize with default starter code
             if (event.updates.length === 0 && ytext.length === 0) {
               ydoc.transact(() => {
-                const starter = initialLanguage === 'python' ? PYTHON_STARTER : C_STARTER;
+                const starter = getStarterForLanguage(initialLanguage);
                 ytext.insert(0, starter);
                 ymeta.set('language', initialLanguage);
               }, 'local-starter');
@@ -488,8 +513,9 @@ export function useCollaboration(options: UseCollaborationOptions) {
       if (isLockedRef.current) {
         return;
       }
-      const starterForNewLang = newLang === 'c' ? C_STARTER : PYTHON_STARTER;
-      const starterForOldLang = newLang === 'c' ? PYTHON_STARTER : C_STARTER;
+      const oldLang = (ymeta.get('language') as SupportedLanguage) || language;
+      const starterForNewLang = getStarterForLanguage(newLang);
+      const starterForOldLang = getStarterForLanguage(oldLang);
 
       if (!synced) {
         setLanguage(newLang);
@@ -513,7 +539,7 @@ export function useCollaboration(options: UseCollaborationOptions) {
       setLanguage(newLang);
       setEditorText(ytext.toString() || starterForNewLang);
     },
-    [synced, ydoc, ytext, ymeta]
+    [synced, ydoc, ytext, ymeta, language]
   );
 
   // Set shared code directly (e.g. reset or typing in mock mode)

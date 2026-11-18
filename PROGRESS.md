@@ -3416,3 +3416,63 @@
 - Files: `PROGRESS.md`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/phase2_rootfs.c`.
 - Linked: LOG-0194.
 - Tutor review: pending
+
+
+## [LOG-0196] 2026-11-16 20:12 IST | PLAN | actor: agent
+- Goal: Implement multi-language runtime support (Java, Kotlin, Node) across proto, Gateway validator, Worker execution pipeline, client SPA, and resolve Worker container host binding in Docker Compose.
+- Steps:
+  1. Proto (`proto/execution.proto`):
+     - Add `LANGUAGE_JAVA = 3`, `LANGUAGE_KOTLIN = 4`, `LANGUAGE_NODE = 5` to `Language` enum.
+  2. Gateway (`gateway/`):
+     - In `RequestValidator.java`, accept `"c"`, `"python"`, `"java"`, `"kotlin"`, `"node"` (and aliases `"nodejs"`, `"javascript"`), mapping them to corresponding proto enum constants.
+     - Add tests in `RequestValidatorTest.java` and `GatewayIntegrationTest.java` verifying all 5 runtimes are accepted.
+  3. Worker (`worker/`):
+     - In `WorkerServer.kt`, add configurable `host: String = "127.0.0.1"` (overridable via `PES_WORKER_HOST` env or `--host` flag) allowing container bridge networking (`0.0.0.0`) while retaining loopback default for host security.
+     - In `ExecutionPipeline.kt`, implement `executeJava`, `executeKotlin`, and `executeNode` using sandboxed execution with appropriate workspace source leaves (`source.java`, `source.kt`, `source.js`), truthful runtime binary availability checks, and compile vs runtime error status mapping.
+     - Add tests in `ExecutionPipelineTest.kt`.
+  4. Client (`client/`):
+     - In `client/src/types/protocol.ts`, update `Language` union to `'c' | 'python' | 'java' | 'kotlin' | 'node'`.
+     - In `LanguageSelector.tsx`, add selection buttons for Java, Kotlin, and Node.
+     - In `CodeEditor.tsx`, configure Monaco language mode for `java`, `kotlin`, and `javascript`.
+     - In `App.tsx`, provide starter templates for each new runtime.
+     - Verify with `npm test` and `npm run build`.
+  5. Docker Compose & Dockerfile:
+     - In `worker/Dockerfile`: set `ENV PES_WORKER_HOST=0.0.0.0` and add `nodejs` to apt install in runtime stage.
+     - In `docker-compose.yml`: set `PES_WORKER_HOST=0.0.0.0` for `worker` service.
+  6. README.md:
+     - Roadmap table: update Phase 7 status to `In Progress`.
+     - Document multi-language runtime integration, container host binding fix, and open owner learning gate.
+- Files: `PROGRESS.md`, `proto/execution.proto`, `gateway/src/main/java/pes/gateway/service/RequestValidator.java`, `gateway/src/test/java/pes/gateway/service/RequestValidatorTest.java`, `gateway/src/test/java/pes/gateway/GatewayIntegrationTest.java`, `worker/src/main/kotlin/pes/worker/WorkerServer.kt`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`, `client/src/types/protocol.ts`, `client/src/components/LanguageSelector.tsx`, `client/src/components/CodeEditor.tsx`, `client/src/App.tsx`, `worker/Dockerfile`, `docker-compose.yml`, `README.md`.
+- Linked: LOG-0195.
+- Tutor review: pending
+
+
+## [LOG-0197] 2026-11-16 20:31 IST | DONE | actor: agent
+- Reason: Complete multi-language runtime integration across proto, Gateway validator, Worker execution pipeline, client UI, Docker Compose host binding, and honest README status updates.
+- Details / Change:
+  1. Protocol Extension (`proto/execution.proto`):
+     - Added `LANGUAGE_JAVA = 3`, `LANGUAGE_KOTLIN = 4`, and `LANGUAGE_NODE = 5` to `Language` enum.
+  2. Gateway Multi-Language Validation (`gateway/`):
+     - Updated `RequestValidator.java` to accept `"c"`, `"python"`, `"java"`, `"kotlin"`, `"node"` (plus aliases `"nodejs"` and `"javascript"`).
+     - Added unit tests in `RequestValidatorTest.java` verifying acceptance of Java, Kotlin, and Node run requests.
+     - Confirmed all Gateway tests pass (`(cd gateway && gradle test)`).
+  3. Worker Multi-Language Execution Pipeline & Container Host Binding (`worker/`):
+     - In `WorkerServer.kt`, added `host: String = "127.0.0.1"` constructor parameter, env var fallback (`PES_WORKER_HOST`), and `--host <host>` CLI parsing.
+     - In `ExecutionPipeline.kt`, implemented `executeJava`, `executeKotlin`, and `executeNode` with sandboxed workspace handoffs (`source.java`, `source.kt`, `source.js`), compiler vs runtime diagnostic classification, and fail-closed runtime binary resolution.
+     - Added unit tests in `ExecutionPipelineTest.kt` verifying execution dispatch for Java, Node, and Kotlin.
+     - Confirmed all 22 Worker tests pass (`(cd worker && gradle test)`).
+  4. Web Client Extension (`client/`):
+     - In `client/src/types/protocol.ts`, updated `SupportedLanguage` to `'c' | 'python' | 'java' | 'kotlin' | 'node'`.
+     - In `LanguageSelector.tsx`, added dropdown options for Java, Kotlin, and Node.
+     - In `CodeEditor.tsx`, configured Monaco syntax highlighting modes (`c`, `python`, `java`, `kotlin`, `javascript`).
+     - In `useCollaboration.ts`, added starter templates and `getStarterForLanguage` for each language.
+     - Verified all 36 client Vitest tests pass (`npm test`) and production bundle compiles cleanly (`npm run build`).
+  5. Container Networking & Dockerfile Configuration:
+     - In `worker/Dockerfile`: set `ENV PES_WORKER_HOST=0.0.0.0`, installed `nodejs` in runtime stage, and updated ENTRYPOINT to bind `0.0.0.0` inside container.
+     - In `docker-compose.yml`: configured `PES_WORKER_HOST=0.0.0.0` for `worker` service on `pes-net` bridge while maintaining `127.0.0.1:50051` host publication. Verified via `docker compose config`.
+  6. Documentation Update (`README.md`):
+     - Roadmap table: marked Phase 7 status as `In Progress` pending owner interview prep completion and tutor review.
+     - Documented multi-language support, container networking fix, runtime toolchain availability, and open owner learning gate.
+- Files: `PROGRESS.md`, `README.md`, `client/src/components/CodeEditor.tsx`, `client/src/components/LanguageSelector.tsx`, `client/src/hooks/useCollaboration.ts`, `client/src/types/protocol.ts`, `docker-compose.yml`, `gateway/src/main/java/pes/gateway/service/RequestValidator.java`, `gateway/src/test/java/pes/gateway/RequestValidatorTest.java`, `proto/execution.proto`, `worker/Dockerfile`, `worker/src/main/kotlin/pes/worker/WorkerServer.kt`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`.
+- Linked: LOG-0196.
+- Tutor review: pending

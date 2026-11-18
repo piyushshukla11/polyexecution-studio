@@ -37,7 +37,7 @@ The project currently implements the full collaborative execution stack:
    - Shared CRDT document: room-scoped `Y.Doc` with `Y.Text` ('monaco') bound to Monaco Editor via `MonacoBinding`, synchronizing edits peer-to-peer through the Gateway with deterministic conflict-free convergence.
    - Ephemeral presence: renders remote collaborators' colored cursor head indicators and selection highlights in Monaco, with collaborator pill badges in the header, and immediate removal upon participant disconnect (`room.left`).
    - Room routing: supports URL query param (`?room=<id>`) and room join input bar for switching and sharing rooms.
-   - Multi-language support: interactive language selector for C and Python with shared language synchronization across room peers and default starter templates.
+   - Multi-language support: interactive language selector for C, Python, Java, Kotlin, and Node.js with shared language synchronization across room peers and default starter templates.
    - Standard input panel: user-configurable stdin textarea forwarded to the sandbox process.
    - Truthful execution lifecycle state badge rendering: `Idle`, `Accepted`, `Compiling`, `Running`, `Completed`, `Timed Out`, and `Compile Error`.
    - Stream separation: independent, bounded viewers for standard output (stdout) and standard error (stderr).
@@ -62,7 +62,7 @@ The project currently implements the full collaborative execution stack:
 | **Phase 4** | Java Gateway & WebSocket Server | Complete (`phase-4-done`) | WebSocket client triggers run and receives status events |
 | **Phase 5** | Browser Web Client (Monaco Editor) | Complete (`phase-5-done`) | Browser editor executes code; renders Idle, Compiling, Running, Timed Out states |
 | **Phase 6** | Real-Time Collaboration (Yjs CRDT) | Complete (`phase-6-done`) | Two browsers converge; cursors visible; room isolation; disconnect cleanup |
-| **Phase 7** | Multi-Language Runtimes & Load Benchmarks | Complete (`phase-7-done` pending review) | 50 concurrent runs without host instability; documented resource limits; Docker Compose setup |
+| **Phase 7** | Multi-Language Runtimes, Docker Compose, & Load Benchmarks | In Progress | Java/Kotlin/Node support, Docker Compose, 50 concurrent runs load benchmark, documented limits; tutor review and owner learning gate in docs/05_INTERVIEW_PREP.md pending |
 
 ---
 
@@ -75,11 +75,13 @@ In accordance with project governance rules, the following limitations reflect c
 - **In-memory room state**: Collaboration rooms, update history, and session memberships are stored entirely in JVM memory and are not persisted across server restarts. Empty rooms are pruned upon disconnection.
 - **Truthful milestone events (no fake timers)**: Progress states (`Compiling`, `Running`) reflect actual worker milestone emissions immediately before sandboxed GCC compilation and before sandboxed execution. Compilation failures immediately halt and emit `Compile Error` without entering the running state.
 - **Unauthenticated sessions**: WebSocket sessions use server-assigned random UUIDs. Client-supplied user identifiers are untrusted and used only for room display metadata.
-- **Language support & runtime limits**: The pipeline currently supports C (compiled and executed inside the sandbox) and Python 3 (interpreted inside the sandbox). Architectural analysis of heavy runtimes (Node.js, Java, Kotlin):
-  - Node.js requires a 144 MiB binary (exceeding the 64 MiB sandbox runner copy limit), V8 virtual address reservation (~1.4 GiB `RLIMIT_AS`), and libuv event loop syscalls (`epoll_create1`, `socketpair(AF_UNIX)`).
-  - Java and Kotlin HotSpot JVM require dynamic library lookup (`libjli.so`) which fails when copied into `/run/target` due to relative rpath lookup, as well as multiple gigabytes of virtual memory reservation for Compressed Class Space, Metaspace, and GC worker threads on startup (breaking low `RLIMIT_AS`, as explained in interview prep Q7).
-  - To preserve the strict security boundaries of the Linux process sandbox (cgroups v2, minimal tmpfs, seccomp allowlist, capability dropping), these limits are not weakened; running heavy runtimes requires dedicated microVM or container-level sandboxing (e.g. Firecracker or gVisor) outside the process sandbox.
-- **Docker prerequisites**: Accessing the host Docker daemon requires membership in the host `docker` group (`/var/run/docker.sock` owned by `root:docker 0660`). Running the sandbox runner inside a container requires Linux cgroups v2 delegation and unprivileged user namespace support on the host.
+- **Language support & runtime limits**: The Gateway, Worker pipeline, and web client support C, Python 3, Java, Kotlin, and Node.js:
+  - C (`source.c`) is compiled via `/usr/bin/gcc` inside the sandbox runner and executed as an isolated target binary.
+  - Python 3 (`source.py`) is interpreted via `/usr/bin/python3` inside the sandbox runner.
+  - Java (`source.java`) is executed via sandboxed Java 21 single-source execution (`/usr/bin/java`) with in-place execution of read-only system binaries, preserving ELF `$ORIGIN` dynamic linking (`libjli.so`).
+  - Node.js (`source.js`) and Kotlin (`source.kt`) execute via `/usr/bin/node` and `/usr/bin/kotlinc` when installed in the sandbox environment (Node.js is packaged in the Worker Docker runtime image). If a toolchain binary is absent on a particular host, the Worker truthfully fails with `SANDBOX_ERROR` indicating the missing binary.
+  - Non-networking event-loop syscalls (`epoll_create1`, `epoll_ctl`, `epoll_wait`, `eventfd2`) are permitted in the seccomp allowlist, while socket syscalls (`socket`, `connect`, `bind`) remain strictly denied with `EPERM`.
+- **Docker Compose connectivity**: Worker gRPC service binds to `0.0.0.0` inside container via `PES_WORKER_HOST=0.0.0.0` (defaulting to `127.0.0.1` locally), allowing the Gateway container to communicate across the bridge network while host port publication remains strictly loopback-bound (`127.0.0.1:50051`). Accessing the host Docker daemon requires `docker` group membership.
 - **Linux host requirements**: Production sandbox execution requires a Linux kernel with cgroups v2 delegation (`cpu`, `memory`, `pids`) and unprivileged user namespaces. If these prerequisites are absent, the runner strictly fails closed (`SANDBOX_ERROR`).
 - **Containment model**: Isolation is enforced via Linux kernel namespaces, cgroups, and seccomp-bpf. It does not use hypervisor-level virtual machines (such as Firecracker or gVisor).
 

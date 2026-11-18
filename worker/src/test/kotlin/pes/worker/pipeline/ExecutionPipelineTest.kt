@@ -182,6 +182,66 @@ class ExecutionPipelineTest {
         ExecuteRequest.newBuilder().setJobId(jobId).setLanguage(Language.LANGUAGE_PYTHON)
             .setSourceCode(source).setStdin(stdin).build()
 
+    @Test
+    fun javaRequestExecutesViaJavaBinary() = runBlocking {
+        val ok = RunnerResult(
+            jobId = "java-job", status = ExecutionStatus.OK, exitCode = 0, signal = 0,
+            wallMs = 120, cpuMs = 45, peakMemoryKb = 32000, stdout = "hello java", stderr = ""
+        )
+        val fake = FakeRunnerClient(listOf(ok))
+        val req = ExecuteRequest.newBuilder()
+            .setJobId("java-job")
+            .setLanguage(Language.LANGUAGE_JAVA)
+            .setSourceCode("public class Main { public static void main(String[] args) { System.out.println(\"hello java\"); } }")
+            .build()
+        val response = ExecutionPipeline(fake).execute(req)
+        assertEquals(ExecutionStatus.OK, response.status)
+        assertEquals("hello java", response.stdout)
+        assertEquals(1, fake.calls.size)
+        assertEquals("source.java", fake.calls.single().workspace?.sourceName)
+        assertWorkspaceRemoved(fake.calls.single().workspace)
+    }
+
+    @Test
+    fun nodeRequestExecutesViaNodeBinary() = runBlocking {
+        val ok = RunnerResult(
+            jobId = "node-job", status = ExecutionStatus.OK, exitCode = 0, signal = 0,
+            wallMs = 80, cpuMs = 25, peakMemoryKb = 28000, stdout = "hello node", stderr = ""
+        )
+        val fake = FakeRunnerClient(listOf(ok))
+        val req = ExecuteRequest.newBuilder()
+            .setJobId("node-job")
+            .setLanguage(Language.LANGUAGE_NODE)
+            .setSourceCode("console.log('hello node')")
+            .build()
+        val response = ExecutionPipeline(fake).execute(req)
+        assertEquals(ExecutionStatus.OK, response.status)
+        assertEquals("hello node", response.stdout)
+        assertEquals(1, fake.calls.size)
+        assertEquals("source.js", fake.calls.single().workspace?.sourceName)
+        assertWorkspaceRemoved(fake.calls.single().workspace)
+    }
+
+    @Test
+    fun kotlinRequestExecutesViaKotlincBinary() = runBlocking {
+        val ok = RunnerResult(
+            jobId = "kt-job", status = ExecutionStatus.OK, exitCode = 0, signal = 0,
+            wallMs = 150, cpuMs = 50, peakMemoryKb = 35000, stdout = "hello kotlin", stderr = ""
+        )
+        val fake = FakeRunnerClient(listOf(ok))
+        val req = ExecuteRequest.newBuilder()
+            .setJobId("kt-job")
+            .setLanguage(Language.LANGUAGE_KOTLIN)
+            .setSourceCode("println(\"hello kotlin\")")
+            .build()
+        val response = ExecutionPipeline(fake).execute(req)
+        assertEquals(ExecutionStatus.OK, response.status)
+        assertEquals("hello kotlin", response.stdout)
+        assertEquals(1, fake.calls.size)
+        assertEquals("source.kt", fake.calls.single().workspace?.sourceName)
+        assertWorkspaceRemoved(fake.calls.single().workspace)
+    }
+
     private fun assertWorkspaceRemoved(workspace: WorkspaceHandoff?) {
         assertNotNull(workspace)
         assertFalse(Files.exists(workspace!!.directory, LinkOption.NOFOLLOW_LINKS))

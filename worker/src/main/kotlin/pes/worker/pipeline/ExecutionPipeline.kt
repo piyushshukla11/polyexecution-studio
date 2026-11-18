@@ -57,7 +57,7 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
             return ValidationResult.Invalid("job_id '${request.jobId}' is invalid: must match ^[a-zA-Z0-9_-]{1,64}$")
         }
         if (request.language == Language.LANGUAGE_UNSPECIFIED || request.language == Language.UNRECOGNIZED) {
-            return ValidationResult.Invalid("language must be specified (C or PYTHON)")
+            return ValidationResult.Invalid("language must be specified (C, PYTHON, JAVA, KOTLIN, or NODE)")
         }
         if (request.sourceCode.isBlank()) return ValidationResult.Invalid("source_code must not be empty")
         if (request.sourceCode.toByteArray(Charsets.UTF_8).size > MAX_SOURCE_CODE_BYTES) {
@@ -93,6 +93,9 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
             response = when (request.language) {
                 Language.LANGUAGE_C -> executeC(request, normalizedLimits, workspace, onProgress)
                 Language.LANGUAGE_PYTHON -> executePython(request, normalizedLimits, workspace, onProgress)
+                Language.LANGUAGE_JAVA -> executeJava(request, normalizedLimits, workspace, onProgress)
+                Language.LANGUAGE_KOTLIN -> executeKotlin(request, normalizedLimits, workspace, onProgress)
+                Language.LANGUAGE_NODE -> executeNode(request, normalizedLimits, workspace, onProgress)
                 else -> validationFailure(request, "unsupported language: ${request.language}")
             }
         } catch (e: Exception) {
@@ -188,6 +191,114 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
             stdin = request.stdin,
             workspace = WorkspaceHandoff(workspace, "source.py")
         )
+        return buildResponse(request.jobId, runResult)
+    }
+
+    private suspend fun executeJava(
+        request: ExecuteRequest,
+        limits: ResourceLimits,
+        workspace: Path,
+        onProgress: (suspend (ExecutionStage) -> Unit)? = null
+    ): ExecuteResponse {
+        val javaBin = System.getenv("PES_JAVA_BIN") ?: "/usr/bin/java"
+        val sourceFile = workspace.resolve("source.java")
+        writePrivateSource(sourceFile, request.sourceCode)
+        onProgress?.invoke(ExecutionStage.STAGE_RUNNING)
+        val javaLimits = ResourceLimits.newBuilder(limits)
+            .setMemoryMb(limits.memoryMb.coerceAtLeast(512L))
+            .build()
+        val runResult = runnerClient.run(
+            jobId = request.jobId,
+            binaryPath = javaBin,
+            args = listOf("-Xmx64m", "-Xms16m", "-XX:CompressedClassSpaceSize=64m", "/workspace/source.java"),
+            limits = javaLimits,
+            stdin = request.stdin,
+            workspace = WorkspaceHandoff(workspace, "source.java")
+        )
+        if (runResult.exitCode != 0 && (runResult.stderr.contains("error: compilation failed") || runResult.stderr.contains("error: "))) {
+            return ExecuteResponse.newBuilder()
+                .setJobId(request.jobId)
+                .setStatus(ExecutionStatus.COMPILE_ERROR)
+                .setStderr(runResult.stderr.ifEmpty { "compilation failed" })
+                .setExitCode(if (runResult.exitCode != 0) runResult.exitCode else 1)
+                .setSignal(runResult.signal)
+                .setWallMs(runResult.wallMs)
+                .setCpuMs(runResult.cpuMs)
+                .setPeakMemoryKb(runResult.peakMemoryKb)
+                .build()
+        }
+        return buildResponse(request.jobId, runResult)
+    }
+
+    private suspend fun executeNode(
+        request: ExecuteRequest,
+        limits: ResourceLimits,
+        workspace: Path,
+        onProgress: (suspend (ExecutionStage) -> Unit)? = null
+    ): ExecuteResponse {
+        val nodeBin = System.getenv("PES_NODE_BIN") ?: "/usr/bin/node"
+        val sourceFile = workspace.resolve("source.js")
+        writePrivateSource(sourceFile, request.sourceCode)
+        onProgress?.invoke(ExecutionStage.STAGE_RUNNING)
+        val nodeLimits = ResourceLimits.newBuilder(limits)
+            .setMemoryMb(limits.memoryMb.coerceAtLeast(512L))
+            .build()
+        val runResult = runnerClient.run(
+            jobId = request.jobId,
+            binaryPath = nodeBin,
+            args = listOf("/workspace/source.js"),
+            limits = nodeLimits,
+            stdin = request.stdin,
+            workspace = WorkspaceHandoff(workspace, "source.js")
+        )
+        if (runResult.exitCode != 0 && (runResult.stderr.contains("SyntaxError: ") || runResult.stderr.contains("ReferenceError: "))) {
+            return ExecuteResponse.newBuilder()
+                .setJobId(request.jobId)
+                .setStatus(if (runResult.stderr.contains("SyntaxError: ")) ExecutionStatus.COMPILE_ERROR else ExecutionStatus.RUNTIME_ERROR)
+                .setStderr(runResult.stderr)
+                .setExitCode(if (runResult.exitCode != 0) runResult.exitCode else 1)
+                .setSignal(runResult.signal)
+                .setWallMs(runResult.wallMs)
+                .setCpuMs(runResult.cpuMs)
+                .setPeakMemoryKb(runResult.peakMemoryKb)
+                .build()
+        }
+        return buildResponse(request.jobId, runResult)
+    }
+
+    private suspend fun executeKotlin(
+        request: ExecuteRequest,
+        limits: ResourceLimits,
+        workspace: Path,
+        onProgress: (suspend (ExecutionStage) -> Unit)? = null
+    ): ExecuteResponse {
+        val kotlincBin = System.getenv("PES_KOTLINC_BIN") ?: "/usr/bin/kotlinc"
+        val sourceFile = workspace.resolve("source.kt")
+        writePrivateSource(sourceFile, request.sourceCode)
+        onProgress?.invoke(ExecutionStage.STAGE_RUNNING)
+        val kotlinLimits = ResourceLimits.newBuilder(limits)
+            .setMemoryMb(limits.memoryMb.coerceAtLeast(512L))
+            .build()
+        val runResult = runnerClient.run(
+            jobId = request.jobId,
+            binaryPath = kotlincBin,
+            args = listOf("-script", "/workspace/source.kt"),
+            limits = kotlinLimits,
+            stdin = request.stdin,
+            workspace = WorkspaceHandoff(workspace, "source.kt")
+        )
+        if (runResult.exitCode != 0 && runResult.stderr.contains("error: ")) {
+            return ExecuteResponse.newBuilder()
+                .setJobId(request.jobId)
+                .setStatus(ExecutionStatus.COMPILE_ERROR)
+                .setStderr(runResult.stderr)
+                .setExitCode(if (runResult.exitCode != 0) runResult.exitCode else 1)
+                .setSignal(runResult.signal)
+                .setWallMs(runResult.wallMs)
+                .setCpuMs(runResult.cpuMs)
+                .setPeakMemoryKb(runResult.peakMemoryKb)
+                .build()
+        }
         return buildResponse(request.jobId, runResult)
     }
 
