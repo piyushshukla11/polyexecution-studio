@@ -3378,3 +3378,41 @@
 - Files: `PROGRESS.md`, `README.md`.
 - Linked: LOG-0192.
 - Tutor review: pending
+
+
+## [LOG-0194] 2026-11-16 19:10 IST | PLAN | actor: agent
+- Goal: Enable multi-language runtime execution in sandbox-daemon for Phase 7 (Java, Kotlin, Node) by supporting their source filenames, executing read-only system binaries in-place to preserve dynamic linking, and allowing event loop syscalls in seccomp.
+- Steps:
+  1. In `sandbox-daemon/phase2_rootfs.c`:
+     - Update `valid_source_leaf` to accept `source.java`, `source.kt`, and `source.js` alongside `source.c` and `source.py`.
+     - In `phase2_rootfs_prepare`: check if `host_binary` resides in read-only system directories (`/usr/`, `/bin/`, `/sbin/`). If so, execute directly in-place without copying into `/run/target`. This preserves ELF dynamic library search path `$ORIGIN` (such as Java's `libjli.so` resolution) and prevents copying large system binaries into rootfs tmpfs. If `host_binary` is a user-compiled binary (e.g. `/tmp/pes-job-*/target`), continue copying to `/run/target` with size checks as before.
+  2. In `sandbox-daemon/phase2_privilege.c`:
+     - Add non-networking event-loop syscalls (`epoll_create`, `epoll_create1`, `epoll_ctl`, `epoll_wait`, `epoll_pwait`, `eventfd`, `eventfd2`) to `install_seccomp_allowlist`. Sockets remain strictly forbidden (`EPERM`).
+  3. Rebuild and verify:
+     - `make -C sandbox-daemon clean all`
+     - Run `make -C sandbox-daemon test` (asserting all 22 existing unit and security tests pass).
+     - Test running `/usr/bin/java -version` through `sandbox-runner` directly.
+- Files: `PROGRESS.md`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/phase2_rootfs.c`.
+- Linked: LOG-0193.
+- Tutor review: pending
+
+
+## [LOG-0195] 2026-11-16 20:10 IST | DONE | actor: agent
+- Reason: Complete sandbox-daemon multi-runtime enablement (source file leaf validation, in-place read-only system binary execution, and event loop / POSIX thread query syscall allowlisting).
+- Details / Change:
+  1. Rootfs Source Leaf Allowlist (`sandbox-daemon/phase2_rootfs.c`):
+     - Updated `valid_source_leaf` to recognize `source.java`, `source.kt`, and `source.js` in addition to `source.c` and `source.py`.
+  2. In-Place System Binary Execution (`sandbox-daemon/phase2_rootfs.c`):
+     - In `phase2_rootfs_prepare`, added `is_system_binary` detection for binaries residing in `/usr/`, `/bin/`, or `/sbin/`.
+     - Verified system binary existence and executable mode in host filesystem, and routed `target_path` directly to the system binary location inside the read-only bind-mounted rootfs.
+     - Preserved ELF `$ORIGIN` dynamic library resolution for multi-runtime shared objects (such as `libjli.so`) and eliminated copying heavy runtime binaries into the 128 MiB tmpfs. User-compiled artifacts (e.g. `/tmp/pes-job-*/target`) continue copying into `/run/target` with size ceiling checks as before.
+  3. Seccomp Syscall Allowlist Expansion (`sandbox-daemon/phase2_privilege.c`):
+     - Added non-networking event-loop syscalls (`epoll_create`, `epoll_create1`, `epoll_ctl`, `epoll_wait`, `epoll_pwait`, `eventfd`, `eventfd2`), process/scheduler query syscalls (`sched_getscheduler`, `sched_getparam`, `sched_get_priority_max`, `sched_get_priority_min`, `mincore`), identity query syscalls (`getgroups`, `getresuid`, `getresgid`, `getpgid`, `getsid`), and extended I/O syscalls (`openat2`, `close_range`, `fadvise64`, `pwrite64`, `preadv`, `pwritev`, `getpriority`, `setpriority`).
+     - Network syscalls (`socket`, `socketpair`, `connect`, `bind`, `listen`, `accept`, `accept4`) remain strictly forbidden (`EPERM`).
+  4. Verification:
+     - Recompiled `sandbox-daemon` with `-Wall -Wextra -Werror -O2` (0 warnings, 0 errors).
+     - Ran full test suite `make -C sandbox-daemon test`: 18/18 Phase 1 regression tests passed, 4/4 Phase 2 security/isolation tests passed (22/22 total).
+     - Cleaned up diagnostic scratch artifacts.
+- Files: `PROGRESS.md`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/phase2_rootfs.c`.
+- Linked: LOG-0194.
+- Tutor review: pending
