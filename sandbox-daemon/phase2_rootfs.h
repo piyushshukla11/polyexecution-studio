@@ -16,7 +16,7 @@ int phase2_workspace_open(const char *workspace_path, const char *source_name,
 int phase2_workspace_populate(int workspace_dir_fd, int source_fd, const char *source_name,
                               uid_t source_owner_uid, uid_t owner_uid, gid_t owner_gid,
                               size_t max_source_bytes);
-int phase2_rootfs_copy_artifact(int workspace_dir_fd, int artifact_fd,
+int phase2_rootfs_copy_artifact(int workspace_dir_fd, const char *artifact_name, int artifact_fd,
                                 uid_t expected_owner, size_t max_artifact_bytes);
 int phase2_rootfs_mount_proc(void);
 

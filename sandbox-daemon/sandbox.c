@@ -22,7 +22,7 @@ void sandbox_config_init_default(sandbox_config_t *cfg) {
     cfg->rlimit_cpu_hard = 2;
     cfg->rlimit_as_bytes = 128ULL * 1024ULL * 1024ULL; /* 128 MiB */
     cfg->rlimit_fsize = 1024ULL * 1024ULL;              /* 1 MiB */
-    cfg->rlimit_nofile = 64;
+    cfg->rlimit_nofile = 1024;
     cfg->max_output_bytes = 64ULL * 1024ULL;            /* 64 KiB */
     cfg->target_args = NULL;
     cfg->target_argc = 0;
@@ -31,6 +31,7 @@ void sandbox_config_init_default(sandbox_config_t *cfg) {
     cfg->workspace_source_fd = -1;
     cfg->workspace_source_name = NULL;
     cfg->artifact_output_fd = -1;
+    cfg->workspace_artifact_name = NULL;
 }
 
 void sandbox_result_cleanup(sandbox_result_t *res) {
@@ -942,8 +943,9 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
             unsigned char artifact_status = 0;
             if (WIFEXITED(final_status) && WEXITSTATUS(final_status) == 0) {
                 int workspace_fd = open("/workspace", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+                const char *art_leaf = cfg->workspace_artifact_name ? cfg->workspace_artifact_name : "target";
                 if (workspace_fd >= 0 && phase2_rootfs_copy_artifact(
-                        workspace_fd, cfg->artifact_output_fd, 65534,
+                        workspace_fd, art_leaf, cfg->artifact_output_fd, 65534,
                         (size_t)cfg->rlimit_fsize) == 0) {
                     artifact_status = 1;
                 } else {
@@ -1742,6 +1744,8 @@ int main(int argc, char *argv[]) {
             cfg.rlimit_as_bytes = (uint64_t)strtoull(argv[++i], NULL, 10) * 1024ULL * 1024ULL;
         } else if (strcmp(argv[i], "--fsize-mb") == 0 && i + 1 < argc) {
             cfg.rlimit_fsize = (uint64_t)strtoull(argv[++i], NULL, 10) * 1024ULL * 1024ULL;
+        } else if (strcmp(argv[i], "--nofile") == 0 && i + 1 < argc) {
+            cfg.rlimit_nofile = (rlim_t)strtoul(argv[++i], NULL, 10);
         } else if (strcmp(argv[i], "--max-output-kb") == 0 && i + 1 < argc) {
             cfg.max_output_bytes = (size_t)strtoull(argv[++i], NULL, 10) * 1024ULL;
         } else if (strcmp(argv[i], "--workspace") == 0 && i + 1 < argc) {
@@ -1803,6 +1807,7 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         cfg.workspace_source_name = workspace_source_name;
+        cfg.workspace_artifact_name = artifact_name;
     }
     cfg.stdin_data = stdin_buffer;
     cfg.stdin_len = stdin_length;

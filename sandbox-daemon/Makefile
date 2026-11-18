@@ -11,7 +11,7 @@ EVIL_NAMES = loop sleeper exit0 exit7 segv exit127 stdout_stderr stderr_only out
 EVIL_BIN_DIR = tests/evil/bin
 EVIL_BINS = $(addprefix $(EVIL_BIN_DIR)/, $(EVIL_NAMES))
 
-PHASE2_EVIL_NAMES = fork_bomb read_etc_passwd net_connect
+PHASE2_EVIL_NAMES = fork_bomb read_etc_passwd net_connect prctl_unauthorized
 PHASE2_EVIL_BINS = $(addprefix $(EVIL_BIN_DIR)/, $(PHASE2_EVIL_NAMES))
 
 all: $(TARGET)

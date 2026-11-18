@@ -77,13 +77,14 @@ if ! grpcurl -plaintext "127.0.0.1:$WORKER_PORT" list >/dev/null 2>&1; then
 fi
 echo "Worker is ready on 127.0.0.1:$WORKER_PORT."
 
-# 2. Start Java Gateway with global concurrency = 64 (above 50) and max-rooms = 200
-echo "Starting Java Gateway on 127.0.0.1:$GATEWAY_PORT (maxGlobalConcurrentRuns=64)..."
+# 2. Start Java Gateway with global concurrency = 64 (above 50), aggregate memory = 131072 MB, and max-rooms = 200
+echo "Starting Java Gateway on 127.0.0.1:$GATEWAY_PORT (maxGlobalConcurrentRuns=64, maxAggregateMemoryMb=131072)..."
 java -jar "$GATEWAY_JAR" \
     --server.address=127.0.0.1 \
     --server.port="$GATEWAY_PORT" \
     --gateway.worker-grpc-target="127.0.0.1:$WORKER_PORT" \
     --gateway.max-global-concurrent-runs=64 \
+    --gateway.max-aggregate-memory-mb=131072 \
     --gateway.max-rooms=200 >"$GATEWAY_LOG" 2>&1 &
 GATEWAY_PID=$!
 

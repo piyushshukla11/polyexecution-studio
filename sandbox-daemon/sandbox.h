@@ -104,6 +104,7 @@ typedef struct {
     int workspace_source_fd;        /* validated source opened from the private worker workspace, or -1 */
     const char *workspace_source_name; /* fixed leaf copied into private /workspace, or NULL */
     int artifact_output_fd;          /* exclusive worker artifact file, or -1 */
+    const char *workspace_artifact_name; /* fixed leaf copied from private /workspace, or NULL */
 } sandbox_config_t;
 
 /* Execution results */

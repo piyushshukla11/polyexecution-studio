@@ -3542,3 +3542,66 @@
 - Files: `PROGRESS.md`, `gateway/src/main/java/pes/gateway/config/GatewayProperties.java`, `gateway/src/main/java/pes/gateway/service/AcquireRunResult.java`, `gateway/src/main/java/pes/gateway/service/Room.java`, `gateway/src/main/java/pes/gateway/service/RoomManager.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/RoomManagerTest.java`, `gateway/tests/E2eWebSocketClient.java`, `gateway/tests/LoadTest50Concurrent.java`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/phase2_rootfs.c`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`, `worker/src/test/kotlin/pes/worker/service/FakeRunnerGrpcTest.kt`.
 - Linked: LOG-0198.
 - Tutor review: pending
+
+
+## [LOG-0200] 2026-11-17 08:45 IST | PLAN | actor: agent
+- Goal: Remediate Phase 7 tutor review findings: implement bounded Kotlin artifact handoff and toolchain packaging, Java precompiled class handoff, aggregate memory effective peak accounting, restricted seccomp prctl and io_uring handling, and verify 50 concurrent runs load benchmark.
+- Steps:
+  1. Kotlin Artifact Handoff & Toolchain:
+     - In `sandbox-daemon/phase2_rootfs.c` and `phase2_rootfs.h`: support bounded regular artifacts (`target`, `target.jar`, `*.class`) up to 16 MiB during workspace open and populate; bind-mount Kotlin and Node runtimes to `/opt/*` and allow in-place execution.
+     - In `sandbox-daemon/sandbox.c` and `sandbox.h`: raise default `rlimit_nofile` to 1024 and add `--nofile` CLI flag.
+     - In `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`: raise `MAX_ARTIFACT_BYTES` to 16 MiB. Stage 1 compiles Kotlin via `K2JVMCompiler` to `/workspace/target.jar` and exports artifact; Stage 2 deletes source on host and runs `java -jar /workspace/target.jar` without recompilation.
+     - In `worker/Dockerfile`: download and install Kotlin compiler 2.1.0 into `/opt/kotlinc` and symlink to `/usr/bin/kotlinc`.
+  2. Java Two-Stage Class Handoff:
+     - In `ExecutionPipeline.kt`: Stage 1 compiles via `javac` to `/workspace/<ClassName>.class` and exports class artifact; Stage 2 deletes source on host and runs `java -cp /workspace <ClassName>` directly from bytecode.
+  3. Aggregate Memory Effective Peak Accounting:
+     - In `GatewayWebSocketHandler.java`: compute effective per-language peak memory (Java/Kotlin: 3072 MiB, Node: 4096 MiB, Python/C: 512 MiB) and pass to `roomManager.tryAcquireRun(...)`.
+     - In `WorkerGrpcClient.java`: calculate language-aware deadlines with compile budgets (Kotlin: 45s, Java: 15s, C: 13s, Node/Python: 8s).
+     - In `RoomManagerTest.java`: test aggregate memory exhaustion and release across multiple rooms.
+  4. Seccomp Restricted prctl & io_uring Handling:
+     - In `sandbox-daemon/phase2_privilege.c`: restrict `prctl` strictly to `PR_SET_NAME` and `PR_GET_NAME` via conditional seccomp argument checks (denying all others with `SIGSYS`); deny `io_uring_setup`, `io_uring_enter`, and `io_uring_register` with `ENOSYS` to enable libuv graceful fallback to epoll.
+     - Add adversarial test `prctl_unauthorized.c` and test runner check `P2-05: Restricted prctl thread naming filter`.
+  5. 50 Concurrent Runs Load Benchmark & Documentation:
+     - In `gateway/tests/verify_load_test_50.sh`: configure `--gateway.max-aggregate-memory-mb=131072` and verify 50 simultaneous runs across 50 rooms.
+     - In `README.md` and `docker-compose.yml`: document honest benchmark results, runtime limits, and keep Phase 7 marked `In Progress` pending owner interview prep completion.
+- Files: `PROGRESS.md`, `README.md`, `docker-compose.yml`, `gateway/src/main/java/pes/gateway/service/WorkerGrpcClient.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/RoomManagerTest.java`, `gateway/tests/E2eWebSocketClient.java`, `gateway/tests/LoadTest50Concurrent.java`, `gateway/tests/verify_load_test_50.sh`, `sandbox-daemon/Makefile`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/phase2_rootfs.c`, `sandbox-daemon/phase2_rootfs.h`, `sandbox-daemon/sandbox.c`, `sandbox-daemon/sandbox.h`, `sandbox-daemon/tests/evil/prctl_unauthorized.c`, `sandbox-daemon/tests/test_runner.py`, `worker/Dockerfile`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`.
+- Linked: LOG-0199.
+- Tutor review: pending
+
+
+## [LOG-0201] 2026-11-17 08:50 IST | DONE | actor: agent
+- Goal: Remediate Phase 7 tutor review findings: implement bounded Kotlin artifact handoff and toolchain packaging, Java precompiled class handoff, aggregate memory effective peak accounting, restricted seccomp prctl and io_uring handling, and verify 50 concurrent runs load benchmark.
+- Outcome:
+  1. Kotlin Artifact Handoff & Toolchain Packaging:
+     - In `sandbox-daemon/phase2_rootfs.c`: expanded `phase2_workspace_open` and `phase2_workspace_populate` to accept bounded artifacts (`target`, `target.jar`, `*.class`) up to 16 MiB; added `/opt/*` bind mounts for system toolchains.
+     - In `sandbox-daemon/sandbox.c`: raised default `rlimit_nofile` to 1024 to support OpenJDK jar scanning (`tzdb.dat`) and added `--nofile` CLI flag.
+     - In `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`: raised `MAX_ARTIFACT_BYTES` to 16 MiB; invoked Kotlin compiler via OpenJDK `org.jetbrains.kotlin.cli.jvm.K2JVMCompiler` with `-include-runtime` to output `/workspace/target.jar`; exported `target.jar`; unlinked host source; Stage 2 executed `java -jar /workspace/target.jar` directly in ~149 ms without recompilation.
+     - In `worker/Dockerfile`: packaged Kotlin compiler 2.1.0 into `/opt/kotlinc` with `/usr/bin/kotlinc` symlink.
+  2. Java Two-Stage Bytecode Handoff:
+     - In `ExecutionPipeline.kt`: Stage 1 compiled `<ClassName>.java` via `javac` to `/workspace/<ClassName>.class` and exported the class artifact; unlinked host source; Stage 2 executed `java -cp /workspace <ClassName>` directly from bytecode in ~116 ms without JEP 330 source recompilation.
+  3. Aggregate Memory Admission Peak Accounting:
+     - In `GatewayWebSocketHandler.java`: added `computeEffectiveMemoryMb(...)` reserving language-specific peak memory (Java/Kotlin: 3072 MiB, Node: 4096 MiB, Python/C: 512 MiB); passed to `roomManager.tryAcquireRun(...)`.
+     - In `WorkerGrpcClient.java`: calculated language-aware execution deadlines with compile budgets (Kotlin: 45s, Java: 15s, C: 13s, Node/Python: 8s).
+     - In `RoomManagerTest.java`: added `testEffectiveLanguagePeakMemoryAdmission` asserting global memory budget exhaustion and release on run termination.
+  4. Restricted Seccomp prctl & io_uring Handling:
+     - In `sandbox-daemon/phase2_privilege.c`: restricted `prctl` strictly to `PR_SET_NAME` and `PR_GET_NAME` using BPF conditional argument checks; unauthorized `prctl` operations terminated via `SIGSYS` (signal 31).
+     - Added `deny_syscall_enosys` for `io_uring_setup`, `io_uring_enter`, and `io_uring_register` so Node 26 (libuv) falls back cleanly to `epoll`.
+     - In `sandbox-daemon/tests/evil/prctl_unauthorized.c`: added adversarial fixture asserting `PR_SET_NAME` success and `PR_SET_DUMPABLE` termination.
+     - Added test `P2-05: Restricted prctl thread naming filter` in `tests/test_runner.py`.
+  5. Verified 50-Concurrent-Runs Load Benchmark & Documentation:
+     - In `gateway/tests/verify_load_test_50.sh`: configured `--gateway.max-aggregate-memory-mb=131072` for the 50-run test harness.
+     - Executed `verify_load_test_50.sh`: 50/50 simultaneous executions passed across 50 rooms in 8,989 ms (Min: 3,352 ms, Median: 3,622 ms, p95: 6,242 ms, Max: 6,466 ms) with 0 failures, 0 leaked cgroups, and 0 stray processes. Overload rejection (`ROOM_RUN_IN_PROGRESS`) verified.
+     - In `docker-compose.yml`: added `GATEWAY_MAX_AGGREGATE_MEMORY_MB=16384`.
+     - In `README.md`: updated benchmark metrics and limitations; honestly recorded Docker Compose live container run as `UNVERIFIED` due to absent `/var/run/docker.sock` in this environment; Phase 7 status kept `In Progress` pending owner interview prep completion in `docs/05_INTERVIEW_PREP.md`.
+- Verification:
+  - `make -C sandbox-daemon test`: 23/23 passed (18 Phase 1 + 5 Phase 2)
+  - `(cd worker && gradle test)`: 26/26 passed
+  - `(cd gateway && gradle test)`: 47/47 passed
+  - `(cd client && npm test && npm run build)`: 36/36 passed, build clean
+  - `bash gateway/tests/verify_e2e_websocket.sh 8089 50059`: 100% passed (C, Python, Java, Kotlin, Node)
+  - `bash gateway/tests/verify_load_test_50.sh 8089 50059 50`: 50/50 passed in 8,989 ms, 0 leaked cgroups, 0 stray processes
+  - `docker compose config`: passed cleanly
+  - `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check`: passed cleanly
+- Files: `PROGRESS.md`, `README.md`, `docker-compose.yml`, `gateway/src/main/java/pes/gateway/service/WorkerGrpcClient.java`, `gateway/src/main/java/pes/gateway/websocket/GatewayWebSocketHandler.java`, `gateway/src/test/java/pes/gateway/RoomManagerTest.java`, `gateway/tests/E2eWebSocketClient.java`, `gateway/tests/LoadTest50Concurrent.java`, `gateway/tests/verify_load_test_50.sh`, `sandbox-daemon/Makefile`, `sandbox-daemon/phase2_privilege.c`, `sandbox-daemon/phase2_rootfs.c`, `sandbox-daemon/phase2_rootfs.h`, `sandbox-daemon/sandbox.c`, `sandbox-daemon/sandbox.h`, `sandbox-daemon/tests/evil/prctl_unauthorized.c`, `sandbox-daemon/tests/test_runner.py`, `worker/Dockerfile`, `worker/src/main/kotlin/pes/worker/pipeline/ExecutionPipeline.kt`, `worker/src/test/kotlin/pes/worker/pipeline/ExecutionPipelineTest.kt`.
+- Linked: LOG-0200.
+- Tutor review: pending

@@ -10,6 +10,7 @@ import pes.gateway.config.GatewayProperties;
 import pes.gateway.protocol.ErrorEvent;
 import pes.gateway.service.AcquireRunResult;
 import pes.gateway.service.RoomManager;
+import pes.gateway.websocket.GatewayWebSocketHandler;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -201,6 +202,74 @@ class RoomManagerTest {
         assertTrue(roomManager.releaseRun("room-2", "req-2"));
         assertTrue(roomManager.releaseRun("room-3", "req-3"));
         assertEquals(0L, roomManager.getGlobalAllocatedMemoryMb());
+    }
+
+    @Test
+    @DisplayName("Effective per-language peak reservation exhausts aggregate memory budget truthfully")
+    void testEffectiveLanguagePeakMemoryAdmission() {
+        properties.setMaxGlobalConcurrentRuns(10);
+        properties.setMaxAggregateMemoryMb(8192L);
+
+        roomManager.joinRoom("room-jvm1", "s1");
+        roomManager.joinRoom("room-jvm2", "s2");
+        roomManager.joinRoom("room-jvm3", "s3");
+        roomManager.joinRoom("room-node", "s4");
+
+        long javaPeak = GatewayWebSocketHandler.computeEffectiveMemoryMb("java", 64L);
+        long kotlinPeak = GatewayWebSocketHandler.computeEffectiveMemoryMb("kotlin", 64L);
+        long nodePeak = GatewayWebSocketHandler.computeEffectiveMemoryMb("node", 64L);
+        long pyPeak = GatewayWebSocketHandler.computeEffectiveMemoryMb("python", 64L);
+
+        assertEquals(3072L, javaPeak);
+        assertEquals(3072L, kotlinPeak);
+        assertEquals(4096L, nodePeak);
+        assertEquals(512L, pyPeak);
+
+        // Room 1 acquires Java: 3072 MB reserved
+        assertEquals(AcquireRunResult.ACQUIRED,
+            roomManager.tryAcquireRun("room-jvm1", "s1", "req-j1", javaPeak));
+        assertEquals(3072L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(1, roomManager.getGlobalActiveRuns());
+
+        // Room 2 acquires Kotlin: 3072 MB reserved (total 6144 MB)
+        assertEquals(AcquireRunResult.ACQUIRED,
+            roomManager.tryAcquireRun("room-jvm2", "s2", "req-k1", kotlinPeak));
+        assertEquals(6144L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(2, roomManager.getGlobalActiveRuns());
+
+        // Room 3 tries to acquire Java (needs 3072 MB; 6144 + 3072 = 9216 MB > 8192 MB)
+        assertEquals(AcquireRunResult.GLOBAL_MEMORY_LIMIT_REACHED,
+            roomManager.tryAcquireRun("room-jvm3", "s3", "req-j2", javaPeak));
+        assertEquals(6144L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(2, roomManager.getGlobalActiveRuns());
+
+        // Room 3 also tries to acquire Node (needs 4096 MB; 6144 + 4096 = 10240 MB > 8192 MB)
+        assertEquals(AcquireRunResult.GLOBAL_MEMORY_LIMIT_REACHED,
+            roomManager.tryAcquireRun("room-jvm3", "s3", "req-n1", nodePeak));
+
+        // Room 4 acquires Python (needs 512 MB; 6144 + 512 = 6656 MB <= 8192 MB)
+        assertEquals(AcquireRunResult.ACQUIRED,
+            roomManager.tryAcquireRun("room-node", "s4", "req-p1", pyPeak));
+        assertEquals(6656L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(3, roomManager.getGlobalActiveRuns());
+
+        // Release Room 1 (Java run completes or times out)
+        assertTrue(roomManager.releaseRun("room-jvm1", "req-j1"));
+        assertEquals(3584L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(2, roomManager.getGlobalActiveRuns());
+
+        // Room 3 can now acquire Node (3584 + 4096 = 7680 MB <= 8192 MB)
+        assertEquals(AcquireRunResult.ACQUIRED,
+            roomManager.tryAcquireRun("room-jvm3", "s3", "req-n1", nodePeak));
+        assertEquals(7680L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(3, roomManager.getGlobalActiveRuns());
+
+        // Clean up remaining runs; budget must be strictly 0
+        assertTrue(roomManager.releaseRun("room-jvm2", "req-k1"));
+        assertTrue(roomManager.releaseRun("room-node", "req-p1"));
+        assertTrue(roomManager.releaseRun("room-jvm3", "req-n1"));
+        assertEquals(0L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(0, roomManager.getGlobalActiveRuns());
     }
 
     @Test

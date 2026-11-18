@@ -44,9 +44,9 @@ The project currently implements the full collaborative execution stack:
    - Real-time telemetry panel: renders truthful metrics reported by the Linux sandbox runner (`wallMs`, `cpuMs`, `peakMemoryKb`, `exitCode`, `signal`, `status`).
 
 5. **Reproducible Docker Compose & Load Benchmark (`docker-compose.yml`, `gateway/tests/`)**:
-   - Containerization: Multi-stage Dockerfiles for Gateway (Eclipse Temurin JRE 21), Worker (Ubuntu 24.04 with GCC, Python 3, libseccomp, and native sandbox runner), and Client (Node 22 build + Nginx Alpine static server and reverse proxy).
+   - Containerization: Multi-stage Dockerfiles for Gateway (Eclipse Temurin JRE 21), Worker (Ubuntu 24.04 with GCC, Python 3, OpenJDK 21, Kotlin 2.1.0, Node.js 20+, libseccomp, and native sandbox runner), and Client (Node 22 build + Nginx Alpine static server and reverse proxy).
    - Network topology: Private internal bridge network (`pes-net`) with host ports strictly bound to loopback (`127.0.0.1:8080`, `127.0.0.1:50051`, `127.0.0.1:5173`).
-   - Verified 50 concurrent runs load benchmark: Automated harness (`gateway/tests/verify_load_test_50.sh`) opens 50 concurrent WebSocket sessions across 50 distinct isolated rooms, dispatches 50 simultaneous code executions through the real Gateway -> Worker -> Sandbox Runner pipeline, and completes in ~4.08 seconds (100% success) with zero lingering cgroups and zero stray processes.
+   - Verified 50 concurrent runs load benchmark: Automated harness (`gateway/tests/verify_load_test_50.sh`) opens 50 concurrent WebSocket sessions across 50 distinct isolated rooms, dispatches 50 simultaneous code executions (mixed Java, C, and Python) through the real Gateway -> Worker -> Sandbox Runner pipeline, and completes in 8,989 ms (100% success; Min: 3,352 ms, Median: 3,622 ms, p95: 6,242 ms, Max: 6,466 ms) with zero lingering cgroups and zero stray processes.
    - Truthful overload protection: Verified honest `ROOM_RUN_IN_PROGRESS` rejection when room concurrency is exceeded.
 
 ---
@@ -76,12 +76,15 @@ In accordance with project governance rules, the following limitations reflect c
 - **Truthful milestone events (no fake timers)**: Progress states (`Compiling`, `Running`) reflect actual worker milestone emissions immediately before sandboxed GCC compilation and before sandboxed execution. Compilation failures immediately halt and emit `Compile Error` without entering the running state.
 - **Unauthenticated sessions**: WebSocket sessions use server-assigned random UUIDs. Client-supplied user identifiers are untrusted and used only for room display metadata.
 - **Language support & runtime limits**: The Gateway, Worker pipeline, and web client support C, Python 3, Java, Kotlin, and Node.js:
-  - C (`source.c`) is compiled via `/usr/bin/gcc` inside the sandbox runner and executed as an isolated target binary.
-  - Python 3 (`source.py`) is interpreted via `/usr/bin/python3` inside the sandbox runner.
-  - Java (`source.java`) is executed via sandboxed Java 21 single-source execution (`/usr/bin/java`) with in-place execution of read-only system binaries, preserving ELF `$ORIGIN` dynamic linking (`libjli.so`).
-  - Node.js (`source.js`) and Kotlin (`source.kt`) execute via `/usr/bin/node` and `/usr/bin/kotlinc` when installed in the sandbox environment (Node.js is packaged in the Worker Docker runtime image). If a toolchain binary is absent on a particular host, the Worker truthfully fails with `SANDBOX_ERROR` indicating the missing binary.
-  - Non-networking event-loop syscalls (`epoll_create1`, `epoll_ctl`, `epoll_wait`, `eventfd2`) are permitted in the seccomp allowlist, while socket syscalls (`socket`, `connect`, `bind`) remain strictly denied with `EPERM`.
-- **Docker Compose connectivity**: Worker gRPC service binds to `0.0.0.0` inside container via `PES_WORKER_HOST=0.0.0.0` (defaulting to `127.0.0.1` locally), allowing the Gateway container to communicate across the bridge network while host port publication remains strictly loopback-bound (`127.0.0.1:50051`). Accessing the host Docker daemon requires `docker` group membership.
+  - C (`source.c`) is compiled via `/usr/bin/gcc -O2` inside the sandbox under `STAGE_COMPILING` to an isolated binary `target`, which is executed under `STAGE_RUNNING`. Effective peak compile memory is 512 MiB.
+  - Python 3 (`source.py`) is syntax-checked via `python3 -m py_compile` inside the sandbox under `STAGE_COMPILING`. If syntax check passes, it is executed via `/usr/bin/python3` under `STAGE_RUNNING`. Effective peak memory is 512 MiB.
+  - Java (`source.java` / `Main.java`) uses a truthful two-stage lifecycle: Stage 1 compiles via `javac` under `STAGE_COMPILING` to `/workspace/<ClassName>.class` and exports the class artifact; Stage 2 executes bytecode via `java -cp /workspace <ClassName>` directly without source recompilation. Effective peak compile memory is 3072 MiB.
+  - Kotlin (`source.kt`) uses a truthful two-stage lifecycle: Stage 1 compiles via OpenJDK `org.jetbrains.kotlin.cli.jvm.K2JVMCompiler` under `STAGE_COMPILING` to `/workspace/target.jar` and exports the jar artifact; Stage 2 executes bytecode via `java -jar /workspace/target.jar` directly without source recompilation. Effective peak compile memory is 3072 MiB.
+  - Node.js (`source.js`) validates syntax via `node --check` under `STAGE_COMPILING` and executes via `node /workspace/source.js` under `STAGE_RUNNING` with 5120 MiB virtual memory allowance for the V8 pointer compression cage. Effective peak memory is 4096 MiB.
+  - Non-networking event-loop syscalls (`epoll_create1`, `epoll_ctl`, `epoll_wait`, `eventfd2`) are permitted in the seccomp allowlist, while socket syscalls (`socket`, `connect`, `bind`) remain strictly denied with `EPERM`. `io_uring_setup`, `io_uring_enter`, and `io_uring_register` return `ENOSYS` to enable libuv graceful fallback to epoll.
+  - Seccomp restricts `prctl` operations strictly to `PR_SET_NAME` and `PR_GET_NAME` (required for JVM thread naming); all unauthorized `prctl` operations are terminated immediately via `SIGSYS`.
+- **Aggregate memory admission control**: Gateway computes effective per-language peak memory (Java/Kotlin: 3072 MiB, Node: 4096 MiB, Python/C: 512 MiB) and tracks total memory against `gateway.max-aggregate-memory-mb` (default 8192 MiB). Excess runs are rejected truthfully with `GLOBAL_MEMORY_LIMIT_REACHED` until active runs complete or timeout.
+- **Docker Compose status**: Worker gRPC service binds to `0.0.0.0` inside container via `PES_WORKER_HOST=0.0.0.0` (defaulting to `127.0.0.1` locally), allowing the Gateway container to communicate across the bridge network while host port publication remains strictly loopback-bound (`127.0.0.1:50051`). Docker Compose configuration is verified via `docker compose config`. Live multi-container execution inside Docker Compose remains `UNVERIFIED` in environments where the host Docker daemon socket (`/var/run/docker.sock`) is not mounted.
 - **Linux host requirements**: Production sandbox execution requires a Linux kernel with cgroups v2 delegation (`cpu`, `memory`, `pids`) and unprivileged user namespaces. If these prerequisites are absent, the runner strictly fails closed (`SANDBOX_ERROR`).
 - **Containment model**: Isolation is enforced via Linux kernel namespaces, cgroups, and seccomp-bpf. It does not use hypervisor-level virtual machines (such as Firecracker or gVisor).
 
@@ -100,7 +103,7 @@ In accordance with project governance rules, the following limitations reflect c
 # Build sandbox runner and adversarial test fixtures
 make -C sandbox-daemon clean all evil
 
-# Run the 22-test integration suite (18 Phase 1 + 4 Phase 2 checks)
+# Run the 23-test integration suite (18 Phase 1 + 5 Phase 2 checks)
 make -C sandbox-daemon test
 
 # Run safe unit and structural tests

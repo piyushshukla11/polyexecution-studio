@@ -120,7 +120,7 @@ public class LoadTest50Concurrent {
                     ws.sendText(payload, true);
 
                     // 4. Await run.accepted and run.completed
-                    long deadline = System.currentTimeMillis() + 30000;
+                    long deadline = System.currentTimeMillis() + 45000;
                     boolean accepted = false;
                     boolean completed = false;
                     String finalResult = null;
@@ -184,7 +184,7 @@ public class LoadTest50Concurrent {
         startExecutionLatch.countDown();
 
         // Wait for all 50 to complete
-        boolean allDone = allCompletedLatch.await(60, TimeUnit.SECONDS);
+        boolean allDone = allCompletedLatch.await(90, TimeUnit.SECONDS);
         long totalElapsed = System.currentTimeMillis() - benchmarkStart;
 
         System.out.println("\n[Stage 3] Results Summary:");

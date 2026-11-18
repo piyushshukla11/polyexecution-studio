@@ -206,8 +206,98 @@ public class E2eWebSocketClient {
             System.exit(1);
         }
 
-        // 8. Leave room & close
-        System.out.println("\n[8] Leaving room...");
+        // 8. Submit Kotlin run
+        System.out.println("\n[8] Submitting valid Kotlin execution...");
+        String ktRun = """
+            {
+              "type": "run",
+              "roomId": "e2e-room",
+              "requestId": "e2e-kt-001",
+              "language": "kotlin",
+              "sourceCode": "fun main() { println(\\\"Hello from PES E2E Kotlin\\\"); }\\n"
+            }
+            """;
+        ws.sendText(ktRun, true);
+        String ktAccepted = messages.poll(5, TimeUnit.SECONDS);
+        System.out.println("Received: " + ktAccepted);
+        RunExecutionResult ktResult = pollUntilCompleted(messages, 45);
+        if (ktResult.completedEvent() == null || !ktResult.completedEvent().contains("\"OK\"") || !ktResult.completedEvent().contains("Hello from PES E2E Kotlin")) {
+            System.err.println("FAIL: Expected OK status and stdout for Kotlin");
+            System.exit(1);
+        }
+
+        // 9. Submit invalid Kotlin run (compile error -> COMPILE_ERROR, no RUNNING)
+        System.out.println("\n[9] Submitting invalid Kotlin execution (compile error)...");
+        String badKtRun = """
+            {
+              "type": "run",
+              "roomId": "e2e-room",
+              "requestId": "e2e-kt-bad",
+              "language": "kotlin",
+              "sourceCode": "fun main() { broken code }\\n"
+            }
+            """;
+        ws.sendText(badKtRun, true);
+        String badKtAccepted = messages.poll(5, TimeUnit.SECONDS);
+        System.out.println("Received: " + badKtAccepted);
+        RunExecutionResult badKtResult = pollUntilCompleted(messages, 45);
+        if (badKtResult.completedEvent() == null || !badKtResult.completedEvent().contains("\"COMPILE_ERROR\"")) {
+            System.err.println("FAIL: Expected COMPILE_ERROR for invalid Kotlin");
+            System.exit(1);
+        }
+        boolean badKtSawRunning = badKtResult.progressEvents().stream().anyMatch(e -> e.contains("\"stage\":\"RUNNING\""));
+        if (badKtSawRunning) {
+            System.err.println("FAIL: Invalid Kotlin must NOT emit RUNNING milestone");
+            System.exit(1);
+        }
+
+        // 10. Submit valid Node run
+        System.out.println("\n[10] Submitting valid Node execution...");
+        String nodeRun = """
+            {
+              "type": "run",
+              "roomId": "e2e-room",
+              "requestId": "e2e-node-001",
+              "language": "node",
+              "sourceCode": "console.log('Hello from PES E2E Node');\\n"
+            }
+            """;
+        ws.sendText(nodeRun, true);
+        String nodeAccepted = messages.poll(5, TimeUnit.SECONDS);
+        System.out.println("Received: " + nodeAccepted);
+        RunExecutionResult nodeResult = pollUntilCompleted(messages, 15);
+        if (nodeResult.completedEvent() == null || !nodeResult.completedEvent().contains("\"OK\"") || !nodeResult.completedEvent().contains("Hello from PES E2E Node")) {
+            System.err.println("FAIL: Expected OK status and stdout for Node");
+            System.exit(1);
+        }
+
+        // 11. Submit invalid Node run (syntax error -> COMPILE_ERROR, no RUNNING)
+        System.out.println("\n[11] Submitting invalid Node execution (syntax error)...");
+        String badNodeRun = """
+            {
+              "type": "run",
+              "roomId": "e2e-room",
+              "requestId": "e2e-node-bad",
+              "language": "node",
+              "sourceCode": "function broken( {\\n"
+            }
+            """;
+        ws.sendText(badNodeRun, true);
+        String badNodeAccepted = messages.poll(5, TimeUnit.SECONDS);
+        System.out.println("Received: " + badNodeAccepted);
+        RunExecutionResult badNodeResult = pollUntilCompleted(messages, 15);
+        if (badNodeResult.completedEvent() == null || !badNodeResult.completedEvent().contains("\"COMPILE_ERROR\"")) {
+            System.err.println("FAIL: Expected COMPILE_ERROR for invalid Node");
+            System.exit(1);
+        }
+        boolean badNodeSawRunning = badNodeResult.progressEvents().stream().anyMatch(e -> e.contains("\"stage\":\"RUNNING\""));
+        if (badNodeSawRunning) {
+            System.err.println("FAIL: Invalid Node must NOT emit RUNNING milestone");
+            System.exit(1);
+        }
+
+        // 12. Leave room & close
+        System.out.println("\n[12] Leaving room...");
         ws.sendText("{\"type\":\"room.leave\",\"roomId\":\"e2e-room\"}", true);
         String leaveResp = messages.poll(5, TimeUnit.SECONDS);
         System.out.println("Received: " + leaveResp);

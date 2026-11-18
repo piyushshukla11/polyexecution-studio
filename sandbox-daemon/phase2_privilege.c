@@ -214,7 +214,7 @@ static int install_seccomp_allowlist(void) {
         SCMP_SYS(kill), SCMP_SYS(tgkill), SCMP_SYS(clone), SCMP_SYS(fork), SCMP_SYS(vfork),
         SCMP_SYS(execve), SCMP_SYS(fcntl), SCMP_SYS(dup), SCMP_SYS(dup2), SCMP_SYS(dup3),
         SCMP_SYS(pipe), SCMP_SYS(pipe2), SCMP_SYS(statx), SCMP_SYS(getcwd), SCMP_SYS(chdir),
-        SCMP_SYS(fchdir), SCMP_SYS(flock), SCMP_SYS(prctl),
+        SCMP_SYS(fchdir), SCMP_SYS(flock),
         SCMP_SYS(unlink), SCMP_SYS(unlinkat), SCMP_SYS(mkdir), SCMP_SYS(mkdirat),
         SCMP_SYS(rmdir), SCMP_SYS(rename), SCMP_SYS(renameat), SCMP_SYS(renameat2),
         SCMP_SYS(chmod), SCMP_SYS(fchmod), SCMP_SYS(fchmodat), SCMP_SYS(utimensat),
@@ -239,6 +239,16 @@ static int install_seccomp_allowlist(void) {
             return -1;
         }
     }
+    /* Restrict prctl strictly to thread naming (PR_SET_NAME / PR_GET_NAME) */
+    if (seccomp_rule_add(filter, SCMP_ACT_ALLOW, SCMP_SYS(prctl), 1,
+                         SCMP_A0(SCMP_CMP_EQ, PR_SET_NAME)) < 0 ||
+        seccomp_rule_add(filter, SCMP_ACT_ALLOW, SCMP_SYS(prctl), 1,
+                         SCMP_A0(SCMP_CMP_EQ, PR_GET_NAME)) < 0) {
+        int saved_errno = errno;
+        seccomp_release(filter);
+        errno = saved_errno;
+        return -1;
+    }
     const int denied_syscalls[] = {SCMP_SYS(socket), SCMP_SYS(socketpair), SCMP_SYS(connect),
                                    SCMP_SYS(bind), SCMP_SYS(listen), SCMP_SYS(accept), SCMP_SYS(accept4)};
     for (size_t i = 0; i < sizeof(denied_syscalls) / sizeof(denied_syscalls[0]); i++) {
@@ -251,6 +261,30 @@ static int install_seccomp_allowlist(void) {
     }
 #ifdef __NR_clone3
     if (deny_syscall_enosys(filter, SCMP_SYS(clone3)) < 0) {
+        int saved_errno = errno;
+        seccomp_release(filter);
+        errno = saved_errno;
+        return -1;
+    }
+#endif
+#ifdef __NR_io_uring_setup
+    if (deny_syscall_enosys(filter, SCMP_SYS(io_uring_setup)) < 0) {
+        int saved_errno = errno;
+        seccomp_release(filter);
+        errno = saved_errno;
+        return -1;
+    }
+#endif
+#ifdef __NR_io_uring_enter
+    if (deny_syscall_enosys(filter, SCMP_SYS(io_uring_enter)) < 0) {
+        int saved_errno = errno;
+        seccomp_release(filter);
+        errno = saved_errno;
+        return -1;
+    }
+#endif
+#ifdef __NR_io_uring_register
+    if (deny_syscall_enosys(filter, SCMP_SYS(io_uring_register)) < 0) {
         int saved_errno = errno;
         seccomp_release(filter);
         errno = saved_errno;
