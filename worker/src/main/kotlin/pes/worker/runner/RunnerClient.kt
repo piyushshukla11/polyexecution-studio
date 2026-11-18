@@ -14,6 +14,8 @@ import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermission
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 data class WorkspaceHandoff(
@@ -40,6 +42,7 @@ class ProcessSandboxRunner(
 ) : RunnerClient {
 
     private val gson = Gson()
+    private val ioExecutor: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()
 
     internal fun buildCommand(
         jobId: String,
@@ -104,12 +107,12 @@ class ProcessSandboxRunner(
         // Start all drains before feeding stdin, so a runner that reports an early error cannot fill a pipe.
         val stdoutFuture = process.inputStream.readAllBytesAsync()
         val stderrFuture = process.errorStream.readAllBytesAsync()
-        val stdinFuture = CompletableFuture.runAsync {
+        val stdinFuture = CompletableFuture.runAsync({
             process.outputStream.use { output ->
                 output.write(stdinBytes)
                 output.flush()
             }
-        }
+        }, ioExecutor)
 
         val finished = try {
             process.waitFor(processTimeoutMs, TimeUnit.MILLISECONDS)
@@ -179,9 +182,9 @@ class ProcessSandboxRunner(
         }
     }
 
-    private fun InputStream.readAllBytesAsync(): CompletableFuture<ByteArray> = CompletableFuture.supplyAsync {
+    private fun InputStream.readAllBytesAsync(): CompletableFuture<ByteArray> = CompletableFuture.supplyAsync({
         use { it.readBytes() }
-    }
+    }, ioExecutor)
 
     private fun closeProcessPipes(process: Process) {
         try { process.inputStream.close() } catch (_: Exception) { }

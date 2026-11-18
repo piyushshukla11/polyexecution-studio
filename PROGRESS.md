@@ -3250,3 +3250,58 @@
 - Files: `PROGRESS.md`.
 - Linked: LOG-0186.
 - Tutor review: pending
+
+
+## [LOG-0188] 2026-11-16 18:15 IST | PLAN | actor: agent
+- Goal: Implement the 50 concurrent runs load test harness and verification script to demonstrate concurrent execution through the real Gateway -> Worker -> C sandbox stack without host instability.
+- Steps:
+  1. Concurrency Test Client (`gateway/tests/LoadTest50Concurrent.java`):
+     - Multi-threaded WebSocket client using standard `java.net.http.HttpClient` with zero external dependencies.
+     - Establish 50 concurrent WebSocket connections; each joins an isolated room (`load-room-01` .. `load-room-50`).
+     - Simultaneously submit bounded execution requests (C and Python) across all 50 rooms.
+     - Await and assert `run.accepted` and `run.completed` with status `OK` and matching stdout across all 50 connections.
+     - Collect latency metrics (min, mean, median, p95, max, total elapsed).
+     - Test overload protection: when `gateway.max-global-concurrent-runs` is saturated, verify that an excess run request receives truthful `run.rejected` with code `BUSY` without crashing or dropping connection.
+  2. Load Test Runner Script (`gateway/tests/verify_load_test_50.sh`):
+     - Start Worker on port 50051 (pointing to production `sandbox-runner`).
+     - Start Gateway on port 8080 with `--gateway.max-global-concurrent-runs=64` to accommodate the 50-room active execution pool.
+     - Execute `LoadTest50Concurrent.java`.
+     - Verify host stability: inspect memory and CPU utilization before, during, and after.
+     - Post-run cleanup verification: assert 0 lingering `pes-*` cgroups, 0 stray runner processes, and 0 zombie processes.
+  3. Execution & Evidence:
+     - Run `bash gateway/tests/verify_load_test_50.sh 8080 50051`.
+     - Record latency distribution, peak memory, and verification results.
+- Files: `PROGRESS.md`, `gateway/tests/LoadTest50Concurrent.java`, `gateway/tests/verify_load_test_50.sh`.
+- Linked: LOG-0187.
+- Tutor review: pending
+
+
+## [LOG-0189] 2026-11-16 18:39 IST | DONE | actor: agent
+- Reason: Complete implementation and verification of the 50 concurrent runs load benchmark across 50 rooms through the real Gateway -> Worker -> C Sandbox Runner pipeline.
+- Details / Change:
+  1. Worker Virtual Thread I/O Executor:
+     - In `worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt`, added `private val ioExecutor: ExecutorService = Executors.newVirtualThreadPerTaskExecutor()` to `ProcessSandboxRunner`.
+     - Routed `readAllBytesAsync()` (stdout, stderr) and stdin feeding to `ioExecutor`. This eliminated thread pool starvation on `ForkJoinPool.commonPool()` where 50 concurrent subprocesses previously exhausted the 7-thread common pool, causing pipe draining deadlocks and false timeouts.
+     - Confirmed all 19 worker unit and gRPC tests pass cleanly (`(cd worker && gradle test)`).
+  2. 50-Client Load Test Harness (`gateway/tests/LoadTest50Concurrent.java`):
+     - Implemented multi-threaded WebSocket client using standard `java.net.http.HttpClient` with `newFixedThreadPool(60)`.
+     - Spawns 50 concurrent WebSocket sessions across 50 distinct isolated rooms (`load-room-001` .. `load-room-050`).
+     - Coordinates simultaneous dispatch across all 50 rooms using `CountDownLatch`. Alternates between Python and C workloads with unique per-room marker tokens.
+     - Asserts `run.accepted` and `run.completed` with status `OK` and matching marker text.
+     - Measures per-run latency distribution and percentiles.
+     - Implements overload verification: submits a concurrent execution while an active execution is running in the room, asserting truthful rejection with reason `ROOM_RUN_IN_PROGRESS`.
+  3. Load Test Orchestration Script (`gateway/tests/verify_load_test_50.sh`):
+     - Starts Worker on port 50055 and Gateway on port 8085 with `--gateway.max-global-concurrent-runs=64` and `--gateway.max-rooms=200`.
+     - Executes `LoadTest50Concurrent.java ws://127.0.0.1:8085/ws 50`.
+     - Validates post-benchmark host cleanup: checks active `pes-*` cgroups (0 leaked) and exact active runner processes (`pgrep -c -x sandbox-runner` = 0 lingering).
+  4. Benchmark Evidence:
+     - Total requests submitted: 50.
+     - Successful executions: 50/50 (100%).
+     - Failed executions: 0.
+     - Total benchmark wall clock time: 4084 ms (~4.08 seconds for all 50 concurrent runs).
+     - Latency percentiles: Min 1105 ms, Mean 1319.9 ms, Median 1325 ms, p90 1421 ms, p95 1444 ms, Max 1463 ms.
+     - Overload rejection: verified truthful `run.rejected` with `reason: "ROOM_RUN_IN_PROGRESS"`.
+     - Host stability: 0 lingering `pes-*` cgroups; 0 lingering `sandbox-runner` processes; available memory: 6.3 GiB.
+- Files: `PROGRESS.md`, `gateway/tests/LoadTest50Concurrent.java`, `gateway/tests/verify_load_test_50.sh`, `worker/src/main/kotlin/pes/worker/runner/RunnerClient.kt`.
+- Linked: LOG-0188.
+- Tutor review: pending
