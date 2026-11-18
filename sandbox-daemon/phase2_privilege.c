@@ -16,6 +16,7 @@
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/syscall.h>
+#include <asm/unistd.h>
 #include <unistd.h>
 
 int phase2_child_create_namespaces(void) {
@@ -213,6 +214,7 @@ static int install_seccomp_allowlist(void) {
         SCMP_SYS(kill), SCMP_SYS(tgkill), SCMP_SYS(clone), SCMP_SYS(fork), SCMP_SYS(vfork),
         SCMP_SYS(execve), SCMP_SYS(fcntl), SCMP_SYS(dup), SCMP_SYS(dup2), SCMP_SYS(dup3),
         SCMP_SYS(pipe), SCMP_SYS(pipe2), SCMP_SYS(statx), SCMP_SYS(getcwd), SCMP_SYS(chdir),
+        SCMP_SYS(fchdir), SCMP_SYS(flock), SCMP_SYS(prctl),
         SCMP_SYS(unlink), SCMP_SYS(unlinkat), SCMP_SYS(mkdir), SCMP_SYS(mkdirat),
         SCMP_SYS(rmdir), SCMP_SYS(rename), SCMP_SYS(renameat), SCMP_SYS(renameat2),
         SCMP_SYS(chmod), SCMP_SYS(fchmod), SCMP_SYS(fchmodat), SCMP_SYS(utimensat),

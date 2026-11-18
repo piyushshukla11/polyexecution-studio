@@ -167,6 +167,43 @@ class RoomManagerTest {
     }
 
     @Test
+    @DisplayName("Global aggregate memory limit rejects runs exceeding memory budget")
+    void testGlobalAggregateMemoryLimit() {
+        properties.setMaxGlobalConcurrentRuns(10);
+        properties.setMaxAggregateMemoryMb(1024L);
+
+        roomManager.joinRoom("room-1", "s1");
+        roomManager.joinRoom("room-2", "s2");
+        roomManager.joinRoom("room-3", "s3");
+
+        assertEquals(AcquireRunResult.ACQUIRED, roomManager.tryAcquireRun("room-1", "s1", "req-1", 512L));
+        assertEquals(512L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(1, roomManager.getGlobalActiveRuns());
+
+        assertEquals(AcquireRunResult.ACQUIRED, roomManager.tryAcquireRun("room-2", "s2", "req-2", 512L));
+        assertEquals(1024L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(2, roomManager.getGlobalActiveRuns());
+
+        // Third run requests 256 MB, exceeds budget 1024 MB
+        assertEquals(AcquireRunResult.GLOBAL_MEMORY_LIMIT_REACHED,
+            roomManager.tryAcquireRun("room-3", "s3", "req-3", 256L));
+        assertEquals(1024L, roomManager.getGlobalAllocatedMemoryMb());
+
+        // Release room-1
+        assertTrue(roomManager.releaseRun("room-1", "req-1"));
+        assertEquals(512L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(1, roomManager.getGlobalActiveRuns());
+
+        // Now room-3 can acquire
+        assertEquals(AcquireRunResult.ACQUIRED, roomManager.tryAcquireRun("room-3", "s3", "req-3", 256L));
+        assertEquals(768L, roomManager.getGlobalAllocatedMemoryMb());
+
+        assertTrue(roomManager.releaseRun("room-2", "req-2"));
+        assertTrue(roomManager.releaseRun("room-3", "req-3"));
+        assertEquals(0L, roomManager.getGlobalAllocatedMemoryMb());
+    }
+
+    @Test
     @DisplayName("Rate limiting rejects runs exceeding window threshold")
     void testRateLimiting() {
         properties.setRateLimitRunsPerMinute(2);

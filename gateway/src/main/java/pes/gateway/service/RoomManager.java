@@ -30,6 +30,7 @@ public class RoomManager {
     private final Map<String, WebSocketSession> activeSessions = new ConcurrentHashMap<>();
 
     private final AtomicInteger globalActiveRuns = new AtomicInteger(0);
+    private final java.util.concurrent.atomic.AtomicLong globalAllocatedMemoryMb = new java.util.concurrent.atomic.AtomicLong(0L);
 
     private static final String[] PALETTE = {
         "#30bced", "#e06c75", "#98c379", "#e5c07b", "#61afef", "#be5046", "#d19a66", "#c678dd"
@@ -121,7 +122,7 @@ public class RoomManager {
         return roomId;
     }
 
-    public synchronized AcquireRunResult tryAcquireRun(String roomId, String sessionId, String requestId) {
+    public synchronized AcquireRunResult tryAcquireRun(String roomId, String sessionId, String requestId, long memoryMb) {
         Room room = rooms.get(roomId);
         if (room == null || !room.hasSession(sessionId)) {
             return AcquireRunResult.NOT_IN_ROOM;
@@ -136,23 +137,37 @@ public class RoomManager {
             return AcquireRunResult.GLOBAL_CONCURRENCY_LIMIT_REACHED;
         }
 
-        if (!room.tryAcquireRun(requestId)) {
+        long reqMem = memoryMb > 0 ? memoryMb : 64L;
+        if (globalAllocatedMemoryMb.get() + reqMem > properties.getMaxAggregateMemoryMb()) {
+            return AcquireRunResult.GLOBAL_MEMORY_LIMIT_REACHED;
+        }
+
+        if (!room.tryAcquireRun(requestId, reqMem)) {
             return AcquireRunResult.ROOM_RUN_IN_PROGRESS;
         }
 
         globalActiveRuns.incrementAndGet();
+        globalAllocatedMemoryMb.addAndGet(reqMem);
         room.recordRun(now);
         return AcquireRunResult.ACQUIRED;
     }
 
+    public synchronized AcquireRunResult tryAcquireRun(String roomId, String sessionId, String requestId) {
+        return tryAcquireRun(roomId, sessionId, requestId, 64L);
+    }
+
     public synchronized boolean releaseRun(String roomId, String requestId) {
         Room room = rooms.get(roomId);
-        if (room != null && room.releaseRun(requestId)) {
-            globalActiveRuns.decrementAndGet();
-            if (room.isEmpty()) {
-                rooms.remove(roomId);
+        if (room != null) {
+            long releasedMemory = room.releaseRunWithMemory(requestId);
+            if (releasedMemory > 0) {
+                globalActiveRuns.decrementAndGet();
+                globalAllocatedMemoryMb.updateAndGet(curr -> Math.max(0L, curr - releasedMemory));
+                if (room.isEmpty()) {
+                    rooms.remove(roomId);
+                }
+                return true;
             }
-            return true;
         }
         return false;
     }
@@ -177,6 +192,10 @@ public class RoomManager {
 
     public int getGlobalActiveRuns() {
         return globalActiveRuns.get();
+    }
+
+    public long getGlobalAllocatedMemoryMb() {
+        return globalAllocatedMemoryMb.get();
     }
 
     public void broadcastToRoom(String roomId, ServerEvent event) {

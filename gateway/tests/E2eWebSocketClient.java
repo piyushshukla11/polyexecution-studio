@@ -7,21 +7,29 @@ import java.time.Duration;
 import java.util.concurrent.*;
 
 public class E2eWebSocketClient {
-    private static String pollUntilCompleted(BlockingQueue<String> messages, long timeoutSeconds) throws InterruptedException {
+    private static RunExecutionResult pollUntilCompleted(BlockingQueue<String> messages, long timeoutSeconds) throws InterruptedException {
         long deadline = System.currentTimeMillis() + timeoutSeconds * 1000;
+        java.util.List<String> progressStages = new java.util.ArrayList<>();
+        String completedMsg = null;
         while (System.currentTimeMillis() < deadline) {
             long remaining = Math.max(1, deadline - System.currentTimeMillis());
             String msg = messages.poll(remaining, TimeUnit.MILLISECONDS);
             if (msg == null) {
-                return null;
+                break;
             }
             System.out.println("Received: " + msg);
+            if (msg.contains("\"run.progress\"")) {
+                progressStages.add(msg);
+            }
             if (msg.contains("\"run.completed\"")) {
-                return msg;
+                completedMsg = msg;
+                break;
             }
         }
-        return null;
+        return new RunExecutionResult(completedMsg, progressStages);
     }
+
+    private record RunExecutionResult(String completedEvent, java.util.List<String> progressEvents) {}
 
     public static void main(String[] args) throws Exception {
         String wsUrl = args.length > 0 ? args[0] : "ws://127.0.0.1:8080/ws";
@@ -77,8 +85,8 @@ public class E2eWebSocketClient {
             System.err.println("FAIL: Expected run.accepted for C");
             System.exit(1);
         }
-        String cCompleted = pollUntilCompleted(messages, 15);
-        if (cCompleted == null || !cCompleted.contains("\"OK\"") || !cCompleted.contains("Hello from PES E2E C")) {
+        RunExecutionResult cResult = pollUntilCompleted(messages, 15);
+        if (cResult.completedEvent() == null || !cResult.completedEvent().contains("\"OK\"") || !cResult.completedEvent().contains("Hello from PES E2E C")) {
             System.err.println("FAIL: Expected OK status and stdout from real sandbox");
             System.exit(1);
         }
@@ -97,9 +105,14 @@ public class E2eWebSocketClient {
         ws.sendText(badCRun, true);
         String badCAccepted = messages.poll(5, TimeUnit.SECONDS);
         System.out.println("Received: " + badCAccepted);
-        String badCCompleted = pollUntilCompleted(messages, 15);
-        if (badCCompleted == null || !badCCompleted.contains("\"COMPILE_ERROR\"")) {
+        RunExecutionResult badCResult = pollUntilCompleted(messages, 15);
+        if (badCResult.completedEvent() == null || !badCResult.completedEvent().contains("\"COMPILE_ERROR\"")) {
             System.err.println("FAIL: Expected COMPILE_ERROR for invalid C");
+            System.exit(1);
+        }
+        boolean badCSawRunning = badCResult.progressEvents().stream().anyMatch(e -> e.contains("\"stage\":\"RUNNING\""));
+        if (badCSawRunning) {
+            System.err.println("FAIL: Invalid C must NOT emit RUNNING milestone");
             System.exit(1);
         }
 
@@ -117,14 +130,84 @@ public class E2eWebSocketClient {
         ws.sendText(pyRun, true);
         String pyAccepted = messages.poll(5, TimeUnit.SECONDS);
         System.out.println("Received: " + pyAccepted);
-        String pyCompleted = pollUntilCompleted(messages, 15);
-        if (pyCompleted == null || !pyCompleted.contains("\"OK\"") || !pyCompleted.contains("Hello from PES E2E Python")) {
+        RunExecutionResult pyResult = pollUntilCompleted(messages, 15);
+        if (pyResult.completedEvent() == null || !pyResult.completedEvent().contains("\"OK\"") || !pyResult.completedEvent().contains("Hello from PES E2E Python")) {
             System.err.println("FAIL: Expected OK status and stdout for Python");
             System.exit(1);
         }
 
-        // 5. Leave room & close
-        System.out.println("\n[5] Leaving room...");
+        // 5. Submit invalid Python run (syntax error -> COMPILE_ERROR, no RUNNING)
+        System.out.println("\n[5] Submitting invalid Python execution (syntax error)...");
+        String badPyRun = """
+            {
+              "type": "run",
+              "roomId": "e2e-room",
+              "requestId": "e2e-py-bad",
+              "language": "python",
+              "sourceCode": "def broken(:\\n    pass\\n"
+            }
+            """;
+        ws.sendText(badPyRun, true);
+        String badPyAccepted = messages.poll(5, TimeUnit.SECONDS);
+        System.out.println("Received: " + badPyAccepted);
+        RunExecutionResult badPyResult = pollUntilCompleted(messages, 15);
+        if (badPyResult.completedEvent() == null || !badPyResult.completedEvent().contains("\"COMPILE_ERROR\"")) {
+            System.err.println("FAIL: Expected COMPILE_ERROR for invalid Python syntax");
+            System.exit(1);
+        }
+        boolean badPySawRunning = badPyResult.progressEvents().stream().anyMatch(e -> e.contains("\"stage\":\"RUNNING\""));
+        if (badPySawRunning) {
+            System.err.println("FAIL: Invalid Python must NOT emit RUNNING milestone");
+            System.exit(1);
+        }
+
+        // 6. Submit Java run
+        System.out.println("\n[6] Submitting valid Java execution...");
+        String javaRun = """
+            {
+              "type": "run",
+              "roomId": "e2e-room",
+              "requestId": "e2e-java-001",
+              "language": "java",
+              "sourceCode": "public class Main { public static void main(String[] args) { System.out.println(\\\"Hello from PES E2E Java\\\"); } }\\n"
+            }
+            """;
+        ws.sendText(javaRun, true);
+        String javaAccepted = messages.poll(5, TimeUnit.SECONDS);
+        System.out.println("Received: " + javaAccepted);
+        RunExecutionResult javaResult = pollUntilCompleted(messages, 20);
+        if (javaResult.completedEvent() == null || !javaResult.completedEvent().contains("\"OK\"") || !javaResult.completedEvent().contains("Hello from PES E2E Java")) {
+            System.err.println("FAIL: Expected OK status and stdout for Java");
+            System.exit(1);
+        }
+
+        // 7. Submit invalid Java run (syntax error -> COMPILE_ERROR, no RUNNING)
+        System.out.println("\n[7] Submitting invalid Java execution (compile error)...");
+        String badJavaRun = """
+            {
+              "type": "run",
+              "roomId": "e2e-room",
+              "requestId": "e2e-java-bad",
+              "language": "java",
+              "sourceCode": "public class Main { public static void main(String[] args) { broken code without semicolon } }\\n"
+            }
+            """;
+        ws.sendText(badJavaRun, true);
+        String badJavaAccepted = messages.poll(5, TimeUnit.SECONDS);
+        System.out.println("Received: " + badJavaAccepted);
+        RunExecutionResult badJavaResult = pollUntilCompleted(messages, 20);
+        if (badJavaResult.completedEvent() == null || !badJavaResult.completedEvent().contains("\"COMPILE_ERROR\"")) {
+            System.err.println("FAIL: Expected COMPILE_ERROR for invalid Java");
+            System.exit(1);
+        }
+        boolean badJavaSawRunning = badJavaResult.progressEvents().stream().anyMatch(e -> e.contains("\"stage\":\"RUNNING\""));
+        if (badJavaSawRunning) {
+            System.err.println("FAIL: Invalid Java must NOT emit RUNNING milestone");
+            System.exit(1);
+        }
+
+        // 8. Leave room & close
+        System.out.println("\n[8] Leaving room...");
         ws.sendText("{\"type\":\"room.leave\",\"roomId\":\"e2e-room\"}", true);
         String leaveResp = messages.poll(5, TimeUnit.SECONDS);
         System.out.println("Received: " + leaveResp);

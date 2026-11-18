@@ -26,6 +26,7 @@ public class Room {
     private final Map<String, ConcurrentLinkedQueue<Long>> sessionCollabAwarenessTimestamps = new ConcurrentHashMap<>();
     private final Map<String, ConcurrentLinkedQueue<Long>> sessionSyncTimestamps = new ConcurrentHashMap<>();
     private volatile String activeRequestId = null;
+    private volatile long activeRunMemoryMb = 0L;
 
     public Room(String roomId) {
         this.roomId = roomId;
@@ -85,24 +86,35 @@ public class Room {
         runTimestamps.offer(nowMs);
     }
 
-    public synchronized boolean tryAcquireRun(String requestId) {
+    public synchronized boolean tryAcquireRun(String requestId, long memoryMb) {
         if (requestId == null || requestId.isBlank()) {
             return false;
         }
         if (runActive.compareAndSet(false, true)) {
             this.activeRequestId = requestId;
+            this.activeRunMemoryMb = memoryMb > 0 ? memoryMb : 64L;
             return true;
         }
         return false;
     }
 
-    public synchronized boolean releaseRun(String requestId) {
+    public synchronized boolean tryAcquireRun(String requestId) {
+        return tryAcquireRun(requestId, 64L);
+    }
+
+    public synchronized long releaseRunWithMemory(String requestId) {
         if (requestId != null && Objects.equals(this.activeRequestId, requestId)) {
             this.activeRequestId = null;
+            long released = this.activeRunMemoryMb;
+            this.activeRunMemoryMb = 0L;
             this.runActive.set(false);
-            return true;
+            return released > 0 ? released : 64L;
         }
-        return false;
+        return 0L;
+    }
+
+    public synchronized boolean releaseRun(String requestId) {
+        return releaseRunWithMemory(requestId) > 0;
     }
 
     public boolean isRunActive() {
@@ -111,6 +123,10 @@ public class Room {
 
     public String getActiveRequestId() {
         return activeRequestId;
+    }
+
+    public long getActiveRunMemoryMb() {
+        return activeRunMemoryMb;
     }
 
     public synchronized boolean addCollabUpdate(String updateBase64, int maxHistoryCount, int maxHistoryBytes) {
