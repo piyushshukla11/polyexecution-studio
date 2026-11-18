@@ -3221,3 +3221,32 @@
 - Files: `PROGRESS.md`, `README.md`.
 - Linked: LOG-0185, LOG-0184, LOG-0183.
 - Tutor review: approved for Phase 6 sign-off and merge into main
+
+
+## [LOG-0187] 2026-11-16 18:06 IST | DECISION | actor: agent
+- Reason: Record Phase 7 baseline verification, runtime scope reconciliation, sandbox compatibility analysis, Docker daemon access prerequisites, and load test architecture.
+- Details / Change:
+  1. Baseline Verification:
+     - Confirmed `main` is at `e7edf78`, tagged `phase-6-done`, and cleanly tracked with `origin/main`.
+     - Created and checked out phase branch `phase/7-ops` per AI_RULES.md §10.
+     - GitHub Issue Status: `gh` CLI is unauthenticated on host; reported to Piyush so no fake issue reference is fabricated.
+  2. Scope Reconciliation (`docs/04_BUILD_PLAN.md` vs `README.md`):
+     - `docs/04_BUILD_PLAN.md` states: "Java/Kotlin/Node support, Docker Compose, load test, README with honest benchmarks — 50 concurrent runs without host instability; documented limits; all required project-wide learning questions and exercises completed and tutor-reviewed."
+     - `README.md` previously described: "Runtimes for Rust, Java, and Node.js are planned for Phase 7."
+     - Decision: In accordance with prompt and build plan rules, Rust is not in the governing build plan and is excluded unless an explicit scope expansion is authorized. C and Python are existing production runtimes.
+  3. Sandbox Architecture Analysis for New Runtimes:
+     - Node.js: The Node binary is 144 MiB (exceeding the 64 MiB limit in `phase2_rootfs.c:301` and 128 MiB tmpfs in `phase2_rootfs.c:401`), requires `source.js` allowlisting in `valid_source_leaf`, and requires V8 virtual address space (~1.4–2 GiB `RLIMIT_AS`) and libuv syscalls (`epoll_create1`, `eventfd2`, `socketpair`).
+     - Java / Kotlin: JVM HotSpot binary lookup fails when copied to `/run/target` because `$ORIGIN/../lib` fails to resolve `libjli.so`, and HotSpot startup reserves multiple gigabytes of virtual memory (Compressed Class Space, Metaspace, GC threads), conflicting with low `RLIMIT_AS` (as highlighted in interview prep Q7). Kotlin additionally requires `kotlinc` / standard library artifacts inside the sandbox rootfs.
+     - Because modifying sandbox rootfs limits, tmpfs size, and seccomp allowlists constitutes a Tier A change, document these concrete blockers for Piyush's review, keep existing sandbox controls intact, and continue independent Phase 7 work (load testing, Docker Compose, protocol scaffolding).
+  4. Docker Environment Prerequisite:
+     - Verified Docker 29.9.2 and Docker Compose 5.6.1 are installed.
+     - Discovered `/var/run/docker.sock` is owned by `root:docker (0660)` and current user `zogratis` lacks `docker` group membership (`permission denied`). Documented this prerequisite for Piyush.
+  5. 50 Concurrent Runs Architecture:
+     - Gateway enforces 1 active run per room and a global concurrency cap (`gateway.max-global-concurrent-runs`, default 16).
+     - Defined "50 concurrent runs": 50 simultaneously active executions across 50 distinct rooms (`room-1` .. `room-50`) through the real Gateway -> Worker -> Sandbox Runner stack.
+     - Plan test harness to benchmark 50 concurrent runs, verify latency and resource telemetry, test overload rejection at limit, and assert 0 stray processes or cgroups.
+  6. Learning Gate:
+     - Verified that all owner explain-back questions, regression exercises, and experiments in `docs/05_INTERVIEW_PREP.md` remain open for Piyush's completion.
+- Files: `PROGRESS.md`.
+- Linked: LOG-0186.
+- Tutor review: pending
