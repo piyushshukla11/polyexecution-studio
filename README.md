@@ -44,9 +44,9 @@ The project currently implements the full collaborative execution stack:
    - Real-time telemetry panel: renders truthful metrics reported by the Linux sandbox runner (`wallMs`, `cpuMs`, `peakMemoryKb`, `exitCode`, `signal`, `status`).
 
 5. **Reproducible Docker Compose & Load Benchmark (`docker-compose.yml`, `gateway/tests/`)**:
-   - Containerization: Multi-stage Dockerfiles for Gateway (Eclipse Temurin JRE 21), Worker (Ubuntu 24.04 with GCC, Python 3, OpenJDK 21, Kotlin 2.1.0, Node.js 20+, libseccomp, and native sandbox runner), and Client (Node 22 build + Nginx Alpine static server and reverse proxy).
+   - Containerization: Multi-stage Dockerfiles for Gateway (Eclipse Temurin JRE 21), Worker (Eclipse Temurin 21 Jammy / Ubuntu 22.04 base with GCC, Python 3, OpenJDK 21, Kotlin 2.1.0, Node.js 20+, libseccomp, and native sandbox runner), and Client (Node 22 build + Nginx Alpine static server and reverse proxy).
    - Network topology: Private internal bridge network (`pes-net`) with host ports strictly bound to loopback (`127.0.0.1:8080`, `127.0.0.1:50051`, `127.0.0.1:5173`).
-   - Verified 50 concurrent runs load benchmark: Automated harness (`gateway/tests/verify_load_test_50.sh`) opens 50 concurrent WebSocket sessions across 50 distinct isolated rooms, dispatches 50 simultaneous code executions (mixed Java, C, and Python) through the real Gateway -> Worker -> Sandbox Runner pipeline, and completes in 8,989 ms (100% success; Min: 3,352 ms, Median: 3,622 ms, p95: 6,242 ms, Max: 6,466 ms) with zero lingering cgroups and zero stray processes.
+   - Verified 50 concurrent runs load benchmark (Host-Launched): Automated harness (`gateway/tests/verify_load_test_50.sh`) runs directly on the host (outside of Compose, launching host-native Worker and Gateway processes to test host stability and the Gateway -> Worker -> Sandbox Runner pipeline). It opens 50 concurrent WebSocket sessions across 50 distinct isolated rooms, dispatches 50 simultaneous code executions (mixed Java, C, and Python), and completes in 9,344 ms (100% success; Min: 2,197 ms, Mean: 4,103.3 ms, Median: 3,241 ms, p90: 6,555 ms, p95: 6,585 ms, Max: 6,765 ms) with zero lingering cgroups and zero stray processes. Note: this benchmark validates host kernel concurrency and direct runner cleanup; it does not benchmark Compose container networking, reverse proxy routing, or Worker container-level cgroup/seccomp limits under 50 simultaneous runs.
    - Truthful overload protection: Verified honest `ROOM_RUN_IN_PROGRESS` rejection when room concurrency is exceeded.
 
 ---
@@ -84,7 +84,7 @@ In accordance with project governance rules, the following limitations reflect c
   - Non-networking event-loop syscalls (`epoll_create1`, `epoll_ctl`, `epoll_wait`, `eventfd2`) are permitted in the seccomp allowlist, while socket syscalls (`socket`, `connect`, `bind`) remain strictly denied with `EPERM`. `io_uring_setup`, `io_uring_enter`, and `io_uring_register` return `ENOSYS` to enable libuv graceful fallback to epoll.
   - Seccomp restricts `prctl` operations strictly to `PR_SET_NAME` and `PR_GET_NAME` (required for JVM thread naming); all unauthorized `prctl` operations are terminated immediately via `SIGSYS`.
 - **Aggregate memory admission control**: Gateway computes effective per-language peak memory (Java/Kotlin: 3072 MiB, Node: 5120 MiB, Python/C: 512 MiB) and tracks total memory against `gateway.max-aggregate-memory-mb` (default 8192 MiB; configured to 16384 MiB in Docker Compose). Excess runs are rejected truthfully with `GLOBAL_MEMORY_LIMIT_REACHED` until active runs complete or timeout (for example, under the Compose 16,384 MiB budget, 3 Node jobs are admitted at 15,360 MiB and a 4th is rejected).
-- **Docker Compose status**: Worker gRPC service binds to `0.0.0.0` inside container via `PES_WORKER_HOST=0.0.0.0` (defaulting to `127.0.0.1` locally), allowing the Gateway container to communicate across the bridge network while host port publication remains strictly loopback-bound (`127.0.0.1:50051`). Docker Compose configuration is verified via `docker compose config`. Live multi-container execution inside Docker Compose remains `UNVERIFIED` in environments where the host Docker daemon socket (`/var/run/docker.sock`) is not mounted.
+- **Docker Compose status**: Verified live under rootless Docker. The stack (`docker-compose.yml`) isolates services on internal bridge network `pes-net` with loopback-bound host ports (`5173`, `8080`, `50051`). The Worker operates with `cgroup: host` and a narrow read-write bind mount to a dedicated, managed leaf cgroup subtree (`pes-worker-sandbox`) under the host user slice with `cpu memory pids` controllers enabled, while all ancestor slices remain read-only. A custom worker seccomp profile (`worker/seccomp-profile.json`) derived from Docker's default allowlist unconditionally permits the 7 isolation syscalls required for nested sandboxing (`clone`, `clone3`, `mount`, `pivot_root`, `umount`, `umount2`, `unshare`) without granting `CAP_SYS_ADMIN` or using `seccomp=unconfined`. Live rootless execution verified 100% pass across all 11 WebSocket E2E smoke tests for C, Python, Java, Kotlin, and Node.js via the Client reverse proxy (`127.0.0.1:5173/ws`), with clean post-teardown resource verification (0 lingering containers, 0 leaked cgroups, 0 stray processes).
 - **Linux host requirements**: Production sandbox execution requires a Linux kernel with cgroups v2 delegation (`cpu`, `memory`, `pids`) and unprivileged user namespaces. If these prerequisites are absent, the runner strictly fails closed (`SANDBOX_ERROR`).
 - **Containment model**: Isolation is enforced via Linux kernel namespaces, cgroups, and seccomp-bpf. It does not use hypervisor-level virtual machines (such as Firecracker or gVisor).
 
@@ -165,27 +165,26 @@ bash worker/tests/verify_grpcurl.sh 50055 fake
 bash worker/tests/verify_grpcurl.sh 50055 production
 ```
 
-### 8. Phase 7 50-Concurrent-Runs Load Benchmark
-Run the automated multi-room concurrent execution benchmark:
+### 8. Phase 7 50-Concurrent-Runs Load Benchmark (Host-Launched)
+Run the automated multi-room concurrent execution benchmark directly on the host (outside Compose):
+
+> Note: `verify_load_test_50.sh` launches the built Worker and Gateway binaries as native host processes to validate host kernel concurrency and the Gateway -> Worker -> sandbox-runner path under 50 simultaneous runs. It does not stress Compose container networking, reverse proxy routing, or Worker container-level cgroup/seccomp limits.
 
 ```bash
-# Run 50 simultaneous executions across 50 rooms through Gateway -> Worker -> Sandbox Runner
+# Run 50 simultaneous executions across 50 rooms through Gateway -> Worker -> Sandbox Runner directly on host
 bash gateway/tests/verify_load_test_50.sh 8080 50051 50
 ```
 
 ### 9. Docker Compose Setup & Verification
 ```bash
-# Validate Compose configuration syntax
-docker compose config
+# Validate Compose syntax with the expected path for the dedicated cgroup subtree
+PES_DELEGATED_CGROUP="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/pes-worker-sandbox" docker compose config
 
 # Run automated end-to-end verification through Client reverse proxy port 5173
-# (Requires host Docker daemon access and cgroups v2)
+# The verifier checks existing controller delegation, manages a dedicated subtree,
+# then builds, runs the live smoke suite, and cleans up. It refuses unsupported hosts.
+# (Prefix with DOCKER_CONTEXT=rootless if using rootless Docker)
 bash scripts/verify_docker_compose.sh
-
-# Or run manually:
-docker compose up --build -d
-java gateway/tests/E2eWebSocketClient.java "ws://127.0.0.1:5173/ws"
-docker compose down
 ```
 
 ---

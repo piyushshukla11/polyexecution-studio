@@ -27,6 +27,14 @@ services:
     container_name: pes-worker
     environment:
       - PES_WORKER_HOST=0.0.0.0
+      - PES_DELEGATED_CGROUP=${PES_DELEGATED_CGROUP:?Run scripts/verify_docker_compose.sh to provision the delegated cgroup subtree}
+      - PES_JAVA_BIN=/opt/java/openjdk/bin/java
+      - PES_JAVAC_BIN=/opt/java/openjdk/bin/javac
+    cgroup: host
+    security_opt:
+      - seccomp:./worker/seccomp-profile.json
+    volumes:
+      - "${PES_DELEGATED_CGROUP:?Run scripts/verify_docker_compose.sh}:${PES_DELEGATED_CGROUP:?Run scripts/verify_docker_compose.sh}:rw"
     ports:
       # Strictly bind to loopback
       - "127.0.0.1:50051:50051"

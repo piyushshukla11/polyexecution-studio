@@ -761,9 +761,25 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                 close(status_pipe[1]);
                 child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
             }
-            if (phase2_rootfs_mount_proc() < 0) {
+            phase2_procfs_step_t failed_procfs_step;
+            if (phase2_rootfs_mount_proc(&failed_procfs_step) < 0) {
                 close(status_pipe[1]);
-                child_report_error_and_exit(err_pipe[1], SETUP_STAGE_PROCFS, errno);
+                setup_stage_t failure_stage = SETUP_STAGE_PROCFS;
+                switch (failed_procfs_step) {
+                    case PHASE2_PROCFS_STEP_MOUNT:
+                        failure_stage = SETUP_STAGE_PROCFS_MOUNT;
+                        break;
+                    case PHASE2_PROCFS_STEP_OLDROOT_UMOUNT:
+                        failure_stage = SETUP_STAGE_OLDROOT_UMOUNT;
+                        break;
+                    case PHASE2_PROCFS_STEP_OLDROOT_RMDIR:
+                        failure_stage = SETUP_STAGE_OLDROOT_RMDIR;
+                        break;
+                    case PHASE2_PROCFS_STEP_CHDIR_TMP:
+                        failure_stage = SETUP_STAGE_PROCFS_CHDIR;
+                        break;
+                }
+                child_report_error_and_exit(err_pipe[1], failure_stage, errno);
             }
 
             pid_t app_pid = fork();
@@ -783,7 +799,7 @@ int run_sandbox_with_config(const char *binary_path, const sandbox_config_t *cfg
                 if (phase2_set_parent_death_signal(1) < 0) {
                     child_report_error_and_exit(err_pipe[1], SETUP_STAGE_SUPERVISOR, errno);
                 }
-                if (phase2_target_drop_capabilities_and_identity() < 0) {
+                if (phase2_target_drop_capabilities_and_identity(supervisor_last_cap) < 0) {
                     child_report_error_and_exit(err_pipe[1], SETUP_STAGE_CAPABILITY_DROP, errno);
                 }
                 /* Credential changes clear PDEATHSIG; reinstall it with expected parent PID 1. */

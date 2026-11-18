@@ -15,6 +15,7 @@ echo "========================================================================"
 # Track stack state for truthful teardown
 STACK_STARTED=0
 TEARDOWN_DONE=0
+DELEGATED_CGROUP_CREATED=0
 
 # 1. Check Docker daemon access
 echo -e "\n[Stage 1] Verifying Docker daemon accessibility..."
@@ -25,6 +26,13 @@ if ! docker info >/dev/null 2>&1; then
     exit 1
 fi
 echo "Docker daemon is accessible."
+
+# Set the expected path before Compose config interpolation. The subtree is
+# created only after validating the host's existing delegation in Stage 4.
+HOST_UID=$(id -u)
+USER_CGROUP_SLICE="/sys/fs/cgroup/user.slice/user-${HOST_UID}.slice/user@${HOST_UID}.service"
+PES_DELEGATED_CGROUP="${USER_CGROUP_SLICE}/pes-worker-sandbox"
+export PES_DELEGATED_CGROUP
 
 # 2. Verify Compose configuration syntax
 echo -e "\n[Stage 2] Validating docker compose configuration..."
@@ -44,10 +52,145 @@ if [ "$PRE_EXISTING" -gt 0 ]; then
 fi
 echo "No pre-existing project containers found."
 
-# 4. Check baseline host resources before stack creation
-echo -e "\n[Stage 4] Recording baseline host resources..."
-PRE_CGROUPS=$(find /sys/fs/cgroup -maxdepth 2 -name "pes-*" 2>/dev/null | wc -l | tr -d " ")
-PRE_RUNNERS=$(pgrep -x "sandbox-runner" 2>/dev/null | wc -l | tr -d " ")
+count_sandbox_runners() {
+    local matches status
+    if matches=$(pgrep -x "sandbox-runner" 2>/dev/null); then
+        if [ -z "$matches" ]; then
+            echo 0
+        else
+            printf '%s\n' "$matches" | awk 'NF { count++ } END { print count + 0 }'
+        fi
+        return 0
+    else
+        status=$?
+        if [ "$status" -eq 1 ]; then
+            # pgrep status 1 means the expected no-matches case.
+            echo 0
+            return 0
+        fi
+        echo "ERROR: pgrep failed while inspecting sandbox-runner processes (status $status)." >&2
+        return "$status"
+    fi
+}
+
+# 4. Check baseline host resources before stack creation and prepare dedicated delegated subtree
+echo -e "\n[Stage 4] Recording baseline host resources and configuring delegated cgroups..."
+
+setup_delegated_cgroup_subtree() {
+    local controllers subtree controllers_missing=0
+    if [ ! -d "$USER_CGROUP_SLICE" ]; then
+        echo "ERROR: delegated user cgroup slice is unavailable: $USER_CGROUP_SLICE" >&2
+        return 1
+    fi
+    controllers=$(cat "$USER_CGROUP_SLICE/cgroup.controllers" 2>/dev/null) || {
+        echo "ERROR: cannot read delegated user cgroup controllers." >&2
+        return 1
+    }
+    subtree=$(cat "$USER_CGROUP_SLICE/cgroup.subtree_control" 2>/dev/null) || {
+        echo "ERROR: cannot read user cgroup subtree delegation." >&2
+        return 1
+    }
+    for ctrl in cpu memory pids; do
+        if ! grep -qw "$ctrl" <<<"$controllers" || ! grep -qw "$ctrl" <<<"$subtree"; then
+            echo "ERROR: required controller '$ctrl' is not already delegated to the user slice." >&2
+            controllers_missing=1
+        fi
+    done
+    if [ "$controllers_missing" -ne 0 ]; then
+        echo "Refusing to change the existing user-slice controller settings." >&2
+        return 1
+    fi
+    if [ -e "$PES_DELEGATED_CGROUP" ]; then
+        echo "ERROR: delegated cgroup path already exists; refusing to reuse or remove it: $PES_DELEGATED_CGROUP" >&2
+        return 1
+    fi
+    if ! mkdir "$PES_DELEGATED_CGROUP"; then
+        echo "ERROR: could not create the dedicated delegated cgroup." >&2
+        return 1
+    fi
+    DELEGATED_CGROUP_CREATED=1
+
+    # A newly created cgroup is empty. Enable only its child controllers; do
+    # not alter the existing user slice's subtree_control.
+    if [ -n "$(cat "$PES_DELEGATED_CGROUP/cgroup.procs" 2>/dev/null)" ] ||
+       ! printf '%s\n' '+cpu +memory +pids' > "$PES_DELEGATED_CGROUP/cgroup.subtree_control"; then
+        echo "ERROR: could not enable controllers on the empty dedicated subtree." >&2
+        cleanup_delegated_cgroup_subtree || true
+        return 1
+    fi
+    subtree=$(cat "$PES_DELEGATED_CGROUP/cgroup.subtree_control" 2>/dev/null) || {
+        echo "ERROR: cannot verify dedicated subtree controllers." >&2
+        cleanup_delegated_cgroup_subtree || true
+        return 1
+    }
+    for ctrl in cpu memory pids; do
+        if ! grep -qw "$ctrl" <<<"$subtree"; then
+            echo "ERROR: controller '$ctrl' did not become enabled in the dedicated subtree." >&2
+            cleanup_delegated_cgroup_subtree || true
+            return 1
+        fi
+    done
+    if ! mkdir "$PES_DELEGATED_CGROUP/worker"; then
+        echo "ERROR: could not create the Worker child cgroup." >&2
+        cleanup_delegated_cgroup_subtree || true
+        return 1
+    fi
+    echo "Configured dedicated delegated cgroup subtree: $PES_DELEGATED_CGROUP"
+}
+
+cleanup_delegated_cgroup_subtree() {
+    [ "$DELEGATED_CGROUP_CREATED" -eq 1 ] || return 0
+    local events populated=1 child failed=0
+    if [ ! -w "$PES_DELEGATED_CGROUP/cgroup.kill" ] ||
+       ! printf '1\n' > "$PES_DELEGATED_CGROUP/cgroup.kill"; then
+        echo "ERROR: cannot kill remaining processes in the dedicated cgroup subtree." >&2
+        failed=1
+    fi
+    events="$PES_DELEGATED_CGROUP/cgroup.events"
+    for _ in {1..50}; do
+        if [ -r "$events" ] && grep -q '^populated 0$' "$events"; then
+            populated=0
+            break
+        fi
+        sleep 0.1
+    done
+    if [ "$populated" -ne 0 ]; then
+        echo "ERROR: dedicated cgroup subtree remains populated after cleanup." >&2
+        failed=1
+    fi
+    while IFS= read -r child; do
+        [ -n "$child" ] || continue
+        if ! rmdir "$child"; then
+            echo "ERROR: refusing to recursively remove non-empty cgroup: $child" >&2
+            failed=1
+        fi
+    done < <(find "$PES_DELEGATED_CGROUP" -mindepth 1 -maxdepth 1 -type d -name 'pes-*' -print 2>/dev/null)
+    if [ -d "$PES_DELEGATED_CGROUP/worker" ] && ! rmdir "$PES_DELEGATED_CGROUP/worker"; then
+        echo "ERROR: Worker cgroup is not empty; leaving the subtree for inspection." >&2
+        failed=1
+    fi
+    if [ -n "$(cat "$PES_DELEGATED_CGROUP/cgroup.procs" 2>/dev/null || true)" ]; then
+        echo "ERROR: dedicated cgroup parent still contains processes." >&2
+        failed=1
+    fi
+    if [ "$failed" -eq 0 ] && rmdir "$PES_DELEGATED_CGROUP"; then
+        DELEGATED_CGROUP_CREATED=0
+        return 0
+    fi
+    echo "ERROR: dedicated cgroup cleanup did not complete; preserving it for inspection: $PES_DELEGATED_CGROUP" >&2
+    return 1
+}
+
+count_pes_cgroups() {
+    local paths=("/sys/fs/cgroup")
+    if [ -n "${PES_DELEGATED_CGROUP:-}" ] && [ -d "$PES_DELEGATED_CGROUP" ]; then
+        paths+=("$PES_DELEGATED_CGROUP")
+    fi
+    find "${paths[@]}" -maxdepth 2 -name "pes-*" 2>/dev/null | sort -u | awk 'NF { count++ } END { print count + 0 }'
+}
+
+PRE_CGROUPS=$(count_pes_cgroups)
+PRE_RUNNERS=$(count_sandbox_runners)
 PRE_CONTAINERS=0
 echo "Active pes-* cgroups before test: $PRE_CGROUPS"
 echo "Active sandbox-runner processes before test: $PRE_RUNNERS"
@@ -57,8 +200,8 @@ echo "Baseline project containers before test: $PRE_CONTAINERS"
 verify_post_teardown_cleanup() {
     local post_containers post_cgroups post_runners leak_detected=0
     post_containers=$(docker compose ps -q 2>/dev/null | wc -l | tr -d " ")
-    post_cgroups=$(find /sys/fs/cgroup -maxdepth 2 -name "pes-*" 2>/dev/null | wc -l | tr -d " ")
-    post_runners=$(pgrep -x "sandbox-runner" 2>/dev/null | wc -l | tr -d " ")
+    post_cgroups=$(count_pes_cgroups)
+    post_runners=$(count_sandbox_runners)
 
     echo -e "\n--- Post-Teardown Resource & Container Cleanup Check ---"
     echo "Remaining project containers: $post_containers (baseline: $PRE_CONTAINERS)"
@@ -104,8 +247,17 @@ cleanup_stack() {
             echo "Compose teardown command completed successfully."
         fi
 
+        if ! cleanup_delegated_cgroup_subtree; then
+            echo "FAIL: Dedicated delegated cgroup subtree cleanup failed!"
+            teardown_failed=1
+        fi
         if ! verify_post_teardown_cleanup; then
             echo "FAIL: Post-teardown resource leak or lingering container check failed!"
+            teardown_failed=1
+        fi
+    else
+        if ! cleanup_delegated_cgroup_subtree; then
+            echo "FAIL: Dedicated delegated cgroup subtree cleanup failed!"
             teardown_failed=1
         fi
     fi
@@ -137,6 +289,8 @@ on_exit() {
 trap on_int INT
 trap on_term TERM
 trap on_exit EXIT
+
+setup_delegated_cgroup_subtree
 
 # 5. Build and start services
 echo -e "\n[Stage 5] Building and launching Docker Compose stack in background..."

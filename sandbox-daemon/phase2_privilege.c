@@ -206,7 +206,7 @@ static int install_seccomp_allowlist(void) {
         SCMP_SYS(getpid), SCMP_SYS(getppid), SCMP_SYS(gettid), SCMP_SYS(getuid), SCMP_SYS(geteuid),
         SCMP_SYS(getgid), SCMP_SYS(getegid), SCMP_SYS(arch_prctl), SCMP_SYS(set_tid_address),
         SCMP_SYS(set_robust_list), SCMP_SYS(prlimit64), SCMP_SYS(rseq), SCMP_SYS(futex),
-        SCMP_SYS(clock_gettime), SCMP_SYS(clock_nanosleep), SCMP_SYS(nanosleep), SCMP_SYS(getrandom),
+        SCMP_SYS(clock_gettime), SCMP_SYS(clock_getres), SCMP_SYS(clock_nanosleep), SCMP_SYS(nanosleep), SCMP_SYS(getrandom),
         SCMP_SYS(getrusage), SCMP_SYS(getrlimit), SCMP_SYS(times), SCMP_SYS(gettimeofday),
         SCMP_SYS(statfs), SCMP_SYS(fstatfs), SCMP_SYS(umask),
         SCMP_SYS(uname), SCMP_SYS(sysinfo), SCMP_SYS(capget),
@@ -312,10 +312,11 @@ static int drop_base_privileges(int last_cap, bool proc_available) {
     return 0;
 }
 
-int phase2_target_drop_capabilities_and_identity(void) {
-    int last_cap;
-    if (phase2_privilege_read_cap_last_cap(&last_cap) < 0 ||
-        prune_capability_bounding_set(last_cap) < 0) return -1;
+int phase2_target_drop_capabilities_and_identity(int last_cap) {
+    /* AGENT-WROTE-TIER-A: last_cap is read by the caller before pivot_root while the host
+     * /proc/sys/kernel/cap_last_cap is still accessible; we cannot read it here because
+     * the sandbox procfs is mounted with subset=pid, which omits /proc/sys/. */
+    if (prune_capability_bounding_set(last_cap) < 0) return -1;
     if (clear_supplementary_groups() < 0) return -1;
     if (clear_ambient_capabilities() < 0) return -1;
     if (set_unprivileged_identity() < 0) return -1;

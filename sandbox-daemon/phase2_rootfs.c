@@ -8,9 +8,9 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <limits.h>
-#include <linux/mount.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <sys/mount.h>
 #include <sys/stat.h>
@@ -754,10 +754,19 @@ int phase2_rootfs_prepare(const char *host_binary, const char *root, char *targe
     return 0;
 }
 
-int phase2_rootfs_mount_proc(void) {
-    if (mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL) < 0) return -1;
+int phase2_rootfs_mount_proc(phase2_procfs_step_t *failed_step_out) {
+    if (!failed_step_out) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    *failed_step_out = PHASE2_PROCFS_STEP_MOUNT;
+    if (mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, "subset=pid") < 0) return -1;
+    *failed_step_out = PHASE2_PROCFS_STEP_OLDROOT_UMOUNT;
     if (umount2("/.oldroot", MNT_DETACH) < 0) return -1;
+    *failed_step_out = PHASE2_PROCFS_STEP_OLDROOT_RMDIR;
     if (rmdir("/.oldroot") < 0) return -1;
+    *failed_step_out = PHASE2_PROCFS_STEP_CHDIR_TMP;
     if (chdir("/tmp") < 0) return -1;
     return 0;
 }
