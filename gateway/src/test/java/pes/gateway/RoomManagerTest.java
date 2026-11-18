@@ -222,7 +222,7 @@ class RoomManagerTest {
 
         assertEquals(3072L, javaPeak);
         assertEquals(3072L, kotlinPeak);
-        assertEquals(4096L, nodePeak);
+        assertEquals(5120L, nodePeak);
         assertEquals(512L, pyPeak);
 
         // Room 1 acquires Java: 3072 MB reserved
@@ -243,7 +243,7 @@ class RoomManagerTest {
         assertEquals(6144L, roomManager.getGlobalAllocatedMemoryMb());
         assertEquals(2, roomManager.getGlobalActiveRuns());
 
-        // Room 3 also tries to acquire Node (needs 4096 MB; 6144 + 4096 = 10240 MB > 8192 MB)
+        // Room 3 also tries to acquire Node (needs 5120 MB; 6144 + 5120 = 11264 MB > 8192 MB)
         assertEquals(AcquireRunResult.GLOBAL_MEMORY_LIMIT_REACHED,
             roomManager.tryAcquireRun("room-jvm3", "s3", "req-n1", nodePeak));
 
@@ -253,21 +253,75 @@ class RoomManagerTest {
         assertEquals(6656L, roomManager.getGlobalAllocatedMemoryMb());
         assertEquals(3, roomManager.getGlobalActiveRuns());
 
-        // Release Room 1 (Java run completes or times out)
+        // Release Room 1 (Java run completes or times out) -> 3584 MB allocated
         assertTrue(roomManager.releaseRun("room-jvm1", "req-j1"));
         assertEquals(3584L, roomManager.getGlobalAllocatedMemoryMb());
         assertEquals(2, roomManager.getGlobalActiveRuns());
 
-        // Room 3 can now acquire Node (3584 + 4096 = 7680 MB <= 8192 MB)
+        // Release Room 2 (Kotlin run completes) -> 512 MB allocated
+        assertTrue(roomManager.releaseRun("room-jvm2", "req-k1"));
+        assertEquals(512L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(1, roomManager.getGlobalActiveRuns());
+
+        // Room 3 can now acquire Node (512 + 5120 = 5632 MB <= 8192 MB)
         assertEquals(AcquireRunResult.ACQUIRED,
             roomManager.tryAcquireRun("room-jvm3", "s3", "req-n1", nodePeak));
-        assertEquals(7680L, roomManager.getGlobalAllocatedMemoryMb());
-        assertEquals(3, roomManager.getGlobalActiveRuns());
+        assertEquals(5632L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(2, roomManager.getGlobalActiveRuns());
 
         // Clean up remaining runs; budget must be strictly 0
-        assertTrue(roomManager.releaseRun("room-jvm2", "req-k1"));
         assertTrue(roomManager.releaseRun("room-node", "req-p1"));
         assertTrue(roomManager.releaseRun("room-jvm3", "req-n1"));
+        assertEquals(0L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(0, roomManager.getGlobalActiveRuns());
+    }
+
+    @Test
+    @DisplayName("Verify Compose budget (16 GiB) admits three Node jobs and rejects fourth")
+    void testNodeComposeBudgetRejectsFourthJob() {
+        properties.setMaxGlobalConcurrentRuns(10);
+        properties.setMaxAggregateMemoryMb(16384L);
+
+        roomManager.joinRoom("node-room-1", "s1");
+        roomManager.joinRoom("node-room-2", "s2");
+        roomManager.joinRoom("node-room-3", "s3");
+        roomManager.joinRoom("node-room-4", "s4");
+
+        long nodePeak = GatewayWebSocketHandler.computeEffectiveMemoryMb("node", 128L);
+        assertEquals(5120L, nodePeak);
+
+        // Job 1: 5120 MiB -> 5120 MiB allocated
+        assertEquals(AcquireRunResult.ACQUIRED, roomManager.tryAcquireRun("node-room-1", "s1", "req-1", nodePeak));
+        assertEquals(5120L, roomManager.getGlobalAllocatedMemoryMb());
+
+        // Job 2: 5120 MiB -> 10240 MiB allocated
+        assertEquals(AcquireRunResult.ACQUIRED, roomManager.tryAcquireRun("node-room-2", "s2", "req-2", nodePeak));
+        assertEquals(10240L, roomManager.getGlobalAllocatedMemoryMb());
+
+        // Job 3: 5120 MiB -> 15360 MiB allocated
+        assertEquals(AcquireRunResult.ACQUIRED, roomManager.tryAcquireRun("node-room-3", "s3", "req-3", nodePeak));
+        assertEquals(15360L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(3, roomManager.getGlobalActiveRuns());
+
+        // Job 4: 15360 + 5120 = 20480 > 16384 -> REJECTED
+        assertEquals(AcquireRunResult.GLOBAL_MEMORY_LIMIT_REACHED,
+            roomManager.tryAcquireRun("node-room-4", "s4", "req-4", nodePeak));
+        assertEquals(15360L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(3, roomManager.getGlobalActiveRuns());
+
+        // Release job 1 -> 10240 MiB allocated
+        assertTrue(roomManager.releaseRun("node-room-1", "req-1"));
+        assertEquals(10240L, roomManager.getGlobalAllocatedMemoryMb());
+
+        // Now Job 4 can acquire -> 15360 MiB allocated
+        assertEquals(AcquireRunResult.ACQUIRED, roomManager.tryAcquireRun("node-room-4", "s4", "req-4", nodePeak));
+        assertEquals(15360L, roomManager.getGlobalAllocatedMemoryMb());
+        assertEquals(3, roomManager.getGlobalActiveRuns());
+
+        // Clean up
+        assertTrue(roomManager.releaseRun("node-room-2", "req-2"));
+        assertTrue(roomManager.releaseRun("node-room-3", "req-3"));
+        assertTrue(roomManager.releaseRun("node-room-4", "req-4"));
         assertEquals(0L, roomManager.getGlobalAllocatedMemoryMb());
         assertEquals(0, roomManager.getGlobalActiveRuns());
     }

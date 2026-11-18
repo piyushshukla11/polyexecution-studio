@@ -161,23 +161,24 @@ public class E2eWebSocketClient {
             System.exit(1);
         }
 
-        // 6. Submit Java run
-        System.out.println("\n[6] Submitting valid Java execution...");
+        // 6. Submit Java run (nested Helper and sibling classes)
+        System.out.println("\n[6] Submitting valid Java execution (nested helper and sibling classes)...");
         String javaRun = """
             {
               "type": "run",
               "roomId": "e2e-room",
               "requestId": "e2e-java-001",
               "language": "java",
-              "sourceCode": "public class Main { public static void main(String[] args) { System.out.println(\\\"Hello from PES E2E Java\\\"); } }\\n"
+              "sourceCode": "public class Main { static class Helper { static String msg() { return \\\"Hello from Nested Helper\\\"; } } public static void main(String[] args) { System.out.println(Helper.msg() + \\\" and \\\" + new Sibling().val()); } }\\nclass Sibling { String val() { return \\\"Sibling Helper\\\"; } }\\n"
             }
             """;
         ws.sendText(javaRun, true);
         String javaAccepted = messages.poll(5, TimeUnit.SECONDS);
         System.out.println("Received: " + javaAccepted);
         RunExecutionResult javaResult = pollUntilCompleted(messages, 20);
-        if (javaResult.completedEvent() == null || !javaResult.completedEvent().contains("\"OK\"") || !javaResult.completedEvent().contains("Hello from PES E2E Java")) {
-            System.err.println("FAIL: Expected OK status and stdout for Java");
+        if (javaResult.completedEvent() == null || !javaResult.completedEvent().contains("\"OK\"") ||
+            !javaResult.completedEvent().contains("Hello from Nested Helper and Sibling Helper")) {
+            System.err.println("FAIL: Expected OK status and stdout with nested helper output for Java: " + javaResult.completedEvent());
             System.exit(1);
         }
 

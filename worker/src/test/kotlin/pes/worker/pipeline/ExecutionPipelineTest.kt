@@ -207,9 +207,53 @@ class ExecutionPipelineTest {
         assertEquals("hello java", response.stdout)
         assertEquals(2, fake.calls.size)
         assertEquals("Main.java", fake.calls[0].workspace?.sourceName)
-        assertEquals("Main.class", fake.calls[0].workspace?.artifactName)
-        assertEquals("Main.class", fake.calls[1].workspace?.sourceName)
+        assertEquals("target.jar", fake.calls[0].workspace?.artifactName)
+        assertEquals("target.jar", fake.calls[1].workspace?.sourceName)
         assertNull(fake.calls[1].workspace?.artifactName)
+        assertTrue(fake.calls[1].args.contains("/workspace/target.jar"))
+        assertTrue(fake.calls[1].args.contains("Main"))
+        assertEquals(listOf(ExecutionStage.STAGE_COMPILING, ExecutionStage.STAGE_RUNNING), stages)
+        assertWorkspaceRemoved(fake.calls.first().workspace)
+    }
+
+    @Test
+    fun javaNestedAndHelperClassesExecutionHandsOffTargetJar() = runBlocking {
+        val compileOk = RunnerResult(
+            jobId = "java-nested-compile", status = ExecutionStatus.OK, exitCode = 0, signal = 0,
+            wallMs = 50, cpuMs = 40, peakMemoryKb = 42000, stdout = "", stderr = ""
+        )
+        val runOk = RunnerResult(
+            jobId = "java-nested", status = ExecutionStatus.OK, exitCode = 0, signal = 0,
+            wallMs = 110, cpuMs = 40, peakMemoryKb = 35000, stdout = "nested helper output\n42\n", stderr = ""
+        )
+        val fake = FakeRunnerClient(listOf(compileOk, runOk))
+        val req = ExecuteRequest.newBuilder()
+            .setJobId("java-nested")
+            .setLanguage(Language.LANGUAGE_JAVA)
+            .setSourceCode("""
+                public class Main {
+                    static class Helper {
+                        static String msg() { return "nested helper output"; }
+                    }
+                    public static void main(String[] args) {
+                        System.out.println(Helper.msg());
+                        System.out.println(new Sibling().val());
+                    }
+                }
+                class Sibling { int val() { return 42; } }
+            """.trimIndent())
+            .build()
+        val stages = mutableListOf<ExecutionStage>()
+        val response = ExecutionPipeline(fake).execute(req) { stages.add(it) }
+        assertEquals(ExecutionStatus.OK, response.status)
+        assertEquals("nested helper output\n42\n", response.stdout)
+        assertEquals(2, fake.calls.size)
+        assertEquals("Main.java", fake.calls[0].workspace?.sourceName)
+        assertEquals("target.jar", fake.calls[0].workspace?.artifactName)
+        assertEquals("target.jar", fake.calls[1].workspace?.sourceName)
+        assertNull(fake.calls[1].workspace?.artifactName)
+        assertTrue(fake.calls[1].args.contains("/workspace/target.jar"))
+        assertTrue(fake.calls[1].args.contains("Main"))
         assertEquals(listOf(ExecutionStage.STAGE_COMPILING, ExecutionStage.STAGE_RUNNING), stages)
         assertWorkspaceRemoved(fake.calls.first().workspace)
     }

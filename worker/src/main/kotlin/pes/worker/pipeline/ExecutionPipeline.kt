@@ -249,7 +249,7 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
         val publicClassMatch = Regex("public\\s+class\\s+([A-Za-z0-9_]+)").find(request.sourceCode)
         val className = publicClassMatch?.let { it.groupValues[1] } ?: "Main"
         val sourceLeaf = "$className.java"
-        val classLeaf = "$className.class"
+        val classArtifactName = "target.jar"
         val sourceFile = workspace.resolve(sourceLeaf)
         writePrivateSource(sourceFile, request.sourceCode)
 
@@ -265,7 +265,7 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
             binaryPath = javacBin,
             args = listOf("-J-XX:CompressedClassSpaceSize=64m", "-J-XX:MaxMetaspaceSize=64m", "-d", "/workspace", "/workspace/$sourceLeaf"),
             limits = compileLimits,
-            workspace = WorkspaceHandoff(workspace, sourceLeaf, classLeaf)
+            workspace = WorkspaceHandoff(workspace, sourceLeaf, classArtifactName)
         )
 
         if (compileResult.status == ExecutionStatus.SANDBOX_ERROR) return buildResponse(request.jobId, compileResult)
@@ -277,8 +277,8 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
             return compileFailureResponse(request.jobId, compileResult, "java compilation failed")
         }
 
-        val classFile = workspace.resolve(classLeaf)
-        if (!isBoundedRegularArtifact(classFile)) {
+        val jarFile = workspace.resolve(classArtifactName)
+        if (!isBoundedRegularArtifact(jarFile)) {
             return validationFailure(request, "java compiler did not produce a bounded artifact")
         }
         Files.deleteIfExists(sourceFile)
@@ -290,10 +290,10 @@ class ExecutionPipeline(val runnerClient: RunnerClient) {
         val runResult = runnerClient.run(
             jobId = request.jobId,
             binaryPath = javaBin,
-            args = listOf("-Xmx64m", "-Xms16m", "-XX:CompressedClassSpaceSize=64m", "-XX:MaxMetaspaceSize=64m", "-cp", "/workspace", className),
+            args = listOf("-Xmx64m", "-Xms16m", "-XX:CompressedClassSpaceSize=64m", "-XX:MaxMetaspaceSize=64m", "-cp", "/workspace/$classArtifactName", className),
             limits = javaLimits,
             stdin = request.stdin,
-            workspace = WorkspaceHandoff(workspace, classLeaf)
+            workspace = WorkspaceHandoff(workspace, classArtifactName)
         )
         return buildResponse(request.jobId, runResult)
     }
