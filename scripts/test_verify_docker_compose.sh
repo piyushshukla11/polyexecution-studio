@@ -9,6 +9,11 @@ set -euo pipefail
 #   4. Test error exit code preservation (e.g. 42)
 #   5. Teardown failure detection (exit 1)
 #   6. Resource leak detection post-teardown (exit 1)
+#   7. Zero sandbox-runner processes do not abort baseline recording
+#   8. Delegated cgroup setup fails safely and Worker placement is mandatory
+#   9. Worker seccomp profile enables sandbox operations without unconfined or SYS_ADMIN
+#  10. Worker subordinate ID prerequisites are narrow and image-local
+#  11. Procfs setup errors identify the exact failed operation
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEST_DIR="$(mktemp -d /tmp/pes-compose-test-XXXXXX)"
@@ -307,9 +312,228 @@ else
     pass "Lingering post-teardown container detected and caused exit 1"
 fi
 
+# ----------------------------------------------------------------------
+# Test 7: pgrep's normal no-match status is counted as zero before safe refusal
+# ----------------------------------------------------------------------
+echo "Test 7: Zero sandbox-runner processes are recorded before cgroup preflight refusal..."
+TEST7_BIN="$TEST_DIR/test7-bin"
+TEST7_LOG="$TEST_DIR/test7-docker.log"
+mkdir -p "$TEST7_BIN"
+
+cat <<'EOF' > "$TEST7_BIN/docker"
+#!/usr/bin/env bash
+echo "docker $*" >> "$MOCK_DOCKER_LOG"
+if [ "$1" = "info" ]; then
+    exit 0
+elif [ "$1" = "compose" ] && [ "$2" = "ps" ]; then
+    exit 0
+elif [ "$1" = "compose" ] && [ "$2" = "config" ]; then
+    exit 0
+elif [ "$1" = "compose" ] && [ "$2" = "up" ]; then
+    exit 0
+elif [ "$1" = "compose" ] && [ "$2" = "down" ]; then
+    exit 0
+fi
+exit 0
+EOF
+cat <<'EOF' > "$TEST7_BIN/pgrep"
+#!/usr/bin/env bash
+exit 1
+EOF
+cat <<'EOF' > "$TEST7_BIN/find"
+#!/usr/bin/env bash
+exit 0
+EOF
+cat <<'EOF' > "$TEST7_BIN/curl"
+#!/usr/bin/env bash
+echo '{"status":"UP"}'
+EOF
+cat <<'EOF' > "$TEST7_BIN/java"
+#!/usr/bin/env bash
+exit 0
+EOF
+cat <<'EOF' > "$TEST7_BIN/sleep"
+#!/usr/bin/env bash
+exit 0
+EOF
+cat <<'EOF' > "$TEST7_BIN/id"
+#!/usr/bin/env bash
+if [ "$1" = "-u" ]; then
+    echo 99999
+    exit 0
+fi
+exec /usr/bin/id "$@"
+EOF
+chmod +x "$TEST7_BIN"/*
+
+set +e
+TEST7_OUT=$(MOCK_DOCKER_LOG="$TEST7_LOG" PATH="$TEST7_BIN:$PATH" \
+    bash "$REPO_ROOT/scripts/verify_docker_compose.sh" 2>&1)
+TEST7_EXIT=$?
+set -e
+
+if [ "$TEST7_EXIT" -eq 0 ]; then
+    fail "Test 7" "Expected safe refusal when the delegated cgroup parent is absent"
+elif ! echo "$TEST7_OUT" | grep -q "Active sandbox-runner processes before test: 0"; then
+    fail "Test 7" "Expected zero-runner baseline in output"
+elif ! echo "$TEST7_OUT" | grep -q "delegated user cgroup slice is unavailable"; then
+    fail "Test 7" "Expected refusal before attempting cgroup setup without a delegated host slice"
+elif grep -q "docker compose up" "$TEST7_LOG"; then
+    fail "Test 7" "Compose startup must not run when cgroup prerequisites are absent"
+else
+    pass "No matching runners are counted as zero; missing cgroup delegation refuses before Compose startup"
+fi
+
+# ----------------------------------------------------------------------
+# Test 8: Production cgroup delegation safety guards (static checks only)
+# ----------------------------------------------------------------------
+# These inspect the actual production files. They do not simulate cgroupfs or
+# prove kernel enforcement; only the real Compose run can establish that.
+set +e
+TEST8_OUT=$(env -u PES_DELEGATED_CGROUP bash "$REPO_ROOT/worker/entrypoint.sh" 2>&1)
+TEST8_EXIT=$?
+set -e
+
+if [ "$TEST8_EXIT" -ne 70 ] || ! echo "$TEST8_OUT" | grep -q 'PES_DELEGATED_CGROUP is required'; then
+    fail "Test 8" "Worker entrypoint must fail closed without the delegated cgroup path (exit=$TEST8_EXIT, output=$TEST8_OUT)"
+elif ! grep -q 'Refusing to change the existing user-slice controller settings' "$REPO_ROOT/scripts/verify_docker_compose.sh"; then
+    fail "Test 8" "Verifier must refuse rather than modify ancestor controller delegation"
+elif ! grep -Fq 'if [ -e "$PES_DELEGATED_CGROUP" ]; then' "$REPO_ROOT/scripts/verify_docker_compose.sh"; then
+    fail "Test 8" "Verifier must refuse a pre-existing delegated cgroup path"
+elif ! grep -Fq "printf '1\\n' > \"\$PES_DELEGATED_CGROUP/cgroup.kill\"" "$REPO_ROOT/scripts/verify_docker_compose.sh"; then
+    fail "Test 8" "Verifier must kill only processes in its dedicated subtree before cleanup"
+elif grep -Fq 'rm -rf "$PES_DELEGATED_CGROUP"' "$REPO_ROOT/scripts/verify_docker_compose.sh"; then
+    fail "Test 8" "Verifier must not recursively remove a cgroup hierarchy"
+elif ! grep -q 'cgroup placement mismatch' "$REPO_ROOT/worker/entrypoint.sh"; then
+    fail "Test 8" "Worker entrypoint must verify its actual cgroup placement"
+elif grep -Fq '|| true' "$REPO_ROOT/worker/entrypoint.sh"; then
+    fail "Test 8" "Worker entrypoint must not ignore cgroup placement failures"
+elif ! grep -Fq 'PES_DELEGATED_CGROUP:?' "$REPO_ROOT/docker-compose.yml"; then
+    fail "Test 8" "Compose must require an explicitly provisioned delegated cgroup path"
+else
+    pass "Worker fails closed without delegation; production safety guards are present (static check, not live isolation proof)"
+fi
+
+# ----------------------------------------------------------------------
+# Test 9: Worker seccomp profile safety and sandbox syscall coverage
+# ----------------------------------------------------------------------
+echo "Test 9: Verifying worker seccomp profile structure and Compose wiring..."
+SECCOMP_CHECK=$(python3 -c '
+import json, sys
+
+profile_path = "'"$REPO_ROOT"'/worker/seccomp-profile.json"
+try:
+    with open(profile_path) as f:
+        data = json.load(f)
+except Exception as e:
+    print("ERROR: cannot read profile:", e)
+    sys.exit(1)
+
+if data.get("defaultAction") != "SCMP_ACT_ERRNO":
+    print("ERROR: defaultAction is not SCMP_ACT_ERRNO")
+    sys.exit(2)
+
+required = {"clone", "clone3", "mount", "pivot_root", "umount", "umount2", "unshare"}
+forbidden_unconditional = {"bpf", "setns", "kexec_load", "reboot", "init_module", "finit_module"}
+
+allowed_unconditional = set()
+for rule in data.get("syscalls", []):
+    if rule.get("action") == "SCMP_ACT_ALLOW":
+        inc = rule.get("includes") or {}
+        exc = rule.get("excludes") or {}
+        args = rule.get("args") or []
+        if not inc.get("caps") and not args:
+            allowed_unconditional.update(rule.get("names", []))
+
+missing = required - allowed_unconditional
+if missing:
+    print("ERROR: required sandbox syscalls not allowed unconditionally:", missing)
+    sys.exit(3)
+
+leaked = forbidden_unconditional.intersection(allowed_unconditional)
+if leaked:
+    print("ERROR: sensitive syscalls allowed unconditionally:", leaked)
+    sys.exit(4)
+
+print("OK")
+' 2>&1)
+SECCOMP_STATUS=$?
+
+if [ "$SECCOMP_STATUS" -ne 0 ] || [ "$SECCOMP_CHECK" != "OK" ]; then
+    fail "Test 9" "Worker seccomp profile validation failed: $SECCOMP_CHECK"
+elif ! grep -q 'seccomp:./worker/seccomp-profile.json' "$REPO_ROOT/docker-compose.yml"; then
+    fail "Test 9" "docker-compose.yml must configure worker with seccomp profile"
+elif grep -qi 'unconfined' "$REPO_ROOT/docker-compose.yml"; then
+    fail "Test 9" "docker-compose.yml must not use seccomp=unconfined"
+elif grep -qi 'privileged:\s*true' "$REPO_ROOT/docker-compose.yml"; then
+    fail "Test 9" "docker-compose.yml must not use privileged mode"
+elif grep -qi 'SYS_ADMIN' "$REPO_ROOT/docker-compose.yml"; then
+    fail "Test 9" "docker-compose.yml must not grant CAP_SYS_ADMIN"
+else
+    pass "Worker seccomp profile safely permits sandbox syscalls without unconfined or SYS_ADMIN"
+fi
+
+# ----------------------------------------------------------------------
+# Test 10: Worker subordinate ID mapping prerequisites (static checks only)
+# ----------------------------------------------------------------------
+echo "Test 10: Verifying Worker UID/GID mapping prerequisites..."
+if ! grep -Fq '    uidmap \' "$REPO_ROOT/worker/Dockerfile"; then
+    fail "Test 10" "Worker runtime image must install uidmap for newuidmap/newgidmap"
+elif ! grep -Fq "printf 'root:1:1\\n' > /etc/subuid" "$REPO_ROOT/worker/Dockerfile"; then
+    fail "Test 10" "Worker image must grant root only subordinate UID 1"
+elif ! grep -Fq "printf 'root:1:1\\n' > /etc/subgid" "$REPO_ROOT/worker/Dockerfile"; then
+    fail "Test 10" "Worker image must grant root only subordinate GID 1"
+else
+    pass "Worker image provisions uidmap and one container-local subordinate UID/GID (static check, not kernel mapping proof)"
+fi
+
+# ----------------------------------------------------------------------
+# Test 11: Procfs/root cleanup failures are reported as distinct stages
+# ----------------------------------------------------------------------
+echo "Test 11: Verifying precise procfs setup failure reporting..."
+PROCFS_CHECK=$(python3 -c '
+from pathlib import Path
+import sys
+
+root = Path("'"$REPO_ROOT"'")
+header = (root / "sandbox-daemon/sandbox.h").read_text()
+impl = (root / "sandbox-daemon/phase2_rootfs.c").read_text()
+runner = (root / "sandbox-daemon/sandbox.c").read_text()
+stages = [
+    "SETUP_STAGE_PROCFS_MOUNT",
+    "SETUP_STAGE_OLDROOT_UMOUNT",
+    "SETUP_STAGE_OLDROOT_RMDIR",
+    "SETUP_STAGE_PROCFS_CHDIR",
+]
+steps = [
+    "PHASE2_PROCFS_STEP_MOUNT",
+    "PHASE2_PROCFS_STEP_OLDROOT_UMOUNT",
+    "PHASE2_PROCFS_STEP_OLDROOT_RMDIR",
+    "PHASE2_PROCFS_STEP_CHDIR_TMP",
+]
+if not all(name in header for name in stages):
+    sys.exit("missing distinct procfs setup stage")
+if not all(name in impl for name in steps):
+    sys.exit("rootfs helper does not report all operation steps")
+mount_line = next((line for line in impl.splitlines() if "mount(\"proc\", \"/proc\", \"proc\"" in line), "")
+if not mount_line or "MS_NOSUID | MS_NODEV | MS_NOEXEC" not in mount_line or "\"subset=pid\"" not in mount_line:
+    sys.exit("procfs mount must retain nosuid/nodev/noexec and use subset=pid")
+if not all(name in runner for name in steps + stages):
+    sys.exit("runner does not map every procfs operation to a distinct stage")
+if header.index("SETUP_STAGE_PROCFS_MOUNT") < header.index("SETUP_STAGE_WORKSPACE"):
+    sys.exit("new stage values must be appended after existing values")
+print("OK")
+' 2>&1)
+PROCFS_STATUS=$?
+if [ "$PROCFS_STATUS" -ne 0 ] || [ "$PROCFS_CHECK" != "OK" ]; then
+    fail "Test 11" "Procfs failure-stage validation failed: $PROCFS_CHECK"
+else
+    pass "Procfs mount retains restrictive flags, uses subset=pid, and setup failures map to distinct stages (static check)"
+fi
+
 echo "========================================================================"
 if [ "$FAILED_TESTS" -eq 0 ]; then
-    echo "SUCCESS: All 6 verify_docker_compose.sh unit tests PASSED!"
+    echo "SUCCESS: All 11 verifier regression checks PASSED (mock/static checks; not live isolation proof)."
     exit 0
 else
     echo "FAILURE: $FAILED_TESTS test(s) failed."

@@ -59,11 +59,11 @@ static int test_handoff(void) {
     CHECK(close(copied) == 0, "close copied source");
 
     CHECK(symlinkat("/etc/passwd", rootfd, "target") == 0, "create artifact symlink fixture");
-    CHECK(phase2_rootfs_copy_artifact(rootfd, artifactfd, geteuid(), 1024) < 0,
+    CHECK(phase2_rootfs_copy_artifact(rootfd, "target", artifactfd, geteuid(), 1024) < 0,
           "reject artifact symlink instead of following it");
     CHECK(unlinkat(rootfd, "target", 0) == 0, "remove artifact symlink fixture");
     CHECK(write_file_at(rootfd, "target", "compiled-artifact", 0700) == 0, "create sandbox artifact fixture");
-    CHECK(phase2_rootfs_copy_artifact(rootfd, artifactfd, geteuid(), 1024) == 0,
+    CHECK(phase2_rootfs_copy_artifact(rootfd, "target", artifactfd, geteuid(), 1024) == 0,
           "copy bounded artifact back through pre-opened fd");
     int returned = openat(hostfd, "target", O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
     CHECK(returned >= 0, "artifact exists in worker workspace");
