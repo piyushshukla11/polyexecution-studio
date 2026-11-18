@@ -3721,3 +3721,35 @@
 - Files: `PROGRESS.md`, `scripts/verify_docker_compose.sh`.
 - Linked: LOG-0206.
 - Tutor review: pending
+
+
+## [LOG-0208] 2026-11-17 11:46 IST | PLAN | actor: agent
+- Goal: Remediate Phase 7 tutor review findings: refuse execution if pre-existing project containers exist to prevent unintended destruction, implement signal-specific exit statuses (SIGINT 130, SIGTERM 143), and provide checked-in automated verification tests.
+- Steps:
+  1. In `scripts/verify_docker_compose.sh`: inspect all project containers (running and stopped) via `docker compose ps -aq` before stack launch. If any pre-existing containers exist, print diagnostic listing and abort with exit code 1 without invoking `docker compose down`.
+  2. In `scripts/verify_docker_compose.sh`: implement dedicated signal trap handlers for `SIGINT` (exits 130) and `SIGTERM` (exits 143), maintaining non-recursive `cleanup_stack` and preserving original non-zero error exit codes on command failures.
+  3. Create `scripts/test_verify_docker_compose.sh`: automated test suite verifying pre-existing container rejection, SIGINT (130) exit, SIGTERM (143) exit, test failure exit preservation (42), and teardown failure reporting.
+- Files: `PROGRESS.md`, `scripts/verify_docker_compose.sh`, `scripts/test_verify_docker_compose.sh`.
+- Linked: LOG-0207.
+- Tutor review: pending
+
+
+## [LOG-0209] 2026-11-17 11:48 IST | DONE | actor: agent
+- Goal: Remediate Phase 7 tutor review findings: refuse execution if pre-existing project containers exist to prevent unintended destruction, implement signal-specific exit statuses (SIGINT 130, SIGTERM 143), and provide checked-in automated verification tests.
+- Outcome:
+  1. Pre-Existing Container Refusal & Protection (Finding 1):
+     - In `scripts/verify_docker_compose.sh`: added pre-flight inspection of `docker compose ps -aq` prior to setting `STACK_STARTED=1`.
+     - If any running or stopped containers exist for the project, the script prints container diagnostics, refuses to run with exit code 1, and does not invoke `docker compose down`, guaranteeing pre-existing containers are never stopped or destroyed.
+  2. Signal-Specific Traps & Exit Code Preservation (Finding 2):
+     - Replaced shared trap with dedicated `on_int` (exits 130), `on_term` (exits 143), and `on_exit` handlers.
+     - Protected cleanup with `TEARDOWN_DONE` flag preventing recursive teardown during signal propagation.
+     - Strictly preserved non-zero test failure exit codes across all error branches.
+  3. Checked-In Automated Test Suite:
+     - Created `scripts/test_verify_docker_compose.sh` covering 6 automated unit/integration test cases: pre-existing container refusal without `down`, SIGINT 130 exit, SIGTERM 143 exit, command error exit 42 preservation, teardown failure detection (exit 1), and post-teardown resource leak assertion (exit 1).
+- Verification:
+  - `bash scripts/test_verify_docker_compose.sh`: 6/6 tests PASSED
+  - `bash scripts/verify_docker_compose.sh`: correctly reported absent `/var/run/docker.sock` and exited code 1
+  - `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check`: passed cleanly
+- Files: `PROGRESS.md`, `scripts/verify_docker_compose.sh`, `scripts/test_verify_docker_compose.sh`.
+- Linked: LOG-0208.
+- Tutor review: pending

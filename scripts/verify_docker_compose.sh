@@ -31,14 +31,27 @@ echo -e "\n[Stage 2] Validating docker compose configuration..."
 docker compose config
 echo "Compose configuration syntax is valid."
 
-# 3. Check baseline host resources before stack creation
-echo -e "\n[Stage 3] Recording baseline host resources..."
+# 3. Inspect project container state (refuse execution if pre-existing containers exist)
+echo -e "\n[Stage 3] Inspecting project container state..."
+PRE_EXISTING=$(docker compose ps -aq 2>/dev/null | wc -l | tr -d " ")
+if [ "$PRE_EXISTING" -gt 0 ]; then
+    echo "ERROR: Pre-existing containers detected for this Docker Compose project ($PRE_EXISTING container(s) found)."
+    echo "Detail: Running or stopped project containers are already present:"
+    docker compose ps -a
+    echo "Refusing to proceed to prevent unintended termination or deletion of pre-existing containers."
+    echo "Please stop/remove existing containers manually before running this verification script."
+    exit 1
+fi
+echo "No pre-existing project containers found."
+
+# 4. Check baseline host resources before stack creation
+echo -e "\n[Stage 4] Recording baseline host resources..."
 PRE_CGROUPS=$(find /sys/fs/cgroup -maxdepth 2 -name "pes-*" 2>/dev/null | wc -l | tr -d " ")
 PRE_RUNNERS=$(pgrep -x "sandbox-runner" 2>/dev/null | wc -l | tr -d " ")
-PRE_CONTAINERS=$(docker compose ps -q 2>/dev/null | wc -l | tr -d " ")
+PRE_CONTAINERS=0
 echo "Active pes-* cgroups before test: $PRE_CGROUPS"
 echo "Active sandbox-runner processes before test: $PRE_RUNNERS"
-echo "Existing project containers before test: $PRE_CONTAINERS"
+echo "Baseline project containers before test: $PRE_CONTAINERS"
 
 # Verification function to run after teardown
 verify_post_teardown_cleanup() {
@@ -104,22 +117,37 @@ cleanup_stack() {
     fi
 }
 
-cleanup_on_exit() {
+on_int() {
+    echo -e "\n[SIGINT] Interrupted by user (Ctrl+C). Initiating cleanup..."
+    cleanup_stack 130
+    exit 130
+}
+
+on_term() {
+    echo -e "\n[SIGTERM] Terminated by signal. Initiating cleanup..."
+    cleanup_stack 143
+    exit 143
+}
+
+on_exit() {
     local orig_exit=$?
     cleanup_stack "$orig_exit"
 }
-trap cleanup_on_exit EXIT INT TERM
 
-# 4. Build and start services
-echo -e "\n[Stage 4] Building and launching Docker Compose stack in background..."
+trap on_int INT
+trap on_term TERM
+trap on_exit EXIT
+
+# 5. Build and start services
+echo -e "\n[Stage 5] Building and launching Docker Compose stack in background..."
 STACK_STARTED=1
 docker compose up --build -d
 
-echo -e "\n[Stage 5] Inspecting container status..."
+echo -e "\n[Stage 6] Inspecting container status..."
 docker compose ps
 
-# 5. Wait for Gateway health check through Client reverse proxy on 127.0.0.1:5173
-echo -e "\n[Stage 6] Awaiting health check through Client reverse proxy (http://127.0.0.1:5173/health)..."
+# 6. Wait for Gateway health check through Client reverse proxy on 127.0.0.1:5173
+echo -e "\n[Stage 7] Awaiting health check through Client reverse proxy (http://127.0.0.1:5173/health)..."
 for i in {1..60}; do
     if curl -s "http://127.0.0.1:5173/health" | grep -q '"status":"UP"'; then
         echo "Services are UP and healthy through Client reverse proxy (port 5173)!"
@@ -133,12 +161,12 @@ for i in {1..60}; do
     sleep 1
 done
 
-# 6. Execute live smoke test suite against Client reverse proxy (port 5173)
-echo -e "\n[Stage 7] Executing live WebSocket smoke suite through Client (ws://127.0.0.1:5173/ws)..."
+# 7. Execute live smoke test suite against Client reverse proxy (port 5173)
+echo -e "\n[Stage 8] Executing live WebSocket smoke suite through Client (ws://127.0.0.1:5173/ws)..."
 java gateway/tests/E2eWebSocketClient.java "ws://127.0.0.1:5173/ws"
 
-# 7. Explicit teardown and post-teardown verification
-echo -e "\n[Stage 8] Tearing down Docker Compose stack and verifying cleanup..."
+# 8. Explicit teardown and post-teardown verification
+echo -e "\n[Stage 9] Tearing down Docker Compose stack and verifying cleanup..."
 cleanup_stack 0
 
 echo -e "\nSUCCESS: Docker Compose stack verified end-to-end through client reverse proxy (port 5173); all runtimes passed; teardown verified clean."
