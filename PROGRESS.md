@@ -3682,3 +3682,42 @@
 - Files: `PROGRESS.md`, `README.md`, `gateway/tests/E2eWebSocketClient.java`, `scripts/verify_docker_compose.sh`.
 - Linked: LOG-0204.
 - Tutor review: pending
+
+
+## [LOG-0206] 2026-11-17 10:20 IST | PLAN | actor: agent
+- Goal: Fix Docker Compose verification teardown evidence bug, preserve test exit codes on failure, and verify post-teardown container and resource cleanup against recorded baselines.
+- Steps:
+  1. In `scripts/verify_docker_compose.sh`: record pre-test baseline counts of existing project containers (`PRE_CONTAINERS`), active `pes-*` cgroups (`PRE_CGROUPS`), and active `sandbox-runner` processes (`PRE_RUNNERS`).
+  2. Implement `verify_post_teardown_cleanup`: run *after* `docker compose down --remove-orphans` and verify zero delta increases in containers (`post_containers <= PRE_CONTAINERS`), cgroups (`post_cgroups <= PRE_CGROUPS`), and runners (`post_runners <= PRE_RUNNERS`). Report specific lingering resources on failure.
+  3. Implement `cleanup_stack` and unified EXIT/INT/TERM trap: ensure `docker compose down --remove-orphans` and cleanup assertions execute truthfully on both success and failure, report any teardown failures without masking them via `|| true`, and preserve the original non-zero test exit status if an earlier stage failed.
+- Files: `PROGRESS.md`, `scripts/verify_docker_compose.sh`.
+- Linked: LOG-0205.
+- Tutor review: pending
+
+
+## [LOG-0207] 2026-11-17 10:25 IST | DONE | actor: agent
+- Goal: Fix Docker Compose verification teardown evidence bug, preserve test exit codes on failure, and verify post-teardown container and resource cleanup against recorded baselines.
+- Outcome:
+  1. Truthful Post-Teardown Verification & Delta Assertions:
+     - In `scripts/verify_docker_compose.sh`: established pre-test baselines `PRE_CONTAINERS`, `PRE_CGROUPS`, and `PRE_RUNNERS`.
+     - Implemented `verify_post_teardown_cleanup` executing strictly post-teardown, asserting no lingering project containers (`docker compose ps -q`) and zero delta increases in host cgroups or runner processes.
+  2. Reliable Exit Trap & Status Code Preservation:
+     - Replaced masked trap (`docker compose down || true`) with `cleanup_stack` orchestrated via `trap cleanup_on_exit EXIT INT TERM`.
+     - Ensured teardown failure from `docker compose down` is reported truthfully (`FAIL: docker compose down ...`) and causes a non-zero exit.
+     - Ensured original test failure exit status is strictly preserved if earlier stages fail, while still completing cleanup and resource leak verification.
+  3. Runtime Environment Audit:
+     - Verified `docker compose config` passes with valid YAML structure and service definitions.
+     - Verified `scripts/verify_docker_compose.sh` accurately reports missing `/var/run/docker.sock` and exits code 1 without executing spurious teardown routines.
+- Verification:
+  - `docker compose config`: passed cleanly (syntax validated)
+  - `bash scripts/verify_docker_compose.sh`: correctly reported absent `/var/run/docker.sock` and exited code 1
+  - Bash subshell unit tests: verified exit code preservation on test failure (exit 42), teardown failure reporting (exit 1), and lingering container/cgroup leak detection (exit 1)
+  - `(cd gateway && gradle test bootJar)`: 48/48 passed
+  - `(cd worker && gradle test installDist)`: 27/27 passed
+  - `(cd client && npm test && npm run build)`: 36/36 passed, build clean
+  - `make -C sandbox-daemon test`: 23/23 passed (18 Phase 1 + 5 Phase 2)
+  - `bash gateway/tests/verify_e2e_websocket.sh 8089 50059`: 100% passed (all 5 languages + nested Java classes + invalid syntax milestone assertions)
+  - `scripts/check_repo_hygiene.sh && scripts/check_progress_append_only.sh && git diff --check`: passed cleanly
+- Files: `PROGRESS.md`, `scripts/verify_docker_compose.sh`.
+- Linked: LOG-0206.
+- Tutor review: pending

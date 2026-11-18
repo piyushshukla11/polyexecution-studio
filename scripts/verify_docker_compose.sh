@@ -12,6 +12,10 @@ echo "Host Memory:      $(free -h | awk '/^Mem:/ {print $2 " total, " $7 " avail
 echo "Compose Version:  $(docker compose version 2>/dev/null || echo 'not installed')"
 echo "========================================================================"
 
+# Track stack state for truthful teardown
+STACK_STARTED=0
+TEARDOWN_DONE=0
+
 # 1. Check Docker daemon access
 echo -e "\n[Stage 1] Verifying Docker daemon accessibility..."
 if ! docker info >/dev/null 2>&1; then
@@ -27,23 +31,88 @@ echo -e "\n[Stage 2] Validating docker compose configuration..."
 docker compose config
 echo "Compose configuration syntax is valid."
 
-# 3. Check baseline cgroups and processes
-echo -e "\n[Stage 3] Checking baseline host resources..."
-PRE_CGROUPS=$(find /sys/fs/cgroup -maxdepth 2 -name "pes-*" 2>/dev/null | wc -l)
-PRE_RUNNERS=$(pgrep -c -x "sandbox-runner" || true)
+# 3. Check baseline host resources before stack creation
+echo -e "\n[Stage 3] Recording baseline host resources..."
+PRE_CGROUPS=$(find /sys/fs/cgroup -maxdepth 2 -name "pes-*" 2>/dev/null | wc -l | tr -d " ")
+PRE_RUNNERS=$(pgrep -x "sandbox-runner" 2>/dev/null | wc -l | tr -d " ")
+PRE_CONTAINERS=$(docker compose ps -q 2>/dev/null | wc -l | tr -d " ")
 echo "Active pes-* cgroups before test: $PRE_CGROUPS"
 echo "Active sandbox-runner processes before test: $PRE_RUNNERS"
+echo "Existing project containers before test: $PRE_CONTAINERS"
 
-# Cleanup trap to guarantee docker compose down on exit
-cleanup() {
-    echo -e "\n--- Tearing down Docker Compose stack ---"
-    docker compose down --remove-orphans || true
-    echo "Compose teardown complete."
+# Verification function to run after teardown
+verify_post_teardown_cleanup() {
+    local post_containers post_cgroups post_runners leak_detected=0
+    post_containers=$(docker compose ps -q 2>/dev/null | wc -l | tr -d " ")
+    post_cgroups=$(find /sys/fs/cgroup -maxdepth 2 -name "pes-*" 2>/dev/null | wc -l | tr -d " ")
+    post_runners=$(pgrep -x "sandbox-runner" 2>/dev/null | wc -l | tr -d " ")
+
+    echo -e "\n--- Post-Teardown Resource & Container Cleanup Check ---"
+    echo "Remaining project containers: $post_containers (baseline: $PRE_CONTAINERS)"
+    echo "Active pes-* cgroups: $post_cgroups (baseline: $PRE_CGROUPS)"
+    echo "Active sandbox-runner processes: $post_runners (baseline: $PRE_RUNNERS)"
+
+    if [ "$post_containers" -gt "$PRE_CONTAINERS" ]; then
+        echo "FAIL: Lingering project containers detected after teardown!"
+        docker compose ps
+        leak_detected=1
+    fi
+
+    if [ "$post_cgroups" -gt "$PRE_CGROUPS" ]; then
+        echo "FAIL: Leaked pes-* cgroups detected! ($post_cgroups > $PRE_CGROUPS)"
+        find /sys/fs/cgroup -maxdepth 2 -name "pes-*" 2>/dev/null || true
+        leak_detected=1
+    fi
+
+    if [ "$post_runners" -gt "$PRE_RUNNERS" ]; then
+        echo "FAIL: Lingering sandbox-runner processes detected! ($post_runners > $PRE_RUNNERS)"
+        ps aux | grep "[s]andbox-runner" || true
+        leak_detected=1
+    fi
+
+    if [ "$leak_detected" -ne 0 ]; then
+        return 1
+    fi
+    echo "Cleanup check passed: 0 lingering containers, 0 leaked cgroups, 0 stray runners."
+    return 0
 }
-trap cleanup EXIT
+
+cleanup_stack() {
+    local orig_exit=$1
+    local teardown_failed=0
+
+    if [ "$STACK_STARTED" -eq 1 ] && [ "$TEARDOWN_DONE" -eq 0 ]; then
+        TEARDOWN_DONE=1
+        echo -e "\n--- Tearing down Docker Compose stack (docker compose down --remove-orphans) ---"
+        if ! docker compose down --remove-orphans; then
+            echo "FAIL: docker compose down --remove-orphans failed!"
+            teardown_failed=1
+        else
+            echo "Compose teardown command completed successfully."
+        fi
+
+        if ! verify_post_teardown_cleanup; then
+            echo "FAIL: Post-teardown resource leak or lingering container check failed!"
+            teardown_failed=1
+        fi
+    fi
+
+    if [ "$orig_exit" -ne 0 ]; then
+        exit "$orig_exit"
+    elif [ "$teardown_failed" -ne 0 ]; then
+        exit 1
+    fi
+}
+
+cleanup_on_exit() {
+    local orig_exit=$?
+    cleanup_stack "$orig_exit"
+}
+trap cleanup_on_exit EXIT INT TERM
 
 # 4. Build and start services
 echo -e "\n[Stage 4] Building and launching Docker Compose stack in background..."
+STACK_STARTED=1
 docker compose up --build -d
 
 echo -e "\n[Stage 5] Inspecting container status..."
@@ -68,24 +137,8 @@ done
 echo -e "\n[Stage 7] Executing live WebSocket smoke suite through Client (ws://127.0.0.1:5173/ws)..."
 java gateway/tests/E2eWebSocketClient.java "ws://127.0.0.1:5173/ws"
 
-# 7. Post-run verification
-echo -e "\n[Stage 8] Post-run Host Stability & Cleanup Check..."
-POST_CGROUPS=$(find /sys/fs/cgroup -maxdepth 2 -name "pes-*" 2>/dev/null | wc -l)
-POST_RUNNERS=$(pgrep -c -x "sandbox-runner" || true)
+# 7. Explicit teardown and post-teardown verification
+echo -e "\n[Stage 8] Tearing down Docker Compose stack and verifying cleanup..."
+cleanup_stack 0
 
-echo "Active pes-* cgroups after test: $POST_CGROUPS"
-echo "Active sandbox-runner processes after test: $POST_RUNNERS"
-
-if [ "$POST_CGROUPS" -gt "$PRE_CGROUPS" ]; then
-    echo "FAIL: Leaked cgroups detected! ($POST_CGROUPS > $PRE_CGROUPS)"
-    find /sys/fs/cgroup -maxdepth 2 -name "pes-*" 2>/dev/null || true
-    exit 1
-fi
-
-if [ "$POST_RUNNERS" -gt 0 ]; then
-    echo "FAIL: Lingering sandbox-runner processes detected!"
-    ps aux | grep "[s]andbox-runner" || true
-    exit 1
-fi
-
-echo -e "\nSUCCESS: Docker Compose stack verified through client reverse proxy (port 5173); all runtimes passed; 0 leaked cgroups; 0 stray processes."
+echo -e "\nSUCCESS: Docker Compose stack verified end-to-end through client reverse proxy (port 5173); all runtimes passed; teardown verified clean."
